@@ -160,12 +160,15 @@ def call_lm_studio(
     base_url: str,
     model: str,
     system_prompt: str,
+    input_text: str,
     fidelity_context: Dict[str, Any],
 ) -> str:
     user_instruction = (
         "Analyze the following metrics. Identify where the 'Semantic Muzzle' is strongest. "
         "Recommend specific deletions to maximize Signal and remove Slop. "
         "Use the provided Surprisal and Entropy scores to justify your culls.\n\n"
+        "Original Manuscript:\n"
+        f"{input_text}\n\n"
         "Fidelity Context:\n"
         f"{json.dumps(fidelity_context, indent=2)}"
     )
@@ -204,12 +207,17 @@ def main() -> None:
     fidelity_path.write_text(json.dumps(fidelity_context, indent=2), encoding="utf-8")
 
     system_prompt = args.prompt.read_text(encoding="utf-8")
+    input_text = args.file.read_text(encoding="utf-8")
 
     console = Console()
     console.print("\n[bold]Feeding Archivist model...[/bold]")
     try:
         directives = call_lm_studio(
-            args.base_url, args.model, system_prompt, fidelity_context
+            args.base_url,
+            args.model,
+            system_prompt,
+            input_text,
+            fidelity_context,
         )
     except Exception as exc:  # pragma: no cover - network or runtime error
         console.print(f"[red]Failed to contact LM Studio: {exc}[/red]")
