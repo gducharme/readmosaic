@@ -106,6 +106,26 @@ python mosaic_mo.py --file manuscript_v1.md --model llama3:8b-instruct-q8_0
 
 Use `--help` for full CLI options, including the LM Studio base URL override and output directory.
 
+## Mosaic Interactive Refiner (MIR)
+
+The `scripts/mosaic_refiner.py` CLI is a stateful, interactive refinement tool. It ingests
+a Markdown manuscript plus a JSON report of edits, then walks each edit with a rich
+side-by-side diff for approval. Session state is saved to `session_state.json` so the
+tool can resume after quitting.
+
+Run the tool with:
+
+```bash
+python scripts/mosaic_refiner.py manuscript.md edits.json --model llama3:8b-instruct-q8_0
+```
+
+Optional arguments:
+
+- `--workdir`: directory for state output (default: `./mosaic_work`).
+- `--api-url`: LM Studio chat completions URL (default: `http://localhost:1234/v1/chat/completions`).
+
+Use `--help` for full CLI usage details.
+
 ## Mosaic Signal Density (MSD)
 
 The `scripts/signal_density.py` CLI estimates lexical density and signal concentration
