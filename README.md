@@ -2,6 +2,10 @@
 
 This repository provides a `docker-compose.yaml` for running a local Neo4j instance with the APOC plugin enabled.
 
+## Text semantic repetition analyzer
+
+The `scripts/analyzer.py` CLI analyzes `.txt` or `.md` files for semantic echoes and redundancy. Run the script with `--help` for usage details and options.
+
 ## Prerequisites
 
 - Docker Desktop or Docker Engine
