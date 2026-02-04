@@ -241,7 +241,7 @@ def write_distribution_csv(
         for idx, chunk in enumerate(chunks):
             values = [
                 str(chunk.index),
-                f"\"{chunk.label.replace('"', '""')}\"",
+                f'"{chunk.label.replace(\'"\', \'""\')}"',
             ] + [f"{weight:.6f}" for weight in distribution[idx]]
             handle.write(",".join(values) + "\n")
 
