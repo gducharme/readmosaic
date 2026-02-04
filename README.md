@@ -46,6 +46,16 @@ Sample hot zones from `docs/burst_monitor_sample.txt` (using the command above):
 - **entropy** and **capitalism** spike together in the early-middle passage where the Founder lectures on doctrine (roughly the 20–50% progress band).
 - **engineered resonance** shows a later burst near the mid-to-late portion of the text (around the 60–80% progress band).
 
+## Cliché Wrap-Up Scrubber (CWS)
+
+The `scripts/slop_scrubber.py` CLI inspects the last 1–2 paragraphs of a scene and flags AI-style “hopeful” wrap-ups. It scores a custom lexicon of abstract nouns, vague adjectives, togetherness phrases, detects reflective clause patterns, and identifies sentiment pivots that signal moralizing drift. The curated lexicon lives in `scripts/ai_ending_lexicon.json` so you can edit it without touching code.
+
+Run the script with:
+
+```bash
+python scripts/slop_scrubber.py --help
+```
+
 ## Prerequisites
 
 - Docker Desktop or Docker Engine
