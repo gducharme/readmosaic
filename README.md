@@ -6,6 +6,11 @@ This repository provides a `docker-compose.yaml` for running a local Neo4j insta
 
 The `scripts/analyzer.py` CLI analyzes `.txt` or `.md` files for semantic echoes and redundancy. Run the script with `--help` for usage details and options.
 
+
+## Conceptual Theme Mapper (CTM)
+
+The `scripts/theme_mapper.py` CLI discovers thematic clusters across manuscript chunks using LDA, and exports a topic heatmap plus an interactive pyLDAvis HTML report. Run the script with `--help` for usage details.
+
 ## Linguistic Pattern Extractor (LPE)
 
 The `scripts/pattern_extractor.py` CLI uses spaCy's Dependency Matcher to extract phrasal verbs, action chains, descriptive pairs, and adverbial intent patterns from `.txt` or `.md` manuscripts. It can compare files, report pattern density, and surface stylistic entropy. Install the transformer model with:
