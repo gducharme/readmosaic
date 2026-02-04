@@ -26,6 +26,7 @@ from tool_wrapper import TOOL_DEFINITIONS, run_tool, tool_definitions_payload
 DEFAULT_BASE_URL = "http://localhost:1234/v1/chat/completions"
 DEFAULT_PROMPT_PATH = Path("prompts/Archivist_Core_V1.txt")
 NLTK_BOOTSTRAP_PATH = Path("scripts/setup_nltk_data.py")
+DEFAULT_LM_TIMEOUT_S = 300
 
 
 def parse_args() -> argparse.Namespace:
@@ -65,6 +66,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=4,
         help="Maximum number of parallel tool workers.",
+    )
+    parser.add_argument(
+        "--lm-timeout",
+        type=int,
+        default=DEFAULT_LM_TIMEOUT_S,
+        help="Timeout in seconds for the LM Studio completion request.",
     )
     return parser.parse_args()
 
@@ -162,6 +169,7 @@ def call_lm_studio(
     system_prompt: str,
     input_text: str,
     fidelity_context: Dict[str, Any],
+    timeout_s: int,
 ) -> str:
     user_instruction = (
         "Analyze the following metrics. Identify where the 'Semantic Muzzle' is strongest. "
@@ -186,7 +194,7 @@ def call_lm_studio(
         data=data,
         headers={"Content-Type": "application/json"},
     )
-    with request.urlopen(req, timeout=120) as response:
+    with request.urlopen(req, timeout=timeout_s) as response:
         response_data = response.read().decode("utf-8")
     completion = json.loads(response_data)
     return completion["choices"][0]["message"]["content"]
@@ -218,6 +226,7 @@ def main() -> None:
             system_prompt,
             input_text,
             fidelity_context,
+            args.lm_timeout,
         )
     except Exception as exc:  # pragma: no cover - network or runtime error
         console.print(f"[red]Failed to contact LM Studio: {exc}[/red]")
