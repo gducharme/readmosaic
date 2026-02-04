@@ -20,6 +20,27 @@ Then run:
 scripts/pattern_extractor.py --help
 ```
 
+## Narrative Burst Monitor (NBM)
+
+The `scripts/burst_monitor.py` CLI scans manuscripts for statistically significant bursts of terms (uni/bi/tri-grams) using a sliding-window Z-score model. It focuses on content words (nouns, verbs, adjectives) and ignores stop words so you can spot concept clumping without noise.
+
+Run the script with:
+
+```bash
+scripts/burst_monitor.py --help
+```
+
+Example:
+
+```bash
+python scripts/burst_monitor.py docs/burst_monitor_sample.txt --window-size 50 --step-size 10 --threshold 2.0 --top-n 5
+```
+
+Sample hot zones from `docs/burst_monitor_sample.txt` (using the command above):
+
+- **entropy** and **capitalism** spike together in the early-middle passage where the Founder lectures on doctrine (roughly the 20–50% progress band).
+- **engineered resonance** shows a later burst near the mid-to-late portion of the text (around the 60–80% progress band).
+
 ## Prerequisites
 
 - Docker Desktop or Docker Engine
