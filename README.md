@@ -25,6 +25,19 @@ Then run:
 scripts/pattern_extractor.py --help
 ```
 
+## Neutrino Surprisal Scout (NSS)
+
+The `scripts/surprisal_scout.py` CLI computes per-sentence surprisal scores using a local
+transformers causal language model (GPT-2 by default). It flags high-probability
+"slop zone" sentences above a configurable percentile threshold and highlights
+stock AI transition phrases. The tool outputs a Surprisal Map plot plus optional
+CSV/JSON exports.
+
+```bash
+python scripts/surprisal_scout.py manuscript.txt --model gpt2 --percentile 90 \
+  --plot surprisal_map.png --output-csv surprisal.csv --output-json surprisal.json
+```
+
 ## Semantic Entropy Evaluator (SEE)
 
 The `scripts/entropy_evaluator.py` CLI calculates Shannon entropy across unigrams and bigrams, tracks entropy drift over sliding windows, and generates an entropy heatmap plus JSON stats. Run the script with `--help` for usage details and options.
