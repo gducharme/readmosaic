@@ -11,6 +11,7 @@ Run with --help to see all options.
 from __future__ import annotations
 
 import argparse
+import csv
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -236,14 +237,14 @@ def write_distribution_csv(
     headers = ["chunk_index", "chunk_label"] + [
         f"topic_{idx}" for idx in range(distribution.shape[1])
     ]
-    with output_path.open("w", encoding="utf-8") as handle:
-        handle.write(",".join(headers) + "\n")
+    with output_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(headers)
         for idx, chunk in enumerate(chunks):
-            values = [
-                str(chunk.index),
-                f'"{chunk.label.replace(\'"\', \'""\')}"',
-            ] + [f"{weight:.6f}" for weight in distribution[idx]]
-            handle.write(",".join(values) + "\n")
+            values = [chunk.index, chunk.label] + [
+                f"{weight:.6f}" for weight in distribution[idx]
+            ]
+            writer.writerow(values)
 
 
 def plot_heatmap(output_path: Path, distribution: np.ndarray, chunks: Sequence[Chunk]) -> None:
