@@ -125,7 +125,8 @@ def call_lm_studio(
                 "content": (
                     "You are the Mosaic Archivist. Increase information density (entropy) "
                     "and remove AI-slop. Output strictly the refined paragraph only. "
-                    "No preamble, no commentary."
+                    "No preamble, no commentary. Attempt to keep the original style whatever it is"
+                    "(detached/3rd party narrator/strong 'I|me' language/metaphors/etc)"
                 ),
             },
             {
