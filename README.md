@@ -25,6 +25,13 @@ Then run:
 scripts/pattern_extractor.py --help
 ```
 
+## Semantic Entropy Evaluator (SEE)
+
+The `scripts/entropy_evaluator.py` CLI calculates Shannon entropy across unigrams and bigrams, tracks entropy drift over sliding windows, and generates an entropy heatmap plus JSON stats. Run the script with `--help` for usage details and options.
+
+```bash
+python scripts/entropy_evaluator.py path/to/manuscript.txt --output results/entropy
+```
 
 ## Prerequisites
 
