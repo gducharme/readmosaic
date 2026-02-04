@@ -3,7 +3,8 @@ from __future__ import annotations
 import os
 import time
 from pathlib import Path
-from typing import Iterable, Sequence
+from datetime import datetime
+from typing import Iterable, Mapping, Sequence
 
 from neo4j import GraphDatabase
 
@@ -32,6 +33,99 @@ def wait_for_neo4j(driver, max_attempts: int = 30, delay_s: float = 2.0) -> None
 def run_statements(session, statements: Iterable[str]) -> None:
     for statement in statements:
         session.run(statement).consume()
+
+
+def _normalize_year(timestamp: int | str) -> int:
+    if isinstance(timestamp, int):
+        return timestamp
+    try:
+        return datetime.fromisoformat(timestamp).year
+    except ValueError as exc:
+        raise ValueError(f"Unsupported timestamp format: {timestamp}") from exc
+
+
+def log_event(
+    tx,
+    uid: str,
+    type: str,
+    timestamp: int | str,
+    description: str,
+    location_name: str,
+    actors: Mapping[str, str],
+    parent_event_uid: str | None = None,
+) -> None:
+    year = _normalize_year(timestamp)
+    actor_rows = [{"uid": char_uid, "role": role} for char_uid, role in actors.items()]
+    tx.run(
+        """
+        MERGE (year:Year {value: $year})
+        MERGE (location:Location {name: $location_name})
+        CREATE (event:Event {
+            uid: $uid,
+            type: $type,
+            description: $description,
+            timestamp: $timestamp
+        })
+        MERGE (event)-[:OCCURRED_IN]->(year)
+        MERGE (event)-[:TOOK_PLACE_AT]->(location)
+        WITH event
+        UNWIND $actors AS actor
+        MATCH (character:Character {uid: actor.uid})
+        MERGE (character)-[:PARTICIPATED {role: actor.role}]->(event)
+        WITH event
+        OPTIONAL MATCH (parent:Event {uid: $parent_event_uid})
+        FOREACH (_ IN CASE WHEN parent IS NULL THEN [] ELSE [1] END |
+            MERGE (event)-[:CAUSED_BY]->(parent)
+        )
+        """,
+        year=year,
+        location_name=location_name,
+        uid=uid,
+        type=type,
+        description=description,
+        timestamp=timestamp,
+        actors=actor_rows,
+        parent_event_uid=parent_event_uid,
+    ).consume()
+
+
+def seed_mosaic_genesis(session) -> None:
+    if migration_applied(session, "seed_mosaic_genesis"):
+        return
+
+    session.run(
+        """
+        MERGE (founder:Character {uid: $founder_uid})
+        SET founder.name = $founder_name
+        MERGE (subject:Character {uid: $subject_uid})
+        SET subject.name = $subject_name
+        """,
+        founder_uid="CHAR-001",
+        founder_name="The Architect",
+        subject_uid="CHAR-002",
+        subject_name="Subject 0",
+    ).consume()
+
+    session.execute_write(
+        log_event,
+        uid="EVT-001",
+        type="SOCIAL_RITUAL",
+        timestamp=2024,
+        description="Initial contact initiated by Founder.",
+        location_name="Sector 4 Apartment",
+        actors={"CHAR-001": "Initiator", "CHAR-002": "Target"},
+    )
+    session.execute_write(
+        log_event,
+        uid="EVT-002",
+        type="BIOLOGICAL_IMPRINT",
+        timestamp=2024,
+        description="Consent protocols bypassed via epigenetic trigger.",
+        location_name="Seaside",
+        actors={"CHAR-001": "Apex", "CHAR-002": "Vessel"},
+        parent_event_uid="EVT-001",
+    )
+    record_migration(session, "seed_mosaic_genesis")
 
 
 def parse_cypher_statements(raw: str) -> list[str]:
@@ -105,6 +199,7 @@ def main() -> None:
                         path.stem,
                         load_cypher_file(path),
                     )
+            seed_mosaic_genesis(session)
     finally:
         driver.close()
 
