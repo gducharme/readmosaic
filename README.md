@@ -76,6 +76,35 @@ Run the script with:
 python scripts/slop_scrubber.py --help
 ```
 
+## Mosaic Orchestrator (MO)
+
+The Mosaic Orchestrator ties the full tool stack together, runs the analysis sweep,
+and produces a unified Simulation Fidelity Report plus editorial culling directives
+using a local LM Studio model. It emits two artifacts:
+
+- `mosaic_outputs/fidelity_context.json` (the Fidelity Context artifact).
+- `mosaic_outputs/culling_directives.md` (the Archivist "Culling Directives" report).
+
+The system prompt for the Archivist lives at `prompts/Archivist_Core_V1.txt` so you can
+edit the tone or instructions without touching code.
+
+Run the orchestrator with:
+
+```bash
+python mosaic_mo.py --file manuscript_v1.md --model llama3:8b-instruct-q8_0
+```
+
+Use `--help` for full CLI options, including the LM Studio base URL override and output directory.
+
+## Mosaic Signal Density (MSD)
+
+The `scripts/signal_density.py` CLI estimates lexical density and signal concentration
+for a manuscript. It powers the MSD tool inside the orchestrator.
+
+```bash
+python scripts/signal_density.py path/to/manuscript.md --top-n 10 --output-json msd.json
+```
+
 ## Prerequisites
 
 - Docker Desktop or Docker Engine
