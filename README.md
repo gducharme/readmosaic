@@ -25,6 +25,13 @@ Then run:
 scripts/pattern_extractor.py --help
 ```
 
+## Semantic Entropy Evaluator (SEE)
+
+The `scripts/entropy_evaluator.py` CLI calculates Shannon entropy across unigrams and bigrams, tracks entropy drift over sliding windows, and generates an entropy heatmap plus JSON stats. Run the script with `--help` for usage details and options.
+
+```bash
+python scripts/entropy_evaluator.py path/to/manuscript.txt --output results/entropy
+```
 ## Narrative Burst Monitor (NBM)
 
 The `scripts/burst_monitor.py` CLI scans manuscripts for statistically significant bursts of terms (uni/bi/tri-grams) using a sliding-window Z-score model. It focuses on content words (nouns, verbs, adjectives) and ignores stop words so you can spot concept clumping without noise.
