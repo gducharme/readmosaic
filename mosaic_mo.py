@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -24,6 +25,7 @@ from tool_wrapper import TOOL_DEFINITIONS, run_tool, tool_definitions_payload
 
 DEFAULT_BASE_URL = "http://localhost:1234/v1/chat/completions"
 DEFAULT_PROMPT_PATH = Path("prompts/Archivist_Core_V1.txt")
+NLTK_BOOTSTRAP_PATH = Path("scripts/setup_nltk_data.py")
 
 
 def parse_args() -> argparse.Namespace:
@@ -74,6 +76,17 @@ def validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("Input file must be a .md manuscript")
     if not args.prompt.exists():
         raise SystemExit(f"Prompt file not found: {args.prompt}")
+
+
+def run_nltk_preflight() -> None:
+    if not NLTK_BOOTSTRAP_PATH.exists():
+        raise SystemExit(
+            f"NLTK bootstrap script not found: {NLTK_BOOTSTRAP_PATH}"
+        )
+    subprocess.run(
+        [sys.executable, str(NLTK_BOOTSTRAP_PATH), "--quiet"],
+        check=True,
+    )
 
 
 def run_tools_with_progress(
@@ -183,6 +196,7 @@ def main() -> None:
     output_root = args.output_dir
     output_root.mkdir(parents=True, exist_ok=True)
 
+    run_nltk_preflight()
     tool_results = run_tools_with_progress(args.file, output_root, args.max_workers)
     fidelity_context = build_fidelity_context(args, tool_results)
 
