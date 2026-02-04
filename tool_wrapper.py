@@ -191,17 +191,37 @@ def parse_nss(_: str, output_dir: Path) -> Dict[str, Any]:
     if not json_path.exists():
         return {}
     payload = json.loads(json_path.read_text(encoding="utf-8"))
-    scores = payload.get("scores", [])
+    if isinstance(payload, list):
+        scores = payload
+        model = None
+        percentile = None
+        threshold = None
+    else:
+        scores = payload.get("scores", [])
+        model = payload.get("model")
+        percentile = payload.get("percentile")
+        threshold = payload.get("threshold")
+
+    def _score_value(item: Dict[str, Any]) -> float:
+        if "surprisal" in item:
+            return float(item.get("surprisal", 0.0))
+        return float(item.get("avg_logprob", 0.0))
+
+    def _is_slop(item: Dict[str, Any]) -> bool:
+        if "is_slop_zone" in item:
+            return bool(item.get("is_slop_zone"))
+        return bool(item.get("is_slop"))
+
     if scores:
-        average = sum(item.get("surprisal", 0.0) for item in scores) / len(scores)
-        slop_count = sum(1 for item in scores if item.get("is_slop_zone"))
+        average = sum(_score_value(item) for item in scores) / len(scores)
+        slop_count = sum(1 for item in scores if _is_slop(item))
     else:
         average = None
         slop_count = 0
     return {
-        "model": payload.get("model"),
-        "percentile": payload.get("percentile"),
-        "threshold": payload.get("threshold"),
+        "model": model,
+        "percentile": percentile,
+        "threshold": threshold,
         "sentence_count": len(scores),
         "average_surprisal": average,
         "slop_zone_count": slop_count,
