@@ -106,6 +106,30 @@ python mosaic_mo.py --file manuscript_v1.md --model llama3:8b-instruct-q8_0
 
 Use `--help` for full CLI options, including the LM Studio base URL override and output directory.
 
+## Mosaic Surgical Editor (MSE)
+
+The `mosaic_editor.py` CLI ingests a markdown manuscript plus a structured `edits.json`
+map from the Orchestrator and performs automated red-penciling/re-calibration with
+fuzzy matching. It writes a draft output, a rewrite scratchpad for entropy warnings,
+and an HTML diff for review.
+
+The `edits.json` schema now supports `scope` (`sentence`, `paragraph`, `block`),
+`anchor_type` (`exact`, `fuzzy`, `phrase`), and optional `context_before` /
+`context_after` to tighten matching on inconsistent formatting.
+
+```bash
+python mosaic_editor.py --help
+```
+
+Example:
+
+```bash
+python mosaic_editor.py manuscript_v1.md edits.json \
+  --output manuscript_v2_DRAFT.md \
+  --diff changes.diff \
+  --scratchpad rewrite_scratchpad.md
+```
+
 ## Mosaic Signal Density (MSD)
 
 The `scripts/signal_density.py` CLI estimates lexical density and signal concentration
