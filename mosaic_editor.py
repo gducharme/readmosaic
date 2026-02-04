@@ -34,8 +34,32 @@ GLOBAL_SCRUB_PATTERNS: List[Tuple[re.Pattern, str]] = [
 ]
 
 
+def extract_json_payload(raw_text: str) -> str:
+    stripped = raw_text.strip()
+    if not stripped:
+        raise ValueError("edits.json is empty. Provide a JSON array of edit directives.")
+    if stripped.startswith("```"):
+        lines = stripped.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        stripped = "\n".join(lines).strip()
+    return stripped
+
+
 def load_edits(path: Path) -> List[EditInstruction]:
-    data = json.loads(path.read_text(encoding="utf-8"))
+    raw_text = path.read_text(encoding="utf-8")
+    payload = extract_json_payload(raw_text)
+    try:
+        data = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"Failed to parse edits JSON in {path}. "
+            "Ensure the file contains valid JSON (no Markdown)."
+        ) from exc
+    if not isinstance(data, list):
+        raise ValueError("edits.json must be a JSON array of edit directives.")
     edits = []
     for entry in data:
         edits.append(
@@ -223,7 +247,10 @@ def main() -> None:
     args = parser.parse_args()
 
     manuscript = args.manuscript.read_text(encoding="utf-8")
-    edits = load_edits(args.edits)
+    try:
+        edits = load_edits(args.edits)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     updated, _ = apply_edits(manuscript, edits, args.threshold, args.scratchpad)
     args.output.write_text(updated, encoding="utf-8")
