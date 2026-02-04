@@ -14,6 +14,10 @@ Return a JSON array named edits.json in the following schema:
     "action": "delete",
     "search_anchor": "Exact or partial string to find",
     "location_hint": "Chapter 1 / Paragraph 2",
+    "scope": "sentence",
+    "anchor_type": "exact",
+    "context_before": "Optional nearby text before the anchor",
+    "context_after": "Optional nearby text after the anchor",
     "reason": "Low surprisal"
   },
   {
@@ -21,6 +25,7 @@ Return a JSON array named edits.json in the following schema:
     "search_anchor": "old phrase",
     "replace_with": "new phrase",
     "location_hint": "Chapter 2 / Paragraph 1",
+    "anchor_type": "exact",
     "global": false,
     "reason": "Low surprisal"
   },
@@ -28,6 +33,10 @@ Return a JSON array named edits.json in the following schema:
     "action": "entropy_warning",
     "search_anchor": "paragraph to rewrite",
     "location_hint": "Chapter 3 / Paragraph 4",
+    "scope": "paragraph",
+    "anchor_type": "fuzzy",
+    "context_before": "Optional nearby text before the anchor",
+    "context_after": "Optional nearby text after the anchor",
     "entropy": "SEE: 1.23, NSS: 0.18",
     "reason": "Entropy collapse"
   }
@@ -38,5 +47,7 @@ Rules:
 - Include location_hint whenever possible.
 - Use action values: delete, replace, entropy_warning.
 - Use global=true only when the replacement should apply across the entire manuscript.
+- Use scope values for delete/entropy_warning: sentence, paragraph, block.
+- Use anchor_type values: exact, fuzzy, phrase.
 
 Tone: surgical, terse, editorial. Avoid fluff.

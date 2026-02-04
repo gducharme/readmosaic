@@ -113,6 +113,10 @@ map from the Orchestrator and performs automated red-penciling/re-calibration wi
 fuzzy matching. It writes a draft output, a rewrite scratchpad for entropy warnings,
 and an HTML diff for review.
 
+The `edits.json` schema now supports `scope` (`sentence`, `paragraph`, `block`),
+`anchor_type` (`exact`, `fuzzy`, `phrase`), and optional `context_before` /
+`context_after` to tighten matching on inconsistent formatting.
+
 ```bash
 python mosaic_editor.py --help
 ```

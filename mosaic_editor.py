@@ -27,6 +27,10 @@ class EditInstruction:
     replace_with: str | None = None
     global_replace: bool = False
     entropy: str | None = None
+    scope: str | None = None
+    anchor_type: str | None = None
+    context_before: str | None = None
+    context_after: str | None = None
 
 
 GLOBAL_SCRUB_PATTERNS: List[Tuple[re.Pattern, str]] = [
@@ -71,6 +75,10 @@ def load_edits(path: Path) -> List[EditInstruction]:
                 replace_with=entry.get("replace_with"),
                 global_replace=bool(entry.get("global", False)),
                 entropy=entry.get("entropy"),
+                scope=entry.get("scope"),
+                anchor_type=entry.get("anchor_type"),
+                context_before=entry.get("context_before"),
+                context_after=entry.get("context_after"),
             )
         )
     return edits
@@ -79,6 +87,24 @@ def load_edits(path: Path) -> List[EditInstruction]:
 def split_sections(text: str) -> List[str]:
     sections = re.split(r"(?m)^(?=#+\s)", text)
     return [section for section in sections if section.strip()]
+
+
+def normalize_paragraph_breaks(text: str) -> str:
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def split_paragraphs(text: str) -> List[str]:
+    normalized = normalize_paragraph_breaks(text)
+    paragraphs = [p for p in re.split(r"\n\s*\n", normalized) if p.strip()]
+    return paragraphs
+
+
+def split_sentences(text: str) -> List[str]:
+    normalized = normalize_paragraph_breaks(text)
+    sentences = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9\"'])", normalized)
+    return [s.strip() for s in sentences if s.strip()]
 
 
 def find_section(text: str, location_hint: Optional[str]) -> str:
@@ -92,29 +118,76 @@ def find_section(text: str, location_hint: Optional[str]) -> str:
     return text
 
 
-def remove_paragraph(text: str, paragraph: str) -> str:
-    escaped = re.escape(paragraph)
-    pattern = re.compile(rf"\n*{escaped}\n*", flags=re.MULTILINE)
-    return pattern.sub("\n\n", text)
+def remove_span(text: str, span: str) -> str:
+    start = text.find(span)
+    if start == -1:
+        return text
+    end = start + len(span)
+    updated = text[:start] + text[end:]
+    updated = re.sub(r"\n{3,}", "\n\n", updated)
+    updated = re.sub(r"[ \t]+\n", "\n", updated)
+    return updated
+
+
+def apply_context_filters(candidates: List[str], edit: EditInstruction) -> List[str]:
+    filtered = candidates
+    if edit.context_before:
+        filtered = [c for c in filtered if edit.context_before in c]
+    if edit.context_after:
+        filtered = [c for c in filtered if edit.context_after in c]
+    return filtered
+
+
+def resolve_scope_candidates(text: str, edit: EditInstruction) -> List[str]:
+    scope = (edit.scope or "paragraph").lower()
+    if scope == "sentence":
+        candidates = split_sentences(text)
+    elif scope == "block":
+        candidates = [text]
+    else:
+        candidates = split_paragraphs(text)
+    return apply_context_filters(candidates, edit)
+
+
+def find_best_match(
+    candidates: List[str],
+    anchor: str,
+    threshold: int,
+    anchor_type: Optional[str],
+) -> Optional[str]:
+    if not candidates:
+        return None
+    if anchor in candidates:
+        return anchor
+    if any(anchor in candidate for candidate in candidates):
+        return next(candidate for candidate in candidates if anchor in candidate)
+    if (anchor_type or "").lower() == "exact":
+        return None
+    match = process.extractOne(anchor, candidates, scorer=fuzz.partial_ratio)
+    if not match:
+        return None
+    matched_text, score, _ = match
+    if score < threshold:
+        return None
+    return matched_text
 
 
 def apply_delete(text: str, edit: EditInstruction, threshold: int) -> Tuple[str, Optional[str]]:
     target_section = find_section(text, edit.location_hint)
-    paragraphs = [p for p in target_section.split("\n\n") if p.strip()]
-    if not paragraphs:
+    candidates = resolve_scope_candidates(target_section, edit)
+    if not candidates:
         return text, None
-    match = process.extractOne(
-        edit.search_anchor,
-        paragraphs,
-        scorer=fuzz.partial_ratio,
-    )
-    if not match:
+    anchor = edit.search_anchor
+    if len(anchor) < 20 and not (edit.context_before or edit.context_after):
+        if anchor not in target_section:
+            return text, None
+        matched_text = anchor
+    else:
+        matched_text = find_best_match(candidates, anchor, threshold, edit.anchor_type)
+    if not matched_text:
         return text, None
-    matched_paragraph, score, _ = match
-    if score < threshold:
-        return text, None
-    updated_section = remove_paragraph(target_section, matched_paragraph)
-    return text.replace(target_section, updated_section, 1), matched_paragraph
+    updated_section = remove_span(target_section, matched_text)
+    return text.replace(target_section, updated_section, 1), matched_text
 
 
 def apply_replace(text: str, edit: EditInstruction) -> Tuple[str, int]:
@@ -144,18 +217,16 @@ def apply_global_scrub(text: str) -> Tuple[str, List[str]]:
 
 def collect_entropy_warning(text: str, edit: EditInstruction) -> Optional[str]:
     target_section = find_section(text, edit.location_hint)
-    paragraphs = [p for p in target_section.split("\n\n") if p.strip()]
-    if not paragraphs:
+    candidates = resolve_scope_candidates(target_section, edit)
+    if not candidates:
         return None
-    match = process.extractOne(
+    matched_paragraph = find_best_match(
+        candidates,
         edit.search_anchor,
-        paragraphs,
-        scorer=fuzz.partial_ratio,
+        90,
+        edit.anchor_type,
     )
-    if not match:
-        return None
-    matched_paragraph, score, _ = match
-    if score < 90:
+    if not matched_paragraph:
         return None
     entropy_note = f"Entropy: {edit.entropy}" if edit.entropy else "Entropy: unknown"
     prompt = (
