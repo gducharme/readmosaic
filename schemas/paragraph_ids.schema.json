@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://readmosaic/schemas/paragraph_ids.schema.json",
+  "title": "Pre-processed manuscript paragraph records",
+  "type": "object",
+  "required": [
+    "id",
+    "order",
+    "prev_id",
+    "next_id",
+    "text",
+    "start_char",
+    "end_char",
+    "manuscript_id",
+    "source"
+  ],
+  "properties": {
+    "id": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Stable paragraph identifier."
+    },
+    "order": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Zero-based paragraph order in the manuscript."
+    },
+    "prev_id": {
+      "type": ["integer", "null"],
+      "minimum": 1,
+      "description": "Previous paragraph ID, or null for the first paragraph."
+    },
+    "next_id": {
+      "type": ["integer", "null"],
+      "minimum": 1,
+      "description": "Next paragraph ID, or null for the last paragraph."
+    },
+    "text": {
+      "type": "string",
+      "description": "Normalized paragraph text."
+    },
+    "start_char": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Start offset in the manuscript (inclusive)."
+    },
+    "end_char": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "End offset in the manuscript (exclusive)."
+    },
+    "manuscript_id": {
+      "type": "string",
+      "description": "Stable identifier for the manuscript or version."
+    },
+    "source": {
+      "type": "string",
+      "description": "Source path or URI for the manuscript."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Timestamp for when this artifact was produced."
+    },
+    "tokenization": {
+      "type": "object",
+      "description": "Metadata about the tokenizer or segmenter used to generate IDs.",
+      "properties": {
+        "method": {"type": "string"},
+        "model": {"type": "string"},
+        "notes": {"type": "string"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
