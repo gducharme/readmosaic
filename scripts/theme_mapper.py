@@ -142,6 +142,12 @@ def parse_args() -> argparse.Namespace:
         help="Optional JSON output (edits.schema.json) for abrupt topic shifts.",
     )
     parser.add_argument(
+        "--output-edits",
+        type=Path,
+        default=None,
+        help="Optional JSON output (edits.schema.json) for abrupt topic shifts.",
+    )
+    parser.add_argument(
         "--topic-shift-threshold",
         type=float,
         default=0.45,
@@ -157,8 +163,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("num-topics must be at least 2")
     if args.chunk_mode == CHUNK_MODE_WORDS and args.chunk_size < 100:
         raise SystemExit("chunk-size must be at least 100 words")
-    if args.topic_shift_json and not args.preprocessing:
-        raise SystemExit("--topic-shift-json requires --preprocessing for paragraph ranges")
+    if (args.topic_shift_json or args.output_edits) and not args.preprocessing:
+        raise SystemExit("--output-edits requires --preprocessing for paragraph ranges")
 
 
 def count_words(text: str) -> int:
@@ -562,7 +568,9 @@ def main() -> None:
     pyLDAvis.save_html(vis, str(html_path))
     print(f"pyLDAvis visualization saved to: {html_path}")
 
-    topic_shift_path = resolve_output_path(args.output_dir, args.topic_shift_json)
+    topic_shift_path = resolve_output_path(
+        args.output_dir, args.output_edits or args.topic_shift_json
+    )
     if topic_shift_path:
         manuscript_id = (
             manuscript_tokens["manuscript_id"]

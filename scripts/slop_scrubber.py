@@ -449,14 +449,20 @@ def main() -> int:
         type=Path,
         help="Optional path to write edits.schema.json payload for flagged paragraphs.",
     )
+    parser.add_argument(
+        "--output-edits",
+        type=Path,
+        help="Optional path to write edits.schema.json payload for flagged paragraphs.",
+    )
 
     args = parser.parse_args()
 
     if not args.input_file.exists():
         print(f"File not found: {args.input_file}", file=sys.stderr)
         return 1
-    if args.output_json and not args.preprocessing:
-        raise SystemExit("--output-json requires --preprocessing for token mapping.")
+    edits_output = args.output_edits or args.output_json
+    if edits_output and not args.preprocessing:
+        raise SystemExit("--output-edits requires --preprocessing for token mapping.")
     if args.preprocessing and not args.preprocessing.exists():
         raise SystemExit(f"Preprocessing directory not found: {args.preprocessing}")
 
@@ -504,7 +510,7 @@ def main() -> int:
             print("\n=== Ending Snapshot (Suggested Hard Cut) ===")
             print("\n\n".join(scrubbed.split("\n\n")[-args.tail_paragraphs :]))
 
-    if args.output_json and manuscript_tokens is not None:
+    if edits_output and manuscript_tokens is not None:
         payload = build_edits_payload(
             manuscript_tokens,
             analyses,
@@ -515,7 +521,7 @@ def main() -> int:
         if not payload["items"]:
             print("No slop paragraphs met the threshold for edits output.")
         else:
-            args.output_json.write_text(
+            edits_output.write_text(
                 json.dumps(payload, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )

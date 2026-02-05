@@ -485,7 +485,7 @@ def validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("Input file must be .txt or .md")
     if not 0.0 <= args.threshold <= 1.0:
         raise SystemExit("Threshold must be between 0.0 and 1.0")
-    if args.output_format == "json" and not args.preprocessing:
+    if (args.output_format == "json" or args.output_edits) and not args.preprocessing:
         raise SystemExit("--preprocessing is required for JSON output.")
     if args.output_edits and not args.preprocessing:
         raise SystemExit("--output-edits requires --preprocessing for token mapping.")
@@ -537,7 +537,17 @@ def main() -> None:
             args.preprocessing,
         )
         Console().print(f"JSON report written to {output_path}")
-    else:
+    if args.output_edits:
+        write_json_report(
+            args.output_edits,
+            sentences,
+            pairs,
+            args.threshold,
+            args.context_window,
+            args.preprocessing,
+        )
+        Console().print(f"Edits payload written to {args.output_edits}")
+    elif args.output_format != "json":
         render_text_report(
             sentences,
             pairs,
