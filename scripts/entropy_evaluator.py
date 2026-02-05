@@ -31,6 +31,8 @@ from nltk.corpus import wordnet
 from nltk.stem import WordNetLemmatizer
 from scipy.stats import entropy as shannon_entropy
 
+from schema_validator import validate_payload
+
 
 @dataclass
 class EntropyWindow:
@@ -440,6 +442,7 @@ def main() -> None:
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "items": items,
             }
+            validate_payload(edits_payload, "edits.schema.json", "entropy evaluator edits payload")
             args.output_edits.write_text(
                 json.dumps(edits_payload, ensure_ascii=False, indent=2),
                 encoding="utf-8",

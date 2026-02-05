@@ -19,6 +19,8 @@ from typing import Iterable, List, Optional
 
 import spacy
 
+from schema_validator import validate_payload
+
 LEXICON_PATH = Path(__file__).with_name("ai_ending_lexicon.json")
 
 POSITIVE_WORDS = {
@@ -515,6 +517,7 @@ def main() -> int:
         if not payload["items"]:
             print("No slop paragraphs met the threshold for edits output.")
         else:
+            validate_payload(payload, "edits.schema.json", "slop scrubber edits payload")
             args.output_json.write_text(
                 json.dumps(payload, ensure_ascii=False, indent=2),
                 encoding="utf-8",
