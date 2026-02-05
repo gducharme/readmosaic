@@ -120,6 +120,11 @@ def parse_args() -> argparse.Namespace:
         "--manuscript-id",
         help="Optional manuscript identifier to store in each record.",
     )
+    parser.add_argument(
+        "--skip-jsonl",
+        action="store_true",
+        help="Skip legacy JSONL outputs (paragraphs/sentences/words).",
+    )
     return parser.parse_args()
 
 
@@ -304,9 +309,10 @@ def main() -> None:
         "paragraphs": tokenized_paragraphs,
     }
 
-    write_jsonl(output_dir / "paragraphs.jsonl", paragraph_records)
-    write_jsonl(output_dir / "sentences.jsonl", sentence_records)
-    write_jsonl(output_dir / "words.jsonl", word_records)
+    if not args.skip_jsonl:
+        write_jsonl(output_dir / "paragraphs.jsonl", paragraph_records)
+        write_jsonl(output_dir / "sentences.jsonl", sentence_records)
+        write_jsonl(output_dir / "words.jsonl", word_records)
     (output_dir / "manuscript_tokens.json").write_text(
         json.dumps(manuscript_tokens_artifact, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -320,6 +326,8 @@ def main() -> None:
         f"Tokens artifact: {output_dir / 'manuscript_tokens.json'}",
         f"Output directory: {output_dir}",
     ]
+    if args.skip_jsonl:
+        summary_lines.insert(3, "Legacy JSONL outputs skipped.")
     if console:
         for line in summary_lines:
             console.print(line)
