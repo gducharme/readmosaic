@@ -13,8 +13,9 @@ import json
 import re
 import sys
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, List
+from typing import Iterable, List, Optional
 
 import spacy
 
@@ -80,6 +81,15 @@ class SentimentReport:
     negative_hits: List[str]
 
 
+@dataclass
+class ParagraphAnalysis:
+    paragraph: Paragraph
+    paragraph_id: Optional[str]
+    slop: SlopReport
+    sentiment: SentimentReport
+    token_ids: List[str]
+
+
 def load_lexicon(path: Path) -> dict[str, list[str]]:
     with path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
@@ -88,6 +98,34 @@ def load_lexicon(path: Path) -> dict[str, list[str]]:
 def parse_paragraphs(text: str) -> List[Paragraph]:
     raw_paragraphs = [p for p in re.split(r"\n\s*\n", text) if p.strip()]
     return [Paragraph(text=p.strip(), index=idx) for idx, p in enumerate(raw_paragraphs)]
+
+
+def load_tokens_artifact(preprocessing_dir: Path) -> dict:
+    artifact_path = preprocessing_dir / "manuscript_tokens.json"
+    if not artifact_path.exists():
+        raise SystemExit(f"Missing manuscript_tokens.json in {preprocessing_dir}")
+    return json.loads(artifact_path.read_text(encoding="utf-8"))
+
+
+def build_paragraph_lookup(manuscript_tokens: dict) -> dict[int, dict]:
+    lookup: dict[int, dict] = {}
+    for idx, paragraph in enumerate(manuscript_tokens.get("paragraphs", [])):
+        order = paragraph.get("order", idx)
+        lookup[order] = paragraph
+    return lookup
+
+
+def map_span_to_tokens(paragraph: dict, start: int, end: int) -> List[str]:
+    token_ids: List[str] = []
+    for token in paragraph.get("tokens", []):
+        token_start = token.get("start_char", 0)
+        token_end = token.get("end_char", 0)
+        if token_end <= start or token_start >= end:
+            continue
+        token_id = token.get("token_id")
+        if token_id:
+            token_ids.append(token_id)
+    return token_ids
 
 
 def score_sentiment(tokens: Iterable[spacy.tokens.Token]) -> SentimentReport:
@@ -155,6 +193,54 @@ def score_paragraph(doc: spacy.tokens.Doc, lexicon: dict[str, list[str]]) -> Slo
     )
 
 
+def collect_hit_token_ids(
+    doc: spacy.tokens.Doc,
+    paragraph: Optional[dict],
+    lexicon: dict[str, list[str]],
+) -> List[str]:
+    if not paragraph:
+        return []
+    abstract_nouns = {word.lower() for word in lexicon.get("abstract_nouns", [])}
+    vague_adjectives = {word.lower() for word in lexicon.get("vague_adjectives", [])}
+    togetherness_phrases = [phrase.lower() for phrase in lexicon.get("togetherness_phrases", [])]
+    reflective_phrases = [phrase.lower() for phrase in lexicon.get("reflective_phrases", [])]
+
+    token_ids: List[str] = []
+    seen: set[str] = set()
+
+    def add_span(start: int, end: int) -> None:
+        for token_id in map_span_to_tokens(paragraph, start, end):
+            if token_id in seen:
+                continue
+            token_ids.append(token_id)
+            seen.add(token_id)
+
+    for token in doc:
+        if token.is_space or token.is_punct:
+            continue
+        lemma = token.lemma_.lower()
+        if token.pos_ == "NOUN" and lemma in abstract_nouns:
+            add_span(token.idx, token.idx + len(token))
+        if token.pos_ == "ADJ" and lemma in vague_adjectives:
+            add_span(token.idx, token.idx + len(token))
+
+    lower_text = doc.text.lower()
+    for phrase in togetherness_phrases + reflective_phrases:
+        start = 0
+        while True:
+            idx = lower_text.find(phrase, start)
+            if idx == -1:
+                break
+            add_span(idx, idx + len(phrase))
+            start = idx + len(phrase)
+
+    for pattern in PATTERNS:
+        for match in pattern.finditer(doc.text):
+            add_span(match.start(), match.end())
+
+    return token_ids
+
+
 def summarize_hits(label: str, hits: List[str]) -> str:
     if not hits:
         return f"{label}: none"
@@ -179,21 +265,34 @@ def build_report(
     lexicon: dict[str, list[str]],
     nlp: spacy.language.Language,
     threshold: int,
-) -> tuple[str, bool, bool, SlopReport | None]:
+    paragraph_lookup: dict[int, dict] | None = None,
+) -> tuple[str, bool, bool, SlopReport | None, List[ParagraphAnalysis]]:
     if not paragraphs:
-        return "No paragraphs detected.", False, False, None
+        return "No paragraphs detected.", False, False, None, []
 
     tail = paragraphs[-tail_count:]
     report_lines: List[str] = []
     slop_reports: List[SlopReport] = []
     sentiment_reports: List[SentimentReport] = []
+    analyses: List[ParagraphAnalysis] = []
 
     for paragraph in tail:
         doc = nlp(paragraph.text)
         slop = score_paragraph(doc, lexicon)
         sentiment = score_sentiment(doc)
+        paragraph_data = paragraph_lookup.get(paragraph.index) if paragraph_lookup else None
+        token_ids = collect_hit_token_ids(doc, paragraph_data, lexicon)
         slop_reports.append(slop)
         sentiment_reports.append(sentiment)
+        analyses.append(
+            ParagraphAnalysis(
+                paragraph=paragraph,
+                paragraph_id=paragraph_data.get("paragraph_id") if paragraph_data else None,
+                slop=slop,
+                sentiment=sentiment,
+                token_ids=token_ids,
+            )
+        )
         report_lines.append(describe_paragraph_result(paragraph.index, slop, sentiment))
         report_lines.append("-" * 60)
 
@@ -227,7 +326,79 @@ def build_report(
     if final_slop.score >= threshold:
         report_lines.append("Final paragraph flagged as Hope-Slop.")
 
-    return "\n".join(report_lines), moralizing_drift, hard_cut, final_slop
+    return "\n".join(report_lines), moralizing_drift, hard_cut, final_slop, analyses
+
+
+def build_edits_payload(
+    manuscript_tokens: dict,
+    analyses: List[ParagraphAnalysis],
+    threshold: int,
+    moralizing_drift: bool,
+    hard_cut: bool,
+) -> dict[str, object]:
+    items: List[dict[str, object]] = []
+    if not analyses:
+        return {
+            "schema_version": "1.0",
+            "manuscript_id": manuscript_tokens.get("manuscript_id", "unknown"),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "items": items,
+        }
+    final_index = analyses[-1].paragraph.index
+    for analysis in analyses:
+        if analysis.slop.score < threshold or not analysis.paragraph_id:
+            continue
+        is_final = analysis.paragraph.index == final_index
+        pivot_flag = moralizing_drift if is_final else False
+        hard_cut_flag = hard_cut if is_final else False
+        location: dict[str, object] = {"paragraph_id": analysis.paragraph_id}
+        if analysis.token_ids:
+            location["token_ids"] = analysis.token_ids
+        issue_id = f"{analysis.paragraph_id}-slop"
+        items.append(
+            {
+                "issue_id": issue_id,
+                "type": "hope_slop",
+                "status": "open",
+                "location": location,
+                "evidence": {
+                    "summary": (
+                        "Paragraph flagged as Hope-Slop with score "
+                        f"{analysis.slop.score}."
+                    ),
+                    "signals": [
+                        {"name": "slop_score", "value": analysis.slop.score},
+                        {
+                            "name": "abstract_hit_count",
+                            "value": len(analysis.slop.abstract_hits),
+                        },
+                        {
+                            "name": "adjective_hit_count",
+                            "value": len(analysis.slop.adjective_hits),
+                        },
+                        {
+                            "name": "phrase_hit_count",
+                            "value": len(analysis.slop.phrase_hits),
+                        },
+                        {
+                            "name": "pattern_hit_count",
+                            "value": len(analysis.slop.pattern_hits),
+                        },
+                        {"name": "sentiment_score", "value": analysis.sentiment.score},
+                        {"name": "sentiment_pivot", "value": pivot_flag},
+                        {"name": "hard_cut_suggestion", "value": hard_cut_flag},
+                    ],
+                    "detector": "slop_scrubber.py",
+                },
+                "impact": {"severity": "medium"},
+            }
+        )
+    return {
+        "schema_version": "1.0",
+        "manuscript_id": manuscript_tokens.get("manuscript_id", "unknown"),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "items": items,
+    }
 
 
 def render_report(report: str) -> None:
@@ -268,12 +439,26 @@ def main() -> int:
         action="store_true",
         help="Show a before/after snapshot of the ending paragraphs.",
     )
+    parser.add_argument(
+        "--preprocessing",
+        type=Path,
+        help="Directory containing manuscript_tokens.json for paragraph/token mapping.",
+    )
+    parser.add_argument(
+        "--output-json",
+        type=Path,
+        help="Optional path to write edits.schema.json payload for flagged paragraphs.",
+    )
 
     args = parser.parse_args()
 
     if not args.input_file.exists():
         print(f"File not found: {args.input_file}", file=sys.stderr)
         return 1
+    if args.output_json and not args.preprocessing:
+        raise SystemExit("--output-json requires --preprocessing for token mapping.")
+    if args.preprocessing and not args.preprocessing.exists():
+        raise SystemExit(f"Preprocessing directory not found: {args.preprocessing}")
 
     lexicon = load_lexicon(LEXICON_PATH)
 
@@ -288,9 +473,14 @@ def main() -> int:
 
     text = args.input_file.read_text(encoding="utf-8")
     paragraphs = parse_paragraphs(text)
+    manuscript_tokens = None
+    paragraph_lookup = None
+    if args.preprocessing:
+        manuscript_tokens = load_tokens_artifact(args.preprocessing)
+        paragraph_lookup = build_paragraph_lookup(manuscript_tokens)
 
-    report, _, hard_cut, final_slop = build_report(
-        paragraphs, args.tail_paragraphs, lexicon, nlp, args.threshold
+    report, moralizing_drift, hard_cut, final_slop, analyses = build_report(
+        paragraphs, args.tail_paragraphs, lexicon, nlp, args.threshold, paragraph_lookup
     )
 
     render_report(report)
@@ -313,6 +503,19 @@ def main() -> int:
         elif args.report:
             print("\n=== Ending Snapshot (Suggested Hard Cut) ===")
             print("\n\n".join(scrubbed.split("\n\n")[-args.tail_paragraphs :]))
+
+    if args.output_json and manuscript_tokens is not None:
+        payload = build_edits_payload(
+            manuscript_tokens,
+            analyses,
+            args.threshold,
+            moralizing_drift,
+            hard_cut,
+        )
+        args.output_json.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
     return 0
 
