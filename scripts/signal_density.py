@@ -141,17 +141,32 @@ def build_paragraph_metrics(
         paragraph_id = paragraph.get("paragraph_id")
         order = paragraph.get("order")
         token_texts = []
+        token_ids: list[str] = []
+        char_starts: list[int] = []
+        char_ends: list[int] = []
         for token in paragraph.get("tokens", []):
+            token_id = token.get("token_id")
+            if token_id:
+                token_ids.append(token_id)
+            if token.get("start_char") is not None:
+                char_starts.append(int(token["start_char"]))
+            if token.get("end_char") is not None:
+                char_ends.append(int(token["end_char"]))
             token_texts.append(
                 token.get("normalized")
                 or token.get("text")
                 or ""
             )
         metrics = compute_metrics_from_tokens(token_texts, top_n)
+        char_range = None
+        if char_starts and char_ends:
+            char_range = {"start": min(char_starts), "end": max(char_ends)}
         results.append(
             {
                 "paragraph_id": paragraph_id,
                 "order": order,
+                "token_ids": token_ids,
+                "char_range": char_range,
                 "metrics": metrics,
             }
         )
@@ -172,12 +187,18 @@ def build_edits_payload(
             continue
         paragraph_id = entry["paragraph_id"]
         issue_id = f"{paragraph_id}-density"
+        location: dict[str, object] = {"paragraph_id": paragraph_id}
+        token_ids = entry.get("token_ids") or []
+        if token_ids:
+            location["token_ids"] = token_ids
+        if entry.get("char_range"):
+            location["char_range"] = entry["char_range"]
         items.append(
             {
                 "issue_id": issue_id,
                 "type": "signal_density",
                 "status": "open",
-                "location": {"paragraph_id": paragraph_id},
+                "location": location,
                 "evidence": {
                     "summary": (
                         "Paragraph density below threshold "
