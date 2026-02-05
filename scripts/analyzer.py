@@ -309,7 +309,9 @@ def load_tokens_artifact(preprocessing_dir: Path) -> dict:
     artifact_path = preprocessing_dir / "manuscript_tokens.json"
     if not artifact_path.exists():
         raise SystemExit(f"Tokens artifact not found: {artifact_path}")
-    return json.loads(artifact_path.read_text(encoding="utf-8"))
+    payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+    validate_payload(payload, "manuscript_tokens.schema.json", "manuscript_tokens.json")
+    return payload
 
 
 def build_paragraph_map(tokens_artifact: dict) -> dict[int, dict]:

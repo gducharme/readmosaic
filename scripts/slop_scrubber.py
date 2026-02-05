@@ -106,7 +106,9 @@ def load_tokens_artifact(preprocessing_dir: Path) -> dict:
     artifact_path = preprocessing_dir / "manuscript_tokens.json"
     if not artifact_path.exists():
         raise SystemExit(f"Missing manuscript_tokens.json in {preprocessing_dir}")
-    return json.loads(artifact_path.read_text(encoding="utf-8"))
+    payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+    validate_payload(payload, "manuscript_tokens.schema.json", "manuscript_tokens.json")
+    return payload
 
 
 def build_paragraph_lookup(manuscript_tokens: dict) -> dict[int, dict]:

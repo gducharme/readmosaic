@@ -129,6 +129,7 @@ def load_preprocessed_tokens(path: Path) -> dict[str, object]:
     if not path.exists():
         raise SystemExit(f"Preprocessing file not found: {path}")
     payload = json.loads(path.read_text(encoding="utf-8"))
+    validate_payload(payload, "manuscript_tokens.schema.json", "manuscript_tokens.json")
     if "paragraphs" not in payload:
         raise SystemExit("Preprocessing file missing 'paragraphs' field.")
     return payload

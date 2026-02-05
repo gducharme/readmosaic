@@ -68,7 +68,9 @@ def load_manuscript_tokens(preprocessing_dir: Path) -> dict:
     tokens_path = preprocessing_dir / "manuscript_tokens.json"
     if not tokens_path.exists():
         raise SystemExit(f"Missing manuscript_tokens.json in {preprocessing_dir}")
-    return json.loads(tokens_path.read_text(encoding="utf-8"))
+    payload = json.loads(tokens_path.read_text(encoding="utf-8"))
+    validate_payload(payload, "manuscript_tokens.schema.json", "manuscript_tokens.json")
+    return payload
 
 
 def build_filtered_token_index(manuscript_tokens: dict) -> list[dict]:
