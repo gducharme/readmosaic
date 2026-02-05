@@ -95,6 +95,15 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional cap on the number of edits files to process.",
     )
+    parser.add_argument(
+        "--dedupe-scope",
+        choices=("file", "item"),
+        default="file",
+        help=(
+            "Deduplicate token counts within each edits file or within each item "
+            "to avoid double-counting repeated token IDs."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -142,34 +151,42 @@ def find_edits_files(root: Path, max_files: Optional[int]) -> List[Path]:
     return files
 
 
-def iter_token_ids(edits_payload: dict) -> Iterable[str]:
-    for item in edits_payload.get("items", []):
-        location = item.get("location", {})
-        for token_id in location.get("token_ids", []) or []:
-            yield token_id
-
-
 def build_issue_counts(
-    edits_files: Iterable[Path], token_index: Dict[str, int], total_tokens: int
-) -> List[int]:
+    edits_files: Iterable[Path],
+    token_index: Dict[str, int],
+    total_tokens: int,
+    dedupe_scope: str,
+) -> tuple[List[int], int, Dict[Path, int]]:
     counts = [0 for _ in range(total_tokens)]
     missing_tokens: Dict[str, int] = {}
+    deduped_total = 0
+    deduped_by_file: Dict[Path, int] = {}
     for edits_file in edits_files:
         payload = json.loads(edits_file.read_text(encoding="utf-8"))
-        for token_id in iter_token_ids(payload):
-            if token_id not in token_index:
-                missing_tokens[token_id] = missing_tokens.get(token_id, 0) + 1
-                continue
-            index = token_index[token_id]
-            if 0 <= index < total_tokens:
-                counts[index] += 1
+        seen_token_ids: set[str] = set()
+        for item in payload.get("items", []):
+            if dedupe_scope == "item":
+                seen_token_ids = set()
+            location = item.get("location", {})
+            for token_id in location.get("token_ids", []) or []:
+                if token_id in seen_token_ids:
+                    deduped_total += 1
+                    deduped_by_file[edits_file] = deduped_by_file.get(edits_file, 0) + 1
+                    continue
+                seen_token_ids.add(token_id)
+                if token_id not in token_index:
+                    missing_tokens[token_id] = missing_tokens.get(token_id, 0) + 1
+                    continue
+                index = token_index[token_id]
+                if 0 <= index < total_tokens:
+                    counts[index] += 1
     if missing_tokens:
         missing_sample = ", ".join(list(missing_tokens.keys())[:5])
         raise ValueError(
             "Some token IDs referenced in edits were not found in manuscript_tokens.json: "
             f"{missing_sample}"
         )
-    return counts
+    return counts, deduped_total, deduped_by_file
 
 
 def confidence_for_count(normalized_count: float) -> tuple[float, str]:
@@ -268,12 +285,25 @@ def main() -> None:
             "Run the Mosaic tools to generate edits outputs first."
         )
 
-    issue_counts = build_issue_counts(edits_files, token_index, len(words))
+    issue_counts, deduped_total, deduped_by_file = build_issue_counts(
+        edits_files, token_index, len(words), args.dedupe_scope
+    )
     tool_sources = {edits_file.parent.name for edits_file in edits_files}
     num_sources = len(tool_sources) or len(edits_files)
     if num_sources == 0:
         num_sources = 1
     normalized_counts = [count / num_sources for count in issue_counts]
+    if deduped_total:
+        console = Console()
+        console.print(
+            f"Deduped {deduped_total} repeated token reference(s) "
+            f"(scope: {args.dedupe_scope}).",
+            style="dim",
+        )
+        for edits_file, deduped_count in sorted(
+            deduped_by_file.items(), key=lambda item: item[1], reverse=True
+        ):
+            console.print(f"- {edits_file}: {deduped_count}", style="dim")
     render_text(words, normalized_counts, args.show_word_ids, num_sources)
 
 
