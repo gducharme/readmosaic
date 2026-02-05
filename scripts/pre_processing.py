@@ -132,6 +132,14 @@ def build_paragraph_id(manuscript_id: str, index: int) -> str:
     return f"{manuscript_id}-p{index:04d}"
 
 
+def build_sentence_id(manuscript_id: str, index: int) -> str:
+    return f"{manuscript_id}-s{index:06d}"
+
+
+def build_word_id(manuscript_id: str, index: int) -> str:
+    return f"{manuscript_id}-w{index:06d}"
+
+
 def build_token_id(manuscript_id: str, global_index: int) -> str:
     return f"{manuscript_id}-t{global_index:06d}"
 
@@ -157,8 +165,8 @@ def write_jsonl(path: Path, records: Iterable[dict]) -> None:
             handle.write("\n")
 
 
-def build_prev_next(ids: List[int]) -> List[tuple[Optional[int], Optional[int]]]:
-    pairs: List[tuple[Optional[int], Optional[int]]] = []
+def build_prev_next(ids: List[str]) -> List[tuple[Optional[str], Optional[str]]]:
+    pairs: List[tuple[Optional[str], Optional[str]]] = []
     for idx, current in enumerate(ids):
         prev_id = ids[idx - 1] if idx > 0 else None
         next_id = ids[idx + 1] if idx + 1 < len(ids) else None
@@ -188,7 +196,9 @@ def main() -> None:
     word_records: List[dict] = []
     tokenized_paragraphs: List[dict] = []
 
-    paragraph_ids = list(range(1, len(paragraphs) + 1))
+    paragraph_ids = [
+        build_paragraph_id(manuscript_id, idx + 1) for idx in range(len(paragraphs))
+    ]
     paragraph_links = build_prev_next(paragraph_ids)
 
     paragraph_start = 0
@@ -214,7 +224,7 @@ def main() -> None:
         }
         paragraph_records.append(paragraph_record)
 
-        paragraph_id = build_paragraph_id(manuscript_id, idx + 1)
+        paragraph_id = paragraph_ids[idx]
         tokens = nltk.word_tokenize(paragraph_text)
         token_spans = locate_tokens(paragraph_text, tokens)
         token_records: List[dict] = []
@@ -254,19 +264,19 @@ def main() -> None:
             sentence_end = sentence_start + len(sentence)
 
             sentence_record = {
-                "id": sentence_id,
+                "id": build_sentence_id(manuscript_id, sentence_id),
                 "order": len(sentence_records),
                 "prev_id": sentence_records[-1]["id"] if sentence_records else None,
                 "next_id": None,
                 "text": sentence,
                 "start_char": sentence_start,
                 "end_char": sentence_end,
-                "paragraph_id": paragraph_ids[idx],
+                "paragraph_id": paragraph_id,
                 "manuscript_id": manuscript_id,
                 "source": source,
             }
             if sentence_records:
-                sentence_records[-1]["next_id"] = sentence_id
+                sentence_records[-1]["next_id"] = sentence_record["id"]
             sentence_records.append(sentence_record)
 
             tokens = nltk.word_tokenize(sentence)
@@ -275,20 +285,20 @@ def main() -> None:
                 word_start = sentence_start + token_start
                 word_end = sentence_start + token_end
                 word_record = {
-                    "id": word_id,
+                    "id": build_word_id(manuscript_id, word_id),
                     "order": len(word_records),
                     "prev_id": word_records[-1]["id"] if word_records else None,
                     "next_id": None,
                     "text": token,
                     "start_char": word_start,
                     "end_char": word_end,
-                    "sentence_id": sentence_id,
-                    "paragraph_id": paragraph_ids[idx],
+                    "sentence_id": sentence_record["id"],
+                    "paragraph_id": paragraph_id,
                     "manuscript_id": manuscript_id,
                     "source": source,
                 }
                 if word_records:
-                    word_records[-1]["next_id"] = word_id
+                    word_records[-1]["next_id"] = word_record["id"]
                 word_records.append(word_record)
                 word_id += 1
 

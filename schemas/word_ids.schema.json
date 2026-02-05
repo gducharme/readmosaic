@@ -18,8 +18,7 @@
   ],
   "properties": {
     "id": {
-      "type": "integer",
-      "minimum": 1,
+      "type": "string",
       "description": "Stable word identifier."
     },
     "order": {
@@ -28,13 +27,11 @@
       "description": "Zero-based word order in the manuscript."
     },
     "prev_id": {
-      "type": ["integer", "null"],
-      "minimum": 1,
+      "type": ["string", "null"],
       "description": "Previous word ID, or null for the first word."
     },
     "next_id": {
-      "type": ["integer", "null"],
-      "minimum": 1,
+      "type": ["string", "null"],
       "description": "Next word ID, or null for the last word."
     },
     "text": {
@@ -52,13 +49,11 @@
       "description": "End offset in the manuscript (exclusive)."
     },
     "sentence_id": {
-      "type": "integer",
-      "minimum": 1,
+      "type": "string",
       "description": "Parent sentence identifier."
     },
     "paragraph_id": {
-      "type": "integer",
-      "minimum": 1,
+      "type": "string",
       "description": "Parent paragraph identifier."
     },
     "manuscript_id": {

@@ -16,8 +16,7 @@
   ],
   "properties": {
     "id": {
-      "type": "integer",
-      "minimum": 1,
+      "type": "string",
       "description": "Stable paragraph identifier."
     },
     "order": {
@@ -26,13 +25,11 @@
       "description": "Zero-based paragraph order in the manuscript."
     },
     "prev_id": {
-      "type": ["integer", "null"],
-      "minimum": 1,
+      "type": ["string", "null"],
       "description": "Previous paragraph ID, or null for the first paragraph."
     },
     "next_id": {
-      "type": ["integer", "null"],
-      "minimum": 1,
+      "type": ["string", "null"],
       "description": "Next paragraph ID, or null for the last paragraph."
     },
     "text": {

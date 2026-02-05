@@ -442,6 +442,12 @@ def parse_args() -> argparse.Namespace:
         help="Output path for CSV/JSON reports.",
     )
     parser.add_argument(
+        "--output-edits",
+        type=Path,
+        default=None,
+        help="Optional output path for edits.schema.json payload.",
+    )
+    parser.add_argument(
         "--top-n",
         type=int,
         default=10,
@@ -481,6 +487,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("Threshold must be between 0.0 and 1.0")
     if args.output_format == "json" and not args.preprocessing:
         raise SystemExit("--preprocessing is required for JSON output.")
+    if args.output_edits and not args.preprocessing:
+        raise SystemExit("--output-edits requires --preprocessing for token mapping.")
     if args.preprocessing and not args.preprocessing.exists():
         raise SystemExit(f"Preprocessing directory not found: {args.preprocessing}")
 
@@ -539,6 +547,17 @@ def main() -> None:
             entropy_pct,
             clusters,
         )
+
+    if args.output_edits:
+        write_json_report(
+            args.output_edits,
+            sentences,
+            pairs,
+            args.threshold,
+            args.context_window,
+            args.preprocessing,
+        )
+        Console().print(f"Edits payload written to {args.output_edits}")
 
 
 if __name__ == "__main__":
