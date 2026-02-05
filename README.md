@@ -86,6 +86,19 @@ Run the script with:
 python scripts/slop_scrubber.py --help
 ```
 
+## Direct Signal Filter (DSF)
+
+The `scripts/direct_signal_filter.py` CLI hunts for negation-led pacing stalls,
+quiet/silent intensity clichés, and hedge-heavy paragraphs. It uses spaCy's
+transformer pipeline and emits optional edits payloads for the Mosaic
+orchestrator.
+
+Run the script with:
+
+```bash
+python scripts/direct_signal_filter.py --help
+```
+
 ## Manuscript Pre-Processing
 
 The `scripts/pre_processing.py` CLI segments a manuscript into paragraph, sentence, and word JSONL artifacts with stable IDs, order, offsets, and cross-references. It also emits a schema-aligned `manuscript_tokens.json` artifact for downstream token processing. Run the script with `--help` for usage details and options.
