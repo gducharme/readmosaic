@@ -19,9 +19,11 @@ import csv
 import json
 import math
 import re
+import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence
+from typing import List, Optional, Sequence
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -49,6 +51,13 @@ class SentenceScore:
     perplexity: float
     is_slop: bool
     transitions: List[str]
+
+
+@dataclass
+class SentenceLocation:
+    paragraph_id: str
+    token_ids: List[str]
+    char_range: dict
 
 
 def load_text(path: Path) -> str:
@@ -224,6 +233,59 @@ def plot_surprisal_map(
     plt.close(fig)
 
 
+def load_manuscript_tokens(preprocessing_dir: Path) -> dict:
+    tokens_path = preprocessing_dir / "manuscript_tokens.json"
+    if not tokens_path.exists():
+        raise FileNotFoundError(
+            f"Missing manuscript_tokens.json in preprocessing dir: {preprocessing_dir}"
+        )
+    return json.loads(tokens_path.read_text(encoding="utf-8"))
+
+
+def locate_sentence_spans(paragraph_text: str, sentences: Sequence[str]) -> List[tuple]:
+    spans: List[tuple] = []
+    search_start = 0
+    for sentence in sentences:
+        position = paragraph_text.find(sentence, search_start)
+        if position == -1:
+            position = search_start
+        start = position
+        end = start + len(sentence)
+        spans.append((sentence, start, end))
+        search_start = end
+    return spans
+
+
+def build_sentence_locations(
+    manuscript_tokens: dict,
+) -> tuple[List[str], List[SentenceLocation]]:
+    sentences: List[str] = []
+    locations: List[SentenceLocation] = []
+    for paragraph in manuscript_tokens.get("paragraphs", []):
+        paragraph_id = paragraph["paragraph_id"]
+        paragraph_text = paragraph.get("text", "")
+        paragraph_tokens = paragraph.get("tokens", [])
+        paragraph_sentences = split_sentences(paragraph_text)
+        if not paragraph_sentences:
+            continue
+        spans = locate_sentence_spans(paragraph_text, paragraph_sentences)
+        for sentence, start, end in spans:
+            token_ids = [
+                token["token_id"]
+                for token in paragraph_tokens
+                if token["start_char"] < end and token["end_char"] > start
+            ]
+            sentences.append(sentence)
+            locations.append(
+                SentenceLocation(
+                    paragraph_id=paragraph_id,
+                    token_ids=token_ids,
+                    char_range={"start": start, "end": end},
+                )
+            )
+    return sentences, locations
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -262,6 +324,11 @@ def parse_args() -> argparse.Namespace:
         help="Path to save the surprisal map plot (default: surprisal_map.png)",
     )
     parser.add_argument(
+        "--preprocessing",
+        type=Path,
+        help="Directory containing manuscript_tokens.json for sentence mapping.",
+    )
+    parser.add_argument(
         "--output-json",
         type=Path,
         help="Optional path to write full sentence metrics as JSON",
@@ -270,6 +337,11 @@ def parse_args() -> argparse.Namespace:
         "--output-csv",
         type=Path,
         help="Optional path to write full sentence metrics as CSV",
+    )
+    parser.add_argument(
+        "--output-edits",
+        type=Path,
+        help="Optional path to write edits.schema.json payload for slop sentences.",
     )
     parser.add_argument(
         "--transition-phrases",
@@ -315,20 +387,89 @@ def resolve_device(choice: str) -> torch.device:
     return torch.device(choice)
 
 
+def build_edits_payload(
+    scores: Sequence[SentenceScore],
+    locations: Sequence[SentenceLocation],
+    manuscript_id: str,
+) -> dict:
+    items = []
+    for score, location in zip(scores, locations, strict=True):
+        if not score.is_slop:
+            continue
+        issue_id = str(uuid.uuid4())
+        location_payload = {
+            "paragraph_id": location.paragraph_id,
+            "char_range": location.char_range,
+            "anchor_text": score.sentence,
+        }
+        if location.token_ids:
+            location_payload["token_ids"] = location.token_ids
+        items.append(
+            {
+                "issue_id": issue_id,
+                "type": "style",
+                "status": "open",
+                "location": location_payload,
+                "evidence": {
+                    "summary": (
+                        "High average log-probability sentence flagged as potential slop."
+                    ),
+                    "detector": "surprisal_scout",
+                    "signals": [
+                        {
+                            "name": "avg_logprob",
+                            "value": round(score.avg_logprob, 6)
+                            if not math.isnan(score.avg_logprob)
+                            else None,
+                            "units": "logprob",
+                        },
+                        {
+                            "name": "perplexity",
+                            "value": round(score.perplexity, 6)
+                            if not math.isnan(score.perplexity)
+                            else None,
+                        },
+                        {"name": "transition_hits", "value": score.transitions},
+                    ],
+                },
+            }
+        )
+    if not items:
+        return {}
+    return {
+        "schema_version": "1.0",
+        "manuscript_id": manuscript_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "items": items,
+    }
+
+
 def main() -> None:
     args = parse_args()
     if not args.input.exists():
         raise FileNotFoundError(f"Input not found: {args.input}")
+    if args.preprocessing and not args.preprocessing.exists():
+        raise FileNotFoundError(f"Preprocessing dir not found: {args.preprocessing}")
+    if args.output_edits and not args.preprocessing:
+        raise SystemExit("--output-edits requires --preprocessing for token mapping.")
 
     transition_phrases = load_transition_phrases(
         args.transition_phrases, args.transition_file
     )
     device = resolve_device(args.device)
 
-    text = load_text(args.input)
-    sentences = split_sentences(text)
-    if not sentences:
-        raise ValueError("No sentences found in the input.")
+    manuscript_tokens = None
+    sentence_locations: List[SentenceLocation] = []
+    if args.preprocessing:
+        manuscript_tokens = load_manuscript_tokens(args.preprocessing)
+        sentences, sentence_locations = build_sentence_locations(manuscript_tokens)
+        if not sentences:
+            raise ValueError("No sentences found in preprocessing artifact.")
+    else:
+        text = load_text(args.input)
+        sentences = split_sentences(text)
+        if not sentences:
+            raise ValueError("No sentences found in the input.")
 
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     model = AutoModelForCausalLM.from_pretrained(args.model)
@@ -366,6 +507,21 @@ def main() -> None:
     if args.output_json:
         write_json(args.output_json, scores)
         print(f"JSON saved to: {args.output_json}")
+
+    if args.output_edits:
+        edits_payload = build_edits_payload(
+            scores,
+            sentence_locations,
+            manuscript_tokens["manuscript_id"],
+        )
+        if not edits_payload:
+            print("No slop sentences above threshold for edits output.")
+        else:
+            args.output_edits.write_text(
+                json.dumps(edits_payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            print(f"Edits saved to: {args.output_edits}")
 
 
 if __name__ == "__main__":
