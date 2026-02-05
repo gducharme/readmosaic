@@ -255,6 +255,13 @@ def parse_msd(_: str, output_dir: Path) -> Dict[str, Any]:
     return json.loads(json_path.read_text(encoding="utf-8"))
 
 
+def parse_dsf(_: str, output_dir: Path) -> Dict[str, Any]:
+    json_path = output_dir / "dsf.json"
+    if not json_path.exists():
+        return {}
+    return json.loads(json_path.read_text(encoding="utf-8"))
+
+
 def _build_command_simple(
     script: str,
     extra: List[str],
@@ -408,6 +415,39 @@ def _build_command_msd(
     return _builder
 
 
+def _build_command_dsf(
+    script: str,
+    output_name: str,
+    edits_output_name: str,
+    ambivalence_threshold: float,
+) -> Callable[[Path, Path, Optional[Path]], List[str]]:
+    def _builder(
+        input_path: Path, output_dir: Path, preprocessing_dir: Optional[Path]
+    ) -> List[str]:
+        output_path = output_dir / output_name
+        command = [
+            "python",
+            script,
+            str(input_path),
+            "--output-json",
+            str(output_path),
+            "--ambivalence-threshold",
+            str(ambivalence_threshold),
+        ]
+        if preprocessing_dir:
+            command.extend(
+                [
+                    "--preprocessing",
+                    str(preprocessing_dir),
+                    "--output-edits",
+                    str(output_dir / edits_output_name),
+                ]
+            )
+        return command
+
+    return _builder
+
+
 TOOL_DEFINITIONS: List[ToolDefinition] = [
     ToolDefinition(
         code="SRA",
@@ -509,6 +549,22 @@ TOOL_DEFINITIONS: List[ToolDefinition] = [
         ),
         parser=parse_msd,
         edits_output_name="msd_edits.json",
+    ),
+    ToolDefinition(
+        code="DSF",
+        name="Direct Signal Filter",
+        description=(
+            "Finds negative pacing, vague intensity clichés, and ambivalent hedging."
+        ),
+        script_path=Path("scripts/direct_signal_filter.py"),
+        build_command=_build_command_dsf(
+            "scripts/direct_signal_filter.py",
+            "dsf.json",
+            "dsf_edits.json",
+            0.08,
+        ),
+        parser=parse_dsf,
+        edits_output_name="dsf_edits.json",
     ),
     ToolDefinition(
         code="CWS",
