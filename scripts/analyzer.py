@@ -13,10 +13,12 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, List, Sequence
+from typing import Iterable, List, Optional, Sequence
 
 import numpy as np
 from rich.console import Console
@@ -35,6 +37,16 @@ class SentenceRecord:
     line_number: int
     paragraph_index: int
     section_index: int
+    start_char: int
+    end_char: int
+
+
+@dataclass
+class SentenceLocation:
+    paragraph_id: str
+    token_ids: List[str]
+    start_char: int
+    end_char: int
 
 
 @dataclass
@@ -134,6 +146,8 @@ def extract_sentences(paragraphs: Sequence[ParagraphRecord], min_length: int) ->
             if position == -1:
                 position = search_start
             search_start = position + len(sentence)
+            sentence_start = position
+            sentence_end = position + len(sentence)
             line_number = paragraph.line_numbers[0]
             for offset, ln in zip(paragraph.line_offsets, paragraph.line_numbers):
                 if offset <= position:
@@ -146,6 +160,8 @@ def extract_sentences(paragraphs: Sequence[ParagraphRecord], min_length: int) ->
                     line_number=line_number,
                     paragraph_index=paragraph.paragraph_index,
                     section_index=paragraph.section_index,
+                    start_char=sentence_start,
+                    end_char=sentence_end,
                 )
             )
     return records
@@ -288,6 +304,111 @@ def write_csv_report(
             )
 
 
+def load_tokens_artifact(preprocessing_dir: Path) -> dict:
+    artifact_path = preprocessing_dir / "manuscript_tokens.json"
+    if not artifact_path.exists():
+        raise SystemExit(f"Tokens artifact not found: {artifact_path}")
+    return json.loads(artifact_path.read_text(encoding="utf-8"))
+
+
+def build_paragraph_map(tokens_artifact: dict) -> dict[int, dict]:
+    paragraph_map: dict[int, dict] = {}
+    for paragraph in tokens_artifact.get("paragraphs", []):
+        order = paragraph.get("order")
+        if order is None:
+            continue
+        paragraph_map[int(order)] = paragraph
+    return paragraph_map
+
+
+def map_sentence_location(
+    sentence: SentenceRecord, paragraph_map: dict[int, dict]
+) -> Optional[SentenceLocation]:
+    paragraph = paragraph_map.get(sentence.paragraph_index - 1)
+    if not paragraph:
+        return None
+    start = sentence.start_char
+    end = sentence.end_char
+    token_ids: List[str] = []
+    for token in paragraph.get("tokens", []):
+        token_start = token.get("start_char", 0)
+        token_end = token.get("end_char", 0)
+        if token_end <= start or token_start >= end:
+            continue
+        token_id = token.get("token_id")
+        if token_id:
+            token_ids.append(token_id)
+    return SentenceLocation(
+        paragraph_id=paragraph["paragraph_id"],
+        token_ids=token_ids,
+        start_char=start,
+        end_char=end,
+    )
+
+
+def write_json_report(
+    output_path: Path,
+    sentences: Sequence[SentenceRecord],
+    pairs: Sequence[tuple[float, int, int]],
+    threshold: float,
+    context_window: str,
+    preprocessing_dir: Path,
+) -> None:
+    tokens_artifact = load_tokens_artifact(preprocessing_dir)
+    paragraph_map = build_paragraph_map(tokens_artifact)
+    manuscript_id = tokens_artifact.get("manuscript_id", "unknown")
+
+    echo_pairs = [pair for pair in pairs if pair[0] >= threshold]
+    echo_pairs.sort(key=lambda item: item[0], reverse=True)
+
+    items: List[dict] = []
+    for idx, (score, i, j) in enumerate(echo_pairs, start=1):
+        sentence_a = sentences[i]
+        sentence_b = sentences[j]
+        location_a = map_sentence_location(sentence_a, paragraph_map)
+        location_b = map_sentence_location(sentence_b, paragraph_map)
+        if not location_a or not location_b:
+            continue
+        items.append(
+            {
+                "issue_id": f"semantic-echo-{idx:04d}",
+                "type": "semantic_repetition",
+                "location": {
+                    "paragraph_id": location_a.paragraph_id,
+                    "token_ids": location_a.token_ids,
+                    "char_range": {"start": location_a.start_char, "end": location_a.end_char},
+                    "anchor_text": sentence_a.text,
+                },
+                "evidence": {
+                    "summary": "Semantic repetition detected between sentences.",
+                    "signals": [
+                        {"name": "similarity_score", "value": round(float(score), 6)},
+                        {"name": "context_window", "value": context_window},
+                    ],
+                    "detector": "semantic_echo_analyzer",
+                    "primary_sentence": sentence_a.text,
+                    "echo_sentence": sentence_b.text,
+                },
+                "extensions": {
+                    "echo_location": {
+                        "paragraph_id": location_b.paragraph_id,
+                        "token_ids": location_b.token_ids,
+                        "char_range": {"start": location_b.start_char, "end": location_b.end_char},
+                        "anchor_text": sentence_b.text,
+                    }
+                },
+            }
+        )
+
+    payload = {
+        "schema_version": "1.0",
+        "manuscript_id": manuscript_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "items": items,
+    }
+    output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Analyze a text or Markdown file for semantic repetition.",
@@ -307,15 +428,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--output-format",
-        choices=["text", "csv"],
+        choices=["text", "csv", "json"],
         default="text",
         help="Output format for the report.",
     )
     parser.add_argument(
         "--output-file",
         type=Path,
-        default=Path("echo_report.csv"),
-        help="Output path for CSV reports.",
+        default=None,
+        help="Output path for CSV/JSON reports.",
     )
     parser.add_argument(
         "--top-n",
@@ -340,6 +461,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Enable conceptual clustering summary.",
     )
+    parser.add_argument(
+        "--preprocessing",
+        type=Path,
+        help="Directory containing manuscript_tokens.json for schema-aligned spans.",
+    )
     return parser.parse_args()
 
 
@@ -350,6 +476,10 @@ def validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("Input file must be .txt or .md")
     if not 0.0 <= args.threshold <= 1.0:
         raise SystemExit("Threshold must be between 0.0 and 1.0")
+    if args.output_format == "json" and not args.preprocessing:
+        raise SystemExit("--preprocessing is required for JSON output.")
+    if args.preprocessing and not args.preprocessing.exists():
+        raise SystemExit(f"Preprocessing directory not found: {args.preprocessing}")
 
 
 def main() -> None:
@@ -382,8 +512,20 @@ def main() -> None:
         clusters = cluster_sentences(embeddings.cpu().numpy(), sentences, args.threshold)
 
     if args.output_format == "csv":
-        write_csv_report(args.output_file, sentences, pairs, args.threshold, args.top_n)
-        Console().print(f"CSV report written to {args.output_file}")
+        output_path = args.output_file or Path("echo_report.csv")
+        write_csv_report(output_path, sentences, pairs, args.threshold, args.top_n)
+        Console().print(f"CSV report written to {output_path}")
+    elif args.output_format == "json":
+        output_path = args.output_file or Path("echo_report.json")
+        write_json_report(
+            output_path,
+            sentences,
+            pairs,
+            args.threshold,
+            args.context_window,
+            args.preprocessing,
+        )
+        Console().print(f"JSON report written to {output_path}")
     else:
         render_text_report(
             sentences,
