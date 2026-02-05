@@ -20,6 +20,8 @@ from rapidfuzz import fuzz, process
 DEFAULT_BASE_URL = "http://localhost:1234/v1/chat/completions"
 DEFAULT_PROMPT_PATH = Path("prompts/MRE_Archivist_Minimal.txt")
 DEFAULT_OUTPUT_PATH = Path("mre_outputs/approved_manuscript.md")
+DEFAULT_LLM_LOG_PATH = Path("mre_outputs/llm_responses.jsonl")
+DEFAULT_TOOL_LOG_PATH = Path("mre_outputs/tool_runs.jsonl")
 DEFAULT_TOOLS_DIR = Path("tools")
 CAPABILITIES_LOG = Path("mosaic_capabilities.log")
 
@@ -60,6 +62,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prompt", type=Path, default=DEFAULT_PROMPT_PATH, help="System prompt path.")
     parser.add_argument("--tools-dir", type=Path, default=DEFAULT_TOOLS_DIR, help="Directory for forged tools.")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT_PATH, help="Output manuscript path.")
+    parser.add_argument("--llm-log", type=Path, default=DEFAULT_LLM_LOG_PATH, help="Log path for LLM responses.")
+    parser.add_argument("--tool-log", type=Path, default=DEFAULT_TOOL_LOG_PATH, help="Log path for tool runs.")
     parser.add_argument("--max-forge", type=int, default=2, help="Max forge attempts per diagnostic.")
     parser.add_argument("--max-fix", type=int, default=2, help="Max fix attempts per tool failure.")
     parser.add_argument("--threshold", type=int, default=70, help="Anchor match threshold (0-100).")
@@ -143,12 +147,21 @@ def manifest_payload(manifest: Iterable[ToolEntry]) -> List[Dict[str, str]]:
         for entry in manifest
     ]
 
+def append_jsonl(path: Optional[Path], payload: Dict[str, Any]) -> None:
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as log_file:
+        log_file.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
 
 def call_lm_studio(
     base_url: str,
     model: str,
     system_prompt: str,
     user_prompt: str,
+    log_path: Optional[Path] = None,
+    context: Optional[str] = None,
 ) -> str:
     payload = {
         "model": model,
@@ -161,7 +174,19 @@ def call_lm_studio(
     response = requests.post(base_url, json=payload, timeout=120)
     response.raise_for_status()
     data = response.json()
-    return data["choices"][0]["message"]["content"]
+    content = data["choices"][0]["message"]["content"]
+    append_jsonl(
+        log_path,
+        {
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "context": context,
+            "base_url": base_url,
+            "model": model,
+            "request": payload,
+            "response": content,
+        },
+    )
+    return content
 
 
 def extract_json(response_text: str) -> Dict[str, Any]:
@@ -202,6 +227,8 @@ def run_tool(
     base_url: str,
     model: str,
     system_prompt: str,
+    tool_log: Optional[Path] = None,
+    llm_log: Optional[Path] = None,
 ) -> str:
     tool_path = tools_dir / f"{tool_name}.py"
     if not tool_path.exists():
@@ -210,14 +237,54 @@ def run_tool(
     last_error = None
     while attempt <= max_fix:
         try:
+            append_jsonl(
+                tool_log,
+                {
+                    "timestamp": datetime.utcnow().isoformat() + "Z",
+                    "event": "tool_run_start",
+                    "tool_name": tool_name,
+                    "anchor": anchor,
+                    "params": params or {},
+                    "attempt": attempt,
+                    "text_block": text_block,
+                },
+            )
             module = load_module_from_path(tool_path)
             run_fn = getattr(module, "run_tool", None)
             if not callable(run_fn):
                 raise AttributeError(f"run_tool not found in {tool_name}")
-            return run_fn(text_block, anchor, params or {})
+            result = run_fn(text_block, anchor, params or {})
+            append_jsonl(
+                tool_log,
+                {
+                    "timestamp": datetime.utcnow().isoformat() + "Z",
+                    "event": "tool_run_success",
+                    "tool_name": tool_name,
+                    "anchor": anchor,
+                    "params": params or {},
+                    "attempt": attempt,
+                    "text_block": text_block,
+                    "result": result,
+                },
+            )
+            return result
         except Exception as exc:
             last_error = exc
             traceback_text = traceback.format_exc()
+            append_jsonl(
+                tool_log,
+                {
+                    "timestamp": datetime.utcnow().isoformat() + "Z",
+                    "event": "tool_run_error",
+                    "tool_name": tool_name,
+                    "anchor": anchor,
+                    "params": params or {},
+                    "attempt": attempt,
+                    "text_block": text_block,
+                    "error": str(exc),
+                    "traceback": traceback_text,
+                },
+            )
             tool_code = tool_path.read_text(encoding="utf-8")
             fix_prompt = (
                 "The forged tool failed to run. Fix the code.\n\n"
@@ -225,7 +292,14 @@ def run_tool(
                 f"Tool code:\n{tool_code}\n\n"
                 "Return JSON: {\"action\": \"forge\", \"tool_name\": \"...\", \"tool_code\": \"...\"}"
             )
-            response_text = call_lm_studio(base_url, model, system_prompt, fix_prompt)
+            response_text = call_lm_studio(
+                base_url,
+                model,
+                system_prompt,
+                fix_prompt,
+                log_path=llm_log,
+                context=f"tool_fix:{tool_name}",
+            )
             response = extract_json(response_text)
             if response.get("action") != "forge":
                 raise RuntimeError("LM did not return corrected tool code.") from exc
@@ -270,7 +344,14 @@ def process_diagnostic(
     forged = False
     while forge_attempts <= args.max_forge:
         prompt = build_user_prompt(diagnostic, paragraph_index, before, manifest)
-        response_text = call_lm_studio(args.base_url, args.model, system_prompt, prompt)
+        response_text = call_lm_studio(
+            args.base_url,
+            args.model,
+            system_prompt,
+            prompt,
+            log_path=args.llm_log,
+            context=f"diagnostic:{diagnostic.failure}",
+        )
         response = extract_json(response_text)
         action = response.get("action")
         if action == "forge":
@@ -293,6 +374,8 @@ def process_diagnostic(
                 args.base_url,
                 args.model,
                 system_prompt,
+                tool_log=args.tool_log,
+                llm_log=args.llm_log,
             )
             paragraphs[paragraph_index] = after
             return StagedEdit(
