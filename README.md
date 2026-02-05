@@ -115,6 +115,16 @@ hot-reload them, and apply edits to a manuscript based on a diagnostics JSON fil
 python mre_minimal.py --file manuscript.md --diagnostics diagnostics.json --model llama3:8b-instruct-q8_0
 ```
 
+## Schemas
+
+The `schemas/` directory captures lightweight JSON Schema definitions used to stabilize
+the editing pipeline. The initial set covers:
+
+- `manuscript_tokens.schema.json` for word-level IDs and offsets.
+- `edits.schema.json` for normalized issue payloads.
+- `demonstration.schema.json` for problem demonstrations.
+- `proposal.schema.json` plus `patch.schema.json` for targeted fixes and verification.
+
 ## Mosaic Signal Density (MSD)
 
 The `scripts/signal_density.py` CLI estimates lexical density and signal concentration

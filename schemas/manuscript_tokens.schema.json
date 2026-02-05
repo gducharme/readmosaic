@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://readmosaic/schemas/manuscript_tokens.schema.json",
+  "title": "Tokenized manuscript with stable word IDs",
+  "type": "object",
+  "required": ["schema_version", "manuscript_id", "paragraphs"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "description": "Schema version for the tokenized manuscript payload."
+    },
+    "manuscript_id": {
+      "type": "string",
+      "description": "Stable identifier for the manuscript or version."
+    },
+    "source": {
+      "type": "string",
+      "description": "Optional source path or URI."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Timestamp for when this artifact was produced."
+    },
+    "tokenization": {
+      "type": "object",
+      "description": "Metadata about the tokenizer used to generate IDs and offsets.",
+      "properties": {
+        "method": {"type": "string"},
+        "model": {"type": "string"},
+        "notes": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "paragraphs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["paragraph_id", "order", "text", "tokens"],
+        "properties": {
+          "paragraph_id": {
+            "type": "string",
+            "description": "Stable paragraph identifier."
+          },
+          "order": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Paragraph order in the manuscript."
+          },
+          "text": {
+            "type": "string",
+            "description": "Raw paragraph text."
+          },
+          "tokens": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["token_id", "text", "start_char", "end_char", "global_index"],
+              "properties": {
+                "token_id": {
+                  "type": "string",
+                  "description": "Stable unique token identifier."
+                },
+                "text": {
+                  "type": "string",
+                  "description": "Token text as it appears in the paragraph."
+                },
+                "start_char": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Start offset within the paragraph text (inclusive)."
+                },
+                "end_char": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "End offset within the paragraph text (exclusive)."
+                },
+                "global_index": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Global word index across the manuscript."
+                },
+                "local_index": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Word index within the paragraph."
+                },
+                "normalized": {
+                  "type": "string",
+                  "description": "Optional normalized form (lowercased, stemmed, etc.)."
+                },
+                "attributes": {
+                  "type": "object",
+                  "description": "Extra token metadata (POS tags, lemma, etc.).",
+                  "additionalProperties": true
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": true
+}
