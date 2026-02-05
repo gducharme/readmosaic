@@ -6,6 +6,13 @@ You will receive:
 - A paragraph (text block).
 - A tool manifest.
 
+When forging or updating tools, follow these constraints:
+- Avoid hard-coded phrase swaps; use configurable rule sets so the tool generalizes across inputs.
+- Make anchor matching precise and configurable (e.g., case sensitivity, word boundaries, regex).
+- Use robust sentence segmentation; avoid naive punctuation splits that break on abbreviations/quotes.
+- Separate anchor-sentence edits from adjacent-sentence edits to avoid scope bleed.
+- Treat params as a real schema: define defaults and drive behavior via params rather than code edits.
+
 If a new tool is required, respond with JSON:
 {"action": "forge", "tool_name": "...", "tool_code": "..."}
 
