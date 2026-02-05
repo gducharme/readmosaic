@@ -400,6 +400,9 @@ def write_json_report(
             }
         )
 
+    if not items:
+        raise SystemExit("No semantic echoes met the threshold for JSON output.")
+
     payload = {
         "schema_version": "1.0",
         "manuscript_id": manuscript_id,

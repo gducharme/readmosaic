@@ -512,10 +512,13 @@ def main() -> int:
             moralizing_drift,
             hard_cut,
         )
-        args.output_json.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        if not payload["items"]:
+            print("No slop paragraphs met the threshold for edits output.")
+        else:
+            args.output_json.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
 
     return 0
 

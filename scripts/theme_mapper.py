@@ -42,6 +42,8 @@ class Chunk:
     text: str
     word_count: int
     paragraph_range: Optional[Tuple[str, str]] = None
+    start_token_index: Optional[int] = None
+    end_token_index: Optional[int] = None
 
 
 def parse_args() -> argparse.Namespace:
@@ -253,6 +255,9 @@ def build_word_token_index(manuscript_tokens: dict) -> List[dict]:
             tokens.append(
                 {
                     "paragraph_id": paragraph_id,
+                    "token_id": token.get("token_id"),
+                    "start_char": token.get("start_char"),
+                    "end_char": token.get("end_char"),
                     "global_index": token["global_index"],
                 }
             )
@@ -275,6 +280,8 @@ def map_chunks_to_paragraph_ranges(chunks: Sequence[Chunk], token_index: Sequenc
         start_paragraph = token_index[start]["paragraph_id"]
         end_paragraph = token_index[end]["paragraph_id"]
         chunk.paragraph_range = (start_paragraph, end_paragraph)
+        chunk.start_token_index = start
+        chunk.end_token_index = end
         cursor += chunk.word_count
 
 
@@ -285,6 +292,39 @@ def format_paragraph_range(paragraph_range: Optional[Tuple[str, str]]) -> Option
     if start == end:
         return start
     return f"{start}..{end}"
+
+
+def build_chunk_location(
+    token_index: Sequence[dict],
+    start: Optional[int],
+    end: Optional[int],
+) -> Optional[dict]:
+    if not token_index or start is None or end is None:
+        return None
+    safe_start = max(min(start, len(token_index) - 1), 0)
+    safe_end = max(min(end, len(token_index) - 1), safe_start)
+    anchor_index = min(safe_start + (safe_end - safe_start) // 2, len(token_index) - 1)
+    anchor = token_index[anchor_index]
+    paragraph_id = anchor["paragraph_id"]
+    window_tokens = [
+        token
+        for token in token_index[safe_start : safe_end + 1]
+        if token["paragraph_id"] == paragraph_id
+    ]
+    if not window_tokens:
+        window_tokens = [anchor]
+    token_ids = [token["token_id"] for token in window_tokens if token.get("token_id")]
+    char_starts = [token["start_char"] for token in window_tokens if token.get("start_char") is not None]
+    char_ends = [token["end_char"] for token in window_tokens if token.get("end_char") is not None]
+    char_range = None
+    if char_starts and char_ends:
+        char_range = {"start": min(char_starts), "end": max(char_ends)}
+    location = {"paragraph_id": paragraph_id}
+    if token_ids:
+        location["token_ids"] = token_ids
+    if char_range:
+        location["char_range"] = char_range
+    return location
 
 
 def preprocess_chunks(
@@ -369,6 +409,7 @@ def write_topic_shift_json(
     distribution: np.ndarray,
     threshold: float,
     manuscript_id: str,
+    token_index: Optional[Sequence[dict]] = None,
 ) -> None:
     items: List[dict] = []
     for idx in range(1, len(chunks)):
@@ -379,13 +420,25 @@ def write_topic_shift_json(
         if delta_value < threshold:
             continue
         paragraph_range = format_paragraph_range(chunks[idx].paragraph_range)
-        if not paragraph_range:
+        location_data = build_chunk_location(
+            token_index or [],
+            chunks[idx].start_token_index,
+            chunks[idx].end_token_index,
+        )
+        paragraph_id_value = paragraph_range or (location_data["paragraph_id"] if location_data else None)
+        if not paragraph_id_value:
             continue
+        location: dict[str, object] = {"paragraph_id": paragraph_id_value}
+        if location_data:
+            if location_data.get("token_ids"):
+                location["token_ids"] = location_data["token_ids"]
+            if location_data.get("char_range"):
+                location["char_range"] = location_data["char_range"]
         items.append(
             {
                 "issue_id": str(uuid.uuid4()),
                 "type": "topic_shift",
-                "location": {"paragraph_id": paragraph_range},
+                "location": location,
                 "evidence": {
                     "summary": (
                         f"Abrupt topic shift detected between {chunks[idx - 1].label} "
@@ -445,6 +498,7 @@ def main() -> None:
         raise SystemExit("No chunks were created. Check your input or chunk settings.")
 
     manuscript_tokens = None
+    token_index: Optional[List[dict]] = None
     if args.preprocessing:
         manuscript_tokens = load_manuscript_tokens(args.preprocessing)
         token_index = build_word_token_index(manuscript_tokens)
@@ -515,6 +569,7 @@ def main() -> None:
             distribution,
             args.topic_shift_threshold,
             manuscript_id,
+            token_index,
         )
 
 
