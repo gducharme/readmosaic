@@ -85,6 +85,11 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="Optional path to write edits.schema.json output.",
     )
+    parser.add_argument(
+        "--output-edits",
+        type=Path,
+        help="Optional path to write edits.schema.json output.",
+    )
     return parser.parse_args()
 
 
@@ -272,11 +277,12 @@ def main() -> None:
     print(json.dumps(payload, indent=2))
     if args.output_json:
         args.output_json.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    if args.edits_output:
+    edits_output = args.output_edits or args.edits_output
+    if edits_output:
         if not preprocessing_payload:
-            raise SystemExit("--edits-output requires --preprocessing.")
+            raise SystemExit("--output-edits requires --preprocessing.")
         if args.paragraph_threshold is None:
-            raise SystemExit("--edits-output requires --paragraph-threshold.")
+            raise SystemExit("--output-edits requires --paragraph-threshold.")
         edits_payload = build_edits_payload(
             preprocessing_payload.get("manuscript_id", "unknown"),
             paragraph_metrics or [],
@@ -284,7 +290,7 @@ def main() -> None:
         )
         if not edits_payload["items"]:
             raise SystemExit("No paragraphs below threshold to emit edits.")
-        args.edits_output.write_text(
+        edits_output.write_text(
             json.dumps(edits_payload, indent=2),
             encoding="utf-8",
         )

@@ -312,6 +312,12 @@ def main() -> None:
         default=None,
         help="Optional output path for edits.schema.json payload.",
     )
+    parser.add_argument(
+        "--output-edits",
+        type=pathlib.Path,
+        default=None,
+        help="Optional output path for edits.schema.json payload.",
+    )
 
     args = parser.parse_args()
     if args.window_size <= 0 or args.step_size <= 0:
@@ -319,8 +325,9 @@ def main() -> None:
 
     ensure_nltk_resources()
 
-    if args.output_json and not args.preprocessing:
-        raise SystemExit("--output-json requires --preprocessing for token mapping.")
+    edits_output = args.output_edits or args.output_json
+    if edits_output and not args.preprocessing:
+        raise SystemExit("--output-edits requires --preprocessing for token mapping.")
 
     text = load_text(args.input_file)
     token_infos = tokenize_content_words(text)
@@ -378,7 +385,7 @@ def main() -> None:
     report = build_report(df, windows, args.threshold, args.top_n)
     print(report)
 
-    if args.output_json:
+    if edits_output:
         items = []
         for window in windows:
             for (term, n_size), z_score in window["zscores"].items():
@@ -434,11 +441,11 @@ def main() -> None:
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "items": items,
             }
-            args.output_json.write_text(
+            edits_output.write_text(
                 json.dumps(edits_payload, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
-            print(f"JSON output saved to {args.output_json}")
+            print(f"JSON output saved to {edits_output}")
 
     plot_terms_input = [term.strip() for term in args.plot_terms.split(",") if term.strip()]
     if args.plot_file or plot_terms_input:

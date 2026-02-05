@@ -141,6 +141,11 @@ def parse_args() -> argparse.Namespace:
         help="Optional output path for edits.schema.json payload.",
     )
     parser.add_argument(
+        "--output-edits",
+        type=Path,
+        help="Optional output path for edits.schema.json payload.",
+    )
+    parser.add_argument(
         "--aggregate-by-type",
         action="store_true",
         help="Emit one edits payload item per pattern type instead of per occurrence.",
@@ -498,8 +503,9 @@ def main() -> None:
     input_path = Path(args.input_path)
     if not input_path.exists():
         raise FileNotFoundError(f"Input path not found: {input_path}")
-    if args.output_json and not args.preprocessing:
-        raise SystemExit("--output-json requires --preprocessing for token mapping.")
+    edits_output = args.output_edits or args.output_json
+    if edits_output and not args.preprocessing:
+        raise SystemExit("--output-edits requires --preprocessing for token mapping.")
     if args.preprocessing and not args.preprocessing.exists():
         raise SystemExit(f"Preprocessing directory not found: {args.preprocessing}")
     if args.preprocessing and input_path.is_dir():
@@ -570,16 +576,16 @@ def main() -> None:
             )
         console.print(comparison_table)
 
-    if args.output_json and tokens_artifact:
+    if edits_output and tokens_artifact:
         payload = build_edits_payload(primary_results, args.min_freq, args.aggregate_by_type)
         if not payload["items"]:
             console.print("No patterns met the criteria for JSON output.")
             return
-        args.output_json.write_text(
+        edits_output.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        console.print(f"JSON edits payload written to {args.output_json}")
+        console.print(f"JSON edits payload written to {edits_output}")
 
 
 if __name__ == "__main__":
