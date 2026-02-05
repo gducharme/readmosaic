@@ -26,6 +26,7 @@ from tool_wrapper import TOOL_DEFINITIONS, run_tool, tool_definitions_payload
 DEFAULT_BASE_URL = "http://localhost:1234/v1/chat/completions"
 DEFAULT_PROMPT_PATH = Path("prompts/Archivist_Core_V1.txt")
 NLTK_BOOTSTRAP_PATH = Path("scripts/setup_nltk_data.py")
+PREPROCESSING_PATH = Path("scripts/pre_processing.py")
 DEFAULT_LM_TIMEOUT_S = 300
 
 
@@ -97,7 +98,10 @@ def run_nltk_preflight() -> None:
 
 
 def run_tools_with_progress(
-    input_path: Path, output_root: Path, max_workers: int
+    input_path: Path,
+    output_root: Path,
+    max_workers: int,
+    preprocessing_dir: Path,
 ) -> List[Dict[str, Any]]:
     results: List[Dict[str, Any]] = []
     console = Console()
@@ -116,7 +120,9 @@ def run_tools_with_progress(
             future_map = {}
             for tool in TOOL_DEFINITIONS:
                 tool_output_dir = output_root / tool.code.lower()
-                future = executor.submit(run_tool, tool, input_path, tool_output_dir)
+                future = executor.submit(
+                    run_tool, tool, input_path, tool_output_dir, preprocessing_dir
+                )
                 future_map[future] = tool
             for future in as_completed(future_map):
                 tool = future_map[future]
@@ -131,6 +137,10 @@ def run_tools_with_progress(
                             "summary": result.summary,
                             "duration_s": result.duration_s,
                             "output_path": str(result.output_path),
+                            "edits_path": str(result.edits_path)
+                            if result.edits_path
+                            else None,
+                            "edits_item_count": result.edits_item_count,
                             "stderr": result.stderr if result.status == "error" else None,
                         }
                     )
@@ -144,6 +154,8 @@ def run_tools_with_progress(
                             "summary": {},
                             "duration_s": 0.0,
                             "output_path": None,
+                            "edits_path": None,
+                            "edits_item_count": None,
                             "stderr": str(exc),
                         }
                     )
@@ -161,6 +173,28 @@ def build_fidelity_context(
         "tool_definitions": tool_definitions_payload(),
         "tool_results": tool_results,
     }
+
+
+def run_preprocessing(input_path: Path, output_root: Path) -> Path:
+    if not PREPROCESSING_PATH.exists():
+        raise SystemExit(
+            f"Pre-processing script not found: {PREPROCESSING_PATH}"
+        )
+    preprocessing_dir = output_root / "preprocessing"
+    preprocessing_dir.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            sys.executable,
+            str(PREPROCESSING_PATH),
+            str(input_path),
+            "--output-dir",
+            str(preprocessing_dir),
+            "--manuscript-id",
+            input_path.stem,
+        ],
+        check=True,
+    )
+    return preprocessing_dir
 
 
 def call_lm_studio(
@@ -208,7 +242,10 @@ def main() -> None:
     output_root.mkdir(parents=True, exist_ok=True)
 
     run_nltk_preflight()
-    tool_results = run_tools_with_progress(args.file, output_root, args.max_workers)
+    preprocessing_dir = run_preprocessing(args.file, output_root)
+    tool_results = run_tools_with_progress(
+        args.file, output_root, args.max_workers, preprocessing_dir
+    )
     fidelity_context = build_fidelity_context(args, tool_results)
 
     fidelity_path = output_root / "fidelity_context.json"

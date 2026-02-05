@@ -8,7 +8,7 @@ import subprocess
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 
 @dataclass(frozen=True)
@@ -17,8 +17,9 @@ class ToolDefinition:
     name: str
     description: str
     script_path: Path
-    build_command: Callable[[Path, Path], List[str]]
+    build_command: Callable[[Path, Path, Optional[Path]], List[str]]
     parser: Callable[[str, Path], Dict[str, Any]]
+    edits_output_name: Optional[str] = None
 
 
 @dataclass
@@ -32,6 +33,8 @@ class ToolResult:
     stderr: str
     duration_s: float
     output_path: Path
+    edits_path: Optional[Path]
+    edits_item_count: Optional[int]
 
 
 def _parse_float(value: str) -> float | None:
@@ -252,32 +255,85 @@ def parse_msd(_: str, output_dir: Path) -> Dict[str, Any]:
     return json.loads(json_path.read_text(encoding="utf-8"))
 
 
-def _build_command_simple(script: str, extra: List[str]) -> Callable[[Path, Path], List[str]]:
-    def _builder(input_path: Path, output_dir: Path) -> List[str]:
-        return ["python", script, str(input_path), *extra]
+def _build_command_simple(
+    script: str,
+    extra: List[str],
+    *,
+    preprocessing_flag: Optional[str] = None,
+    edits_flag: Optional[str] = None,
+    edits_output_name: Optional[str] = None,
+) -> Callable[[Path, Path, Optional[Path]], List[str]]:
+    def _builder(
+        input_path: Path, output_dir: Path, preprocessing_dir: Optional[Path]
+    ) -> List[str]:
+        command = ["python", script, str(input_path), *extra]
+        if preprocessing_flag and preprocessing_dir:
+            command.extend([preprocessing_flag, str(preprocessing_dir)])
+        if edits_flag and edits_output_name:
+            edits_path = output_dir / edits_output_name
+            command.extend([edits_flag, str(edits_path)])
+        return command
 
     return _builder
 
 
-def _build_command_with_output(script: str, output_name: str, extra: List[str]) -> Callable[[Path, Path], List[str]]:
-    def _builder(input_path: Path, output_dir: Path) -> List[str]:
+def _build_command_with_output(
+    script: str,
+    output_name: str,
+    extra: List[str],
+    *,
+    preprocessing_flag: Optional[str] = None,
+    edits_flag: Optional[str] = None,
+    edits_output_name: Optional[str] = None,
+) -> Callable[[Path, Path, Optional[Path]], List[str]]:
+    def _builder(
+        input_path: Path, output_dir: Path, preprocessing_dir: Optional[Path]
+    ) -> List[str]:
         output_path = output_dir / output_name
-        return ["python", script, str(input_path), *extra, str(output_path)]
+        command = ["python", script, str(input_path), *extra, str(output_path)]
+        if preprocessing_flag and preprocessing_dir:
+            command.extend([preprocessing_flag, str(preprocessing_dir)])
+        if edits_flag and edits_output_name:
+            edits_path = output_dir / edits_output_name
+            command.extend([edits_flag, str(edits_path)])
+        return command
 
     return _builder
 
 
-def _build_command_see(script: str) -> Callable[[Path, Path], List[str]]:
-    def _builder(input_path: Path, output_dir: Path) -> List[str]:
-        return ["python", script, str(input_path), "--output", str(output_dir)]
+def _build_command_see(
+    script: str,
+    *,
+    preprocessing_flag: Optional[str] = None,
+    edits_flag: Optional[str] = None,
+    edits_output_name: Optional[str] = None,
+) -> Callable[[Path, Path, Optional[Path]], List[str]]:
+    def _builder(
+        input_path: Path, output_dir: Path, preprocessing_dir: Optional[Path]
+    ) -> List[str]:
+        command = ["python", script, str(input_path), "--output", str(output_dir)]
+        if preprocessing_flag and preprocessing_dir:
+            command.extend([preprocessing_flag, str(preprocessing_dir)])
+        if edits_flag and edits_output_name:
+            edits_path = output_dir / edits_output_name
+            command.extend([edits_flag, str(edits_path)])
+        return command
 
     return _builder
 
 
-def _build_command_nss(script: str) -> Callable[[Path, Path], List[str]]:
-    def _builder(input_path: Path, output_dir: Path) -> List[str]:
+def _build_command_nss(
+    script: str,
+    *,
+    preprocessing_flag: Optional[str] = None,
+    edits_flag: Optional[str] = None,
+    edits_output_name: Optional[str] = None,
+) -> Callable[[Path, Path, Optional[Path]], List[str]]:
+    def _builder(
+        input_path: Path, output_dir: Path, preprocessing_dir: Optional[Path]
+    ) -> List[str]:
         json_path = output_dir / "nss_scores.json"
-        return [
+        command = [
             "python",
             script,
             str(input_path),
@@ -288,6 +344,66 @@ def _build_command_nss(script: str) -> Callable[[Path, Path], List[str]]:
             "--output-json",
             str(json_path),
         ]
+        if preprocessing_flag and preprocessing_dir:
+            command.extend([preprocessing_flag, str(preprocessing_dir)])
+        if edits_flag and edits_output_name:
+            edits_path = output_dir / edits_output_name
+            command.extend([edits_flag, str(edits_path)])
+        return command
+
+    return _builder
+
+
+def _build_command_ctm(
+    script: str,
+    *,
+    preprocessing_flag: Optional[str] = None,
+    edits_flag: Optional[str] = None,
+    edits_output_name: Optional[str] = None,
+) -> Callable[[Path, Path, Optional[Path]], List[str]]:
+    def _builder(
+        input_path: Path, output_dir: Path, preprocessing_dir: Optional[Path]
+    ) -> List[str]:
+        command = [
+            "python",
+            script,
+            str(input_path),
+            "--output-dir",
+            str(output_dir),
+        ]
+        if preprocessing_flag and preprocessing_dir:
+            command.extend([preprocessing_flag, str(preprocessing_dir)])
+        if edits_flag and edits_output_name:
+            edits_path = output_dir / edits_output_name
+            command.extend([edits_flag, str(edits_path)])
+        return command
+
+    return _builder
+
+
+def _build_command_msd(
+    script: str,
+    output_name: str,
+    edits_output_name: str,
+    paragraph_threshold: float,
+) -> Callable[[Path, Path, Optional[Path]], List[str]]:
+    def _builder(
+        input_path: Path, output_dir: Path, preprocessing_dir: Optional[Path]
+    ) -> List[str]:
+        output_path = output_dir / output_name
+        command = ["python", script, str(input_path), "--output-json", str(output_path)]
+        if preprocessing_dir:
+            command.extend(
+                [
+                    "--preprocessing",
+                    str(preprocessing_dir),
+                    "--paragraph-threshold",
+                    str(paragraph_threshold),
+                    "--edits-output",
+                    str(output_dir / edits_output_name),
+                ]
+            )
+        return command
 
     return _builder
 
@@ -301,8 +417,12 @@ TOOL_DEFINITIONS: List[ToolDefinition] = [
         build_command=_build_command_simple(
             "scripts/analyzer.py",
             ["--threshold", "0.85", "--min-length", "20", "--top-n", "5"],
+            preprocessing_flag="--preprocessing",
+            edits_flag="--output-edits",
+            edits_output_name="sra_edits.json",
         ),
         parser=parse_sra,
+        edits_output_name="sra_edits.json",
     ),
     ToolDefinition(
         code="LPE",
@@ -312,16 +432,26 @@ TOOL_DEFINITIONS: List[ToolDefinition] = [
         build_command=_build_command_simple(
             "scripts/pattern_extractor.py",
             ["--min-freq", "2", "--top-n", "10"],
+            preprocessing_flag="--preprocessing",
+            edits_flag="--output-json",
+            edits_output_name="lpe_edits.json",
         ),
         parser=parse_lpe,
+        edits_output_name="lpe_edits.json",
     ),
     ToolDefinition(
         code="CTM",
         name="Conceptual Theme Mapper",
         description="Maps thematic clusters and topic coherence across the manuscript.",
         script_path=Path("scripts/theme_mapper.py"),
-        build_command=_build_command_simple("scripts/theme_mapper.py", []),
+        build_command=_build_command_ctm(
+            "scripts/theme_mapper.py",
+            preprocessing_flag="--preprocessing",
+            edits_flag="--topic-shift-json",
+            edits_output_name="ctm_edits.json",
+        ),
         parser=parse_ctm,
+        edits_output_name="ctm_edits.json",
     ),
     ToolDefinition(
         code="NBM",
@@ -331,44 +461,69 @@ TOOL_DEFINITIONS: List[ToolDefinition] = [
         build_command=_build_command_simple(
             "scripts/burst_monitor.py",
             ["--window-size", "500", "--step-size", "100", "--threshold", "3.0", "--top-n", "10"],
+            preprocessing_flag="--preprocessing",
+            edits_flag="--output-json",
+            edits_output_name="nbm_edits.json",
         ),
         parser=parse_nbm,
+        edits_output_name="nbm_edits.json",
     ),
     ToolDefinition(
         code="SEE",
         name="Semantic Entropy Evaluator",
         description="Computes Shannon entropy metrics and drift across the manuscript.",
         script_path=Path("scripts/entropy_evaluator.py"),
-        build_command=_build_command_see("scripts/entropy_evaluator.py"),
+        build_command=_build_command_see(
+            "scripts/entropy_evaluator.py",
+            preprocessing_flag="--preprocessing",
+            edits_flag="--output-edits",
+            edits_output_name="see_edits.json",
+        ),
         parser=parse_see,
+        edits_output_name="see_edits.json",
     ),
     ToolDefinition(
         code="NSS",
         name="Neutrino Surprisal Scout",
         description="Computes sentence-level surprisal and flags low-signal zones.",
         script_path=Path("scripts/surprisal_scout.py"),
-        build_command=_build_command_nss("scripts/surprisal_scout.py"),
+        build_command=_build_command_nss(
+            "scripts/surprisal_scout.py",
+            preprocessing_flag="--preprocessing",
+            edits_flag="--output-edits",
+            edits_output_name="nss_edits.json",
+        ),
         parser=parse_nss,
+        edits_output_name="nss_edits.json",
     ),
     ToolDefinition(
         code="MSD",
         name="Mosaic Signal Density",
         description="Estimates lexical signal density and repetition pressure.",
         script_path=Path("scripts/signal_density.py"),
-        build_command=_build_command_with_output(
+        build_command=_build_command_msd(
             "scripts/signal_density.py",
             "msd.json",
-            ["--output-json"],
+            "msd_edits.json",
+            0.35,
         ),
         parser=parse_msd,
+        edits_output_name="msd_edits.json",
     ),
     ToolDefinition(
         code="CWS",
         name="Cliche Wrap-Up Scrubber",
         description="Flags AI-style wrap-up drift and sentiment pivots.",
         script_path=Path("scripts/slop_scrubber.py"),
-        build_command=_build_command_simple("scripts/slop_scrubber.py", ["--report"]),
+        build_command=_build_command_simple(
+            "scripts/slop_scrubber.py",
+            ["--report"],
+            preprocessing_flag="--preprocessing",
+            edits_flag="--output-json",
+            edits_output_name="cws_edits.json",
+        ),
         parser=parse_cws,
+        edits_output_name="cws_edits.json",
     ),
 ]
 
@@ -392,11 +547,16 @@ def tool_definitions_payload() -> List[Dict[str, Any]]:
     return payload
 
 
-def run_tool(tool: ToolDefinition, input_path: Path, output_dir: Path) -> ToolResult:
+def run_tool(
+    tool: ToolDefinition,
+    input_path: Path,
+    output_dir: Path,
+    preprocessing_dir: Optional[Path],
+) -> ToolResult:
     output_dir.mkdir(parents=True, exist_ok=True)
     start = datetime.utcnow()
     result = subprocess.run(
-        tool.build_command(input_path, output_dir),
+        tool.build_command(input_path, output_dir, preprocessing_dir),
         capture_output=True,
         text=True,
     )
@@ -405,14 +565,34 @@ def run_tool(tool: ToolDefinition, input_path: Path, output_dir: Path) -> ToolRe
     stderr = result.stderr.strip()
     status = "ok" if result.returncode == 0 else "error"
     summary: Dict[str, Any] = {}
+    edits_path = None
+    edits_item_count = None
     if status == "ok":
         summary = tool.parser(stdout, output_dir)
+        if tool.edits_output_name:
+            candidate_path = output_dir / tool.edits_output_name
+            if candidate_path.exists():
+                edits_path = candidate_path
+                try:
+                    edits_payload = json.loads(
+                        candidate_path.read_text(encoding="utf-8")
+                    )
+                except json.JSONDecodeError:
+                    edits_payload = {}
+                if isinstance(edits_payload, dict):
+                    items = edits_payload.get("items")
+                    if isinstance(items, list):
+                        edits_item_count = len(items)
+            else:
+                edits_path = None
     summary_path = output_dir / f"{tool.code.lower()}_summary.json"
     summary_payload = {
         "tool": tool.code,
         "name": tool.name,
         "status": status,
         "summary": summary,
+        "edits_path": str(edits_path) if edits_path else None,
+        "edits_item_count": edits_item_count,
         "stderr": stderr if status == "error" else None,
     }
     summary_path.write_text(json.dumps(summary_payload, indent=2), encoding="utf-8")
@@ -426,4 +606,6 @@ def run_tool(tool: ToolDefinition, input_path: Path, output_dir: Path) -> ToolRe
         stderr=stderr,
         duration_s=duration,
         output_path=summary_path,
+        edits_path=edits_path,
+        edits_item_count=edits_item_count,
     )
