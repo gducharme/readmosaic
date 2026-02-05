@@ -66,6 +66,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tool-log", type=Path, default=DEFAULT_TOOL_LOG_PATH, help="Log path for tool runs.")
     parser.add_argument("--max-forge", type=int, default=2, help="Max forge attempts per diagnostic.")
     parser.add_argument("--max-fix", type=int, default=2, help="Max fix attempts per tool failure.")
+    parser.add_argument("--max-json-retries", type=int, default=3, help="Retries for JSON parsing failures.")
     parser.add_argument("--threshold", type=int, default=70, help="Anchor match threshold (0-100).")
     return parser.parse_args()
 
@@ -207,6 +208,32 @@ def extract_json(response_text: str) -> Dict[str, Any]:
     raise ValueError("LM response did not contain valid JSON.")
 
 
+def call_lm_json(
+    base_url: str,
+    model: str,
+    system_prompt: str,
+    user_prompt: str,
+    max_retries: int,
+    log_path: Optional[Path] = None,
+    context: Optional[str] = None,
+) -> Dict[str, Any]:
+    last_error: Optional[Exception] = None
+    for attempt in range(max_retries):
+        response_text = call_lm_studio(
+            base_url,
+            model,
+            system_prompt,
+            user_prompt,
+            log_path=log_path,
+            context=f"{context}:json_attempt:{attempt + 1}" if context else None,
+        )
+        try:
+            return extract_json(response_text)
+        except ValueError as exc:
+            last_error = exc
+    raise ValueError("LM response did not contain valid JSON after retries.") from last_error
+
+
 def save_tool_code(tools_dir: Path, tool_name: str, tool_code: str) -> Path:
     tools_dir.mkdir(parents=True, exist_ok=True)
     tool_path = tools_dir / f"{tool_name}.py"
@@ -224,6 +251,7 @@ def run_tool(
     anchor: str,
     params: Optional[Dict[str, Any]],
     max_fix: int,
+    max_json_retries: int,
     base_url: str,
     model: str,
     system_prompt: str,
@@ -292,15 +320,15 @@ def run_tool(
                 f"Tool code:\n{tool_code}\n\n"
                 "Return JSON: {\"action\": \"forge\", \"tool_name\": \"...\", \"tool_code\": \"...\"}"
             )
-            response_text = call_lm_studio(
+            response = call_lm_json(
                 base_url,
                 model,
                 system_prompt,
                 fix_prompt,
+                max_json_retries,
                 log_path=llm_log,
                 context=f"tool_fix:{tool_name}",
             )
-            response = extract_json(response_text)
             if response.get("action") != "forge":
                 raise RuntimeError("LM did not return corrected tool code.") from exc
             save_tool_code(tools_dir, response["tool_name"], response["tool_code"])
@@ -344,15 +372,15 @@ def process_diagnostic(
     forged = False
     while forge_attempts <= args.max_forge:
         prompt = build_user_prompt(diagnostic, paragraph_index, before, manifest)
-        response_text = call_lm_studio(
+        response = call_lm_json(
             args.base_url,
             args.model,
             system_prompt,
             prompt,
+            args.max_json_retries,
             log_path=args.llm_log,
             context=f"diagnostic:{diagnostic.failure}",
         )
-        response = extract_json(response_text)
         action = response.get("action")
         if action == "forge":
             tool_path = save_tool_code(args.tools_dir, response["tool_name"], response["tool_code"])
@@ -371,6 +399,7 @@ def process_diagnostic(
                 anchor,
                 params,
                 args.max_fix,
+                args.max_json_retries,
                 args.base_url,
                 args.model,
                 system_prompt,
