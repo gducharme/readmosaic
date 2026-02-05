@@ -8,10 +8,12 @@ patterns from markdown or text manuscripts using spaCy's DependencyMatcher.
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import os
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import DefaultDict, Iterable, List, Tuple
 
@@ -42,6 +44,25 @@ class PatternStats:
         if len(self.contexts[pattern_type][pattern]) < context_limit:
             if sentence not in self.contexts[pattern_type][pattern]:
                 self.contexts[pattern_type][pattern].append(sentence)
+
+
+@dataclass
+class PatternOccurrence:
+    pattern_type: str
+    pattern: str
+    sentence: str
+    paragraph_id: str
+    token_ids: List[str]
+    char_start: int
+    char_end: int
+    anchor_text: str
+
+
+@dataclass
+class AnalysisResults:
+    stats: PatternStats
+    occurrences: List[PatternOccurrence] = field(default_factory=list)
+    manuscript_id: str = "unknown"
 
 
 def parse_args() -> argparse.Namespace:
@@ -108,6 +129,21 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Relative density difference threshold for flagging voice collision (0.15 = 15%%)."
         ),
+    )
+    parser.add_argument(
+        "--preprocessing",
+        type=Path,
+        help="Directory containing manuscript_tokens.json for schema-aligned spans.",
+    )
+    parser.add_argument(
+        "--output-json",
+        type=Path,
+        help="Optional output path for edits.schema.json payload.",
+    )
+    parser.add_argument(
+        "--aggregate-by-type",
+        action="store_true",
+        help="Emit one edits payload item per pattern type instead of per occurrence.",
     )
     return parser.parse_args()
 
@@ -187,6 +223,26 @@ def build_matcher(nlp: spacy.Language) -> DependencyMatcher:
     return matcher
 
 
+def load_tokens_artifact(preprocessing_dir: Path) -> dict:
+    artifact_path = preprocessing_dir / "manuscript_tokens.json"
+    if not artifact_path.exists():
+        raise SystemExit(f"Tokens artifact not found: {artifact_path}")
+    return json.loads(artifact_path.read_text(encoding="utf-8"))
+
+
+def map_span_to_tokens(paragraph: dict, start: int, end: int) -> List[str]:
+    token_ids: List[str] = []
+    for token in paragraph.get("tokens", []):
+        token_start = token.get("start_char", 0)
+        token_end = token.get("end_char", 0)
+        if token_end <= start or token_start >= end:
+            continue
+        token_id = token.get("token_id")
+        if token_id:
+            token_ids.append(token_id)
+    return token_ids
+
+
 def normalize_tokens(tokens: Iterable[spacy.tokens.Token]) -> List[str]:
     return [token.lemma_.lower() for token in tokens]
 
@@ -198,6 +254,8 @@ def extract_patterns(
     exclude_stopwords: bool,
     context_limit: int,
     pattern_filter: List[str] | None,
+    paragraph: dict | None = None,
+    occurrences: List[PatternOccurrence] | None = None,
 ) -> None:
     stats.token_count += sum(1 for token in doc if not token.is_space)
     matches = matcher(doc)
@@ -226,6 +284,23 @@ def extract_patterns(
             pattern_tokens = normalize_tokens([adv, verb])
         pattern = " ".join(pattern_tokens)
         stats.add(label, pattern, doc[token_ids[0]].sent.text.strip(), context_limit)
+        if paragraph and occurrences is not None:
+            char_start = min(token.idx for token in tokens)
+            char_end = max(token.idx + len(token) for token in tokens)
+            token_ids_mapped = map_span_to_tokens(paragraph, char_start, char_end)
+            anchor_text = doc.text[char_start:char_end].strip()
+            occurrences.append(
+                PatternOccurrence(
+                    pattern_type=label,
+                    pattern=pattern,
+                    sentence=doc[token_ids[0]].sent.text.strip(),
+                    paragraph_id=paragraph["paragraph_id"],
+                    token_ids=token_ids_mapped,
+                    char_start=char_start,
+                    char_end=char_end,
+                    anchor_text=anchor_text,
+                )
+            )
 
 
 def entropy_score(counts: Counter) -> float:
@@ -292,19 +367,130 @@ def compare_densities(
 def run_analysis(
     input_path: Path,
     args: argparse.Namespace,
-) -> PatternStats:
-    texts, _ = load_texts(input_path)
+    tokens_artifact: dict | None = None,
+) -> AnalysisResults:
+    if tokens_artifact:
+        paragraphs = tokens_artifact.get("paragraphs", [])
+        texts = [paragraph.get("text", "") for paragraph in paragraphs]
+    else:
+        texts, _ = load_texts(input_path)
     console = Console()
     console.print("Loading spaCy model: en_core_web_trf ...")
     nlp = spacy.load("en_core_web_trf")
     matcher = build_matcher(nlp)
     stats = PatternStats()
+    occurrences: List[PatternOccurrence] = []
     pattern_filter = None
     if args.pattern_type:
         pattern_filter = [PATTERN_TYPES[key] for key in args.pattern_type]
-    for doc in nlp.pipe(texts, n_process=args.processes, batch_size=4):
-        extract_patterns(doc, matcher, stats, args.exclude_stopwords, args.context_count, pattern_filter)
-    return stats
+    for idx, doc in enumerate(nlp.pipe(texts, n_process=args.processes, batch_size=4)):
+        paragraph = None
+        if tokens_artifact:
+            paragraph = tokens_artifact.get("paragraphs", [])[idx]
+        extract_patterns(
+            doc,
+            matcher,
+            stats,
+            args.exclude_stopwords,
+            args.context_count,
+            pattern_filter,
+            paragraph=paragraph,
+            occurrences=occurrences if tokens_artifact else None,
+        )
+    return AnalysisResults(
+        stats=stats,
+        occurrences=occurrences,
+        manuscript_id=tokens_artifact.get("manuscript_id", "unknown") if tokens_artifact else "unknown",
+    )
+
+
+def build_edits_payload(
+    results: AnalysisResults,
+    min_freq: int,
+    aggregate_by_type: bool,
+) -> dict:
+    stats = results.stats
+    occurrences = results.occurrences
+    items: List[dict] = []
+    if aggregate_by_type:
+        for pattern_type, counts in stats.counts.items():
+            total_count = sum(counts.values())
+            if total_count < min_freq:
+                continue
+            type_occurrences = [occ for occ in occurrences if occ.pattern_type == pattern_type]
+            if not type_occurrences:
+                continue
+            top_pattern, top_count = counts.most_common(1)[0]
+            anchor_occurrence = type_occurrences[0]
+            items.append(
+                {
+                    "issue_id": f"pattern-{pattern_type.lower()}",
+                    "type": "linguistic_pattern",
+                    "location": {
+                        "paragraph_id": anchor_occurrence.paragraph_id,
+                        "token_ids": anchor_occurrence.token_ids,
+                        "char_range": {
+                            "start": anchor_occurrence.char_start,
+                            "end": anchor_occurrence.char_end,
+                        },
+                        "anchor_text": anchor_occurrence.anchor_text,
+                    },
+                    "evidence": {
+                        "summary": (
+                            f"Detected {pattern_type} patterns {total_count} times; "
+                            f"top pattern '{top_pattern}' appears {top_count} times."
+                        ),
+                        "signals": [
+                            {"name": "pattern_type", "value": pattern_type},
+                            {"name": "pattern_lemma", "value": top_pattern},
+                            {"name": "pattern_count", "value": total_count},
+                            {"name": "distinct_patterns", "value": len(counts)},
+                        ],
+                        "detector": "pattern_extractor",
+                    },
+                }
+            )
+    else:
+        for idx, occurrence in enumerate(occurrences, start=1):
+            if stats.counts[occurrence.pattern_type][occurrence.pattern] < min_freq:
+                continue
+            items.append(
+                {
+                    "issue_id": f"pattern-{idx:04d}",
+                    "type": "linguistic_pattern",
+                    "location": {
+                        "paragraph_id": occurrence.paragraph_id,
+                        "token_ids": occurrence.token_ids,
+                        "char_range": {
+                            "start": occurrence.char_start,
+                            "end": occurrence.char_end,
+                        },
+                        "anchor_text": occurrence.anchor_text,
+                    },
+                    "evidence": {
+                        "summary": (
+                            f"Detected {occurrence.pattern_type} pattern "
+                            f"'{occurrence.pattern}'."
+                        ),
+                        "signals": [
+                            {"name": "pattern_type", "value": occurrence.pattern_type},
+                            {"name": "pattern_lemma", "value": occurrence.pattern},
+                            {
+                                "name": "pattern_count",
+                                "value": stats.counts[occurrence.pattern_type][occurrence.pattern],
+                            },
+                        ],
+                        "detector": "pattern_extractor",
+                        "sentence": occurrence.sentence,
+                    },
+                }
+            )
+    return {
+        "schema_version": "1.0",
+        "manuscript_id": results.manuscript_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "items": items,
+    }
 
 
 def main() -> None:
@@ -312,9 +498,17 @@ def main() -> None:
     input_path = Path(args.input_path)
     if not input_path.exists():
         raise FileNotFoundError(f"Input path not found: {input_path}")
+    if args.output_json and not args.preprocessing:
+        raise SystemExit("--output-json requires --preprocessing for token mapping.")
+    if args.preprocessing and not args.preprocessing.exists():
+        raise SystemExit(f"Preprocessing directory not found: {args.preprocessing}")
+    if args.preprocessing and input_path.is_dir():
+        raise SystemExit("--preprocessing expects a single manuscript input path.")
 
     console = Console()
-    primary_stats = run_analysis(input_path, args)
+    tokens_artifact = load_tokens_artifact(args.preprocessing) if args.preprocessing else None
+    primary_results = run_analysis(input_path, args, tokens_artifact=tokens_artifact)
+    primary_stats = primary_results.stats
 
     for label, label_title in PATTERN_TYPES.items():
         pattern_label = PATTERN_TYPES[label]
@@ -358,7 +552,7 @@ def main() -> None:
         if not compare_path.is_file():
             raise FileNotFoundError("--compare expects a file path.")
         console.print("\nRunning comparison analysis...")
-        secondary_stats = run_analysis(compare_path, args)
+        secondary_stats = run_analysis(compare_path, args).stats
         results = compare_densities(primary_stats, secondary_stats, args.collision_threshold)
         comparison_table = Table(title="Voice Collision Check")
         comparison_table.add_column("Pattern Type")
@@ -375,6 +569,17 @@ def main() -> None:
                 "⚠️" if collision else "",
             )
         console.print(comparison_table)
+
+    if args.output_json and tokens_artifact:
+        payload = build_edits_payload(primary_results, args.min_freq, args.aggregate_by_type)
+        if not payload["items"]:
+            console.print("No patterns met the criteria for JSON output.")
+            return
+        args.output_json.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        console.print(f"JSON edits payload written to {args.output_json}")
 
 
 if __name__ == "__main__":
