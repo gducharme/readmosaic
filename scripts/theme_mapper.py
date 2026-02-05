@@ -12,10 +12,13 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import re
+import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, List, Sequence
+from typing import Iterable, List, Optional, Sequence, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -29,6 +32,7 @@ from sklearn.feature_extraction.text import CountVectorizer
 
 CHUNK_MODE_WORDS = "words"
 CHUNK_MODE_CHAPTER = "chapter"
+WORD_TOKEN_RE = re.compile(r"\b\w+\b")
 
 
 @dataclass
@@ -36,6 +40,8 @@ class Chunk:
     index: int
     label: str
     text: str
+    word_count: int
+    paragraph_range: Optional[Tuple[str, str]] = None
 
 
 def parse_args() -> argparse.Namespace:
@@ -72,6 +78,12 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default="en_core_web_sm",
         help="spaCy model to use for lemmatization and POS tagging.",
+    )
+    parser.add_argument(
+        "--preprocessing",
+        type=Path,
+        default=None,
+        help="Directory containing manuscript_tokens.json for paragraph ranges.",
     )
     parser.add_argument(
         "--passes",
@@ -121,6 +133,18 @@ def parse_args() -> argparse.Namespace:
         default="topic_map.html",
         help="Filename for the interactive pyLDAvis HTML output.",
     )
+    parser.add_argument(
+        "--topic-shift-json",
+        type=Path,
+        default=None,
+        help="Optional JSON output (edits.schema.json) for abrupt topic shifts.",
+    )
+    parser.add_argument(
+        "--topic-shift-threshold",
+        type=float,
+        default=0.45,
+        help="L1 delta threshold between adjacent chunks for shift detection.",
+    )
     return parser.parse_args()
 
 
@@ -131,6 +155,12 @@ def validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("num-topics must be at least 2")
     if args.chunk_mode == CHUNK_MODE_WORDS and args.chunk_size < 100:
         raise SystemExit("chunk-size must be at least 100 words")
+    if args.topic_shift_json and not args.preprocessing:
+        raise SystemExit("--topic-shift-json requires --preprocessing for paragraph ranges")
+
+
+def count_words(text: str) -> int:
+    return len(WORD_TOKEN_RE.findall(text))
 
 
 def load_spacy(model_name: str) -> spacy.language.Language:
@@ -144,7 +174,7 @@ def load_spacy(model_name: str) -> spacy.language.Language:
 
 
 def split_into_word_chunks(text: str, chunk_size: int) -> List[Chunk]:
-    words = re.findall(r"\b\w+\b", text)
+    words = WORD_TOKEN_RE.findall(text)
     chunks: List[Chunk] = []
     for idx in range(0, len(words), chunk_size):
         chunk_words = words[idx : idx + chunk_size]
@@ -152,7 +182,14 @@ def split_into_word_chunks(text: str, chunk_size: int) -> List[Chunk]:
             continue
         label = f"Chunk {len(chunks) + 1}"
         chunk_text = " ".join(chunk_words)
-        chunks.append(Chunk(index=len(chunks), label=label, text=chunk_text))
+        chunks.append(
+            Chunk(
+                index=len(chunks),
+                label=label,
+                text=chunk_text,
+                word_count=len(chunk_words),
+            )
+        )
     return chunks
 
 
@@ -165,22 +202,26 @@ def split_into_chapters(text: str, pattern: str) -> List[Chunk]:
     for line in lines:
         if regex.match(line.strip()):
             if current_lines:
+                chunk_text = "\n".join(current_lines).strip()
                 chunks.append(
                     Chunk(
                         index=len(chunks),
                         label=current_label,
-                        text="\n".join(current_lines).strip(),
+                        text=chunk_text,
+                        word_count=count_words(chunk_text),
                     )
                 )
                 current_lines = []
             current_label = line.strip()
         current_lines.append(line)
     if current_lines:
+        chunk_text = "\n".join(current_lines).strip()
         chunks.append(
             Chunk(
                 index=len(chunks),
                 label=current_label,
-                text="\n".join(current_lines).strip(),
+                text=chunk_text,
+                word_count=count_words(chunk_text),
             )
         )
     return chunks
@@ -192,6 +233,58 @@ def build_chunks(text: str, args: argparse.Namespace) -> List[Chunk]:
         if len(chunks) > 1:
             return chunks
     return split_into_word_chunks(text, args.chunk_size)
+
+
+def load_manuscript_tokens(preprocessing_dir: Path) -> dict:
+    tokens_path = preprocessing_dir / "manuscript_tokens.json"
+    if not tokens_path.exists():
+        raise SystemExit(f"Missing manuscript_tokens.json in {preprocessing_dir}")
+    return json.loads(tokens_path.read_text(encoding="utf-8"))
+
+
+def build_word_token_index(manuscript_tokens: dict) -> List[dict]:
+    tokens: List[dict] = []
+    for paragraph in manuscript_tokens.get("paragraphs", []):
+        paragraph_id = paragraph["paragraph_id"]
+        for token in paragraph.get("tokens", []):
+            text = token.get("text", "")
+            if not WORD_TOKEN_RE.fullmatch(text):
+                continue
+            tokens.append(
+                {
+                    "paragraph_id": paragraph_id,
+                    "global_index": token["global_index"],
+                }
+            )
+    tokens.sort(key=lambda item: item["global_index"])
+    return tokens
+
+
+def map_chunks_to_paragraph_ranges(chunks: Sequence[Chunk], token_index: Sequence[dict]) -> None:
+    if not token_index:
+        return
+    cursor = 0
+    token_count = len(token_index)
+    for chunk in chunks:
+        if chunk.word_count <= 0:
+            continue
+        if cursor >= token_count:
+            break
+        start = cursor
+        end = min(cursor + chunk.word_count - 1, token_count - 1)
+        start_paragraph = token_index[start]["paragraph_id"]
+        end_paragraph = token_index[end]["paragraph_id"]
+        chunk.paragraph_range = (start_paragraph, end_paragraph)
+        cursor += chunk.word_count
+
+
+def format_paragraph_range(paragraph_range: Optional[Tuple[str, str]]) -> Optional[str]:
+    if not paragraph_range:
+        return None
+    start, end = paragraph_range
+    if start == end:
+        return start
+    return f"{start}..{end}"
 
 
 def preprocess_chunks(
@@ -262,6 +355,86 @@ def plot_heatmap(output_path: Path, distribution: np.ndarray, chunks: Sequence[C
     plt.close(fig)
 
 
+def resolve_output_path(output_dir: Path, path: Optional[Path]) -> Optional[Path]:
+    if path is None:
+        return None
+    if path.is_absolute():
+        return path
+    return output_dir / path
+
+
+def write_topic_shift_json(
+    output_path: Path,
+    chunks: Sequence[Chunk],
+    distribution: np.ndarray,
+    threshold: float,
+    manuscript_id: str,
+) -> None:
+    items: List[dict] = []
+    for idx in range(1, len(chunks)):
+        previous = distribution[idx - 1]
+        current = distribution[idx]
+        deltas = np.abs(current - previous)
+        delta_value = float(deltas.sum())
+        if delta_value < threshold:
+            continue
+        paragraph_range = format_paragraph_range(chunks[idx].paragraph_range)
+        if not paragraph_range:
+            continue
+        items.append(
+            {
+                "issue_id": str(uuid.uuid4()),
+                "type": "topic_shift",
+                "location": {"paragraph_id": paragraph_range},
+                "evidence": {
+                    "summary": (
+                        f"Abrupt topic shift detected between {chunks[idx - 1].label} "
+                        f"and {chunks[idx].label} (delta={delta_value:.3f})."
+                    ),
+                    "detector": "theme_mapper",
+                    "signals": [
+                        {
+                            "name": "topic_weights_previous",
+                            "value": [round(float(weight), 6) for weight in previous],
+                            "units": "weight",
+                        },
+                        {
+                            "name": "topic_weights_current",
+                            "value": [round(float(weight), 6) for weight in current],
+                            "units": "weight",
+                        },
+                        {
+                            "name": "topic_weight_deltas",
+                            "value": [round(float(delta), 6) for delta in deltas],
+                            "units": "weight_delta",
+                        },
+                        {
+                            "name": "delta_l1",
+                            "value": round(delta_value, 6),
+                        },
+                        {
+                            "name": "delta_threshold",
+                            "value": threshold,
+                        },
+                    ],
+                },
+            }
+        )
+
+    if not items:
+        print("No topic shifts exceeded threshold for JSON output.")
+        return
+
+    payload = {
+        "schema_version": "1.0",
+        "manuscript_id": manuscript_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "items": items,
+    }
+    output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"Topic shift JSON saved to: {output_path}")
+
+
 def main() -> None:
     args = parse_args()
     validate_args(args)
@@ -270,6 +443,12 @@ def main() -> None:
     chunks = build_chunks(raw_text, args)
     if not chunks:
         raise SystemExit("No chunks were created. Check your input or chunk settings.")
+
+    manuscript_tokens = None
+    if args.preprocessing:
+        manuscript_tokens = load_manuscript_tokens(args.preprocessing)
+        token_index = build_word_token_index(manuscript_tokens)
+        map_chunks_to_paragraph_ranges(chunks, token_index)
 
     nlp = load_spacy(args.spacy_model)
     tokens_per_chunk = preprocess_chunks(chunks, nlp)
@@ -322,6 +501,21 @@ def main() -> None:
     vis = pyLDAvis.gensim_models.prepare(lda, corpus, dictionary)
     pyLDAvis.save_html(vis, str(html_path))
     print(f"pyLDAvis visualization saved to: {html_path}")
+
+    topic_shift_path = resolve_output_path(args.output_dir, args.topic_shift_json)
+    if topic_shift_path:
+        manuscript_id = (
+            manuscript_tokens["manuscript_id"]
+            if manuscript_tokens and "manuscript_id" in manuscript_tokens
+            else args.input_file.stem
+        )
+        write_topic_shift_json(
+            topic_shift_path,
+            chunks,
+            distribution,
+            args.topic_shift_threshold,
+            manuscript_id,
+        )
 
 
 if __name__ == "__main__":
