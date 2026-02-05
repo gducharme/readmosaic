@@ -108,6 +108,17 @@ Schemas for the JSONL record shapes live in:
 - `schemas/word_ids.schema.json`
 - `schemas/manuscript_tokens.schema.json`
 
+## Confidence Review Script
+
+The `scripts/confidence_review.py` CLI scans Mosaic `_edits.json` outputs, aligns
+them to the pre-processed manuscript token IDs, and prints the full manuscript
+with a five-band confidence color scale (deep green → light green → yellow → orange → red).
+Run the script with `--help` for usage details and options.
+
+```bash
+python scripts/confidence_review.py --preprocessed /preprocessed --edits-root /mosaic/outputs
+```
+
 ## Mosaic Orchestrator (MO)
 
 The Mosaic Orchestrator ties the full tool stack together, runs the analysis sweep,
