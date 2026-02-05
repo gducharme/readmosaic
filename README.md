@@ -106,6 +106,15 @@ python mosaic_mo.py --file manuscript_v1.md --model llama3:8b-instruct-q8_0
 
 Use `--help` for full CLI options, including the LM Studio base URL override and output directory.
 
+## Mosaic Recursive Engine (MRE) Minimal Prototype
+
+The `mre_minimal.py` script is a greenfield, single-pass engine that can forge new tools,
+hot-reload them, and apply edits to a manuscript based on a diagnostics JSON file.
+
+```bash
+python mre_minimal.py --file manuscript.md --diagnostics diagnostics.json --model llama3:8b-instruct-q8_0
+```
+
 ## Mosaic Signal Density (MSD)
 
 The `scripts/signal_density.py` CLI estimates lexical density and signal concentration
