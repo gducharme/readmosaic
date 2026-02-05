@@ -20,11 +20,11 @@ from rich.text import Text
 
 
 CONFIDENCE_LEVELS = (
-    (0, 1.0, "green4"),
-    (1, 0.8, "green3"),
-    (2, 0.6, "yellow1"),
-    (3, 0.4, "orange3"),
-    (4, 0.2, "red1"),
+    (0.0, 1.0, "green4"),
+    (0.25, 0.8, "green3"),
+    (0.5, 0.6, "yellow1"),
+    (0.75, 0.4, "orange3"),
+    (1.0, 0.2, "red1"),
 )
 
 PUNCTUATION_CLOSERS = {
@@ -172,11 +172,9 @@ def build_issue_counts(
     return counts
 
 
-def confidence_for_count(count: int) -> tuple[float, str]:
-    if count >= 4:
-        return CONFIDENCE_LEVELS[-1][1], CONFIDENCE_LEVELS[-1][2]
+def confidence_for_count(normalized_count: float) -> tuple[float, str]:
     for threshold, score, color in CONFIDENCE_LEVELS:
-        if count <= threshold:
+        if normalized_count <= threshold:
             return score, color
     return CONFIDENCE_LEVELS[-1][1], CONFIDENCE_LEVELS[-1][2]
 
@@ -193,14 +191,15 @@ def should_prefix_space(token: str, prev_token: Optional[str]) -> bool:
 
 def render_text(
     words: List[WordRecord],
-    issue_counts: List[int],
+    normalized_counts: List[float],
     show_word_ids: bool,
+    num_sources: int,
 ) -> None:
     console = Console()
     total_score = 0.0
     total_tokens = len(words)
-    for idx, count in enumerate(issue_counts):
-        score, _ = confidence_for_count(count)
+    for idx, normalized_count in enumerate(normalized_counts):
+        score, _ = confidence_for_count(normalized_count)
         total_score += score
     avg_confidence = total_score / total_tokens if total_tokens else 1.0
 
@@ -209,7 +208,8 @@ def render_text(
         style="bold",
     )
     console.print(
-        "Legend: deep green (clean) → light green → yellow → orange → red (hot zone)",
+        "Legend: deep green (clean) → light green → yellow → orange → red "
+        f"(confidence based on normalized issue rate, count / {num_sources} source(s))",
         style="dim",
     )
 
@@ -239,7 +239,7 @@ def render_text(
             console.print(f"Sentence {word.sentence_id}", style="dim")
             current_sentence = word.sentence_id
 
-        score, color = confidence_for_count(issue_counts[index])
+        score, color = confidence_for_count(normalized_counts[index])
         token_text = word.text
         if show_word_ids:
             token_text = f"{token_text}[{word.word_id}]"
@@ -269,7 +269,12 @@ def main() -> None:
         )
 
     issue_counts = build_issue_counts(edits_files, token_index, len(words))
-    render_text(words, issue_counts, args.show_word_ids)
+    tool_sources = {edits_file.parent.name for edits_file in edits_files}
+    num_sources = len(tool_sources) or len(edits_files)
+    if num_sources == 0:
+        num_sources = 1
+    normalized_counts = [count / num_sources for count in issue_counts]
+    render_text(words, normalized_counts, args.show_word_ids, num_sources)
 
 
 if __name__ == "__main__":
