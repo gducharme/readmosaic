@@ -29,6 +29,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 import torch
 
 import nltk
+from schema_validator import validate_payload
 
 
 @dataclass
@@ -409,6 +410,7 @@ def write_json_report(
         "created_at": datetime.now(timezone.utc).isoformat(),
         "items": items,
     }
+    validate_payload(payload, "edits.schema.json", "semantic echo edits payload")
     output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 

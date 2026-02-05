@@ -23,6 +23,8 @@ from rich.console import Console
 from rich.table import Table
 from spacy.matcher import DependencyMatcher
 
+from schema_validator import validate_payload
+
 PATTERN_TYPES = {
     "phrasal_verbs": "PHRASAL_VERB",
     "action_chains": "ACTION_CHAIN",
@@ -575,6 +577,7 @@ def main() -> None:
         if not payload["items"]:
             console.print("No patterns met the criteria for JSON output.")
             return
+        validate_payload(payload, "edits.schema.json", "pattern extractor edits payload")
         args.output_json.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2),
             encoding="utf-8",

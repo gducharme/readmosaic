@@ -29,6 +29,7 @@ from gensim import corpora
 from gensim.models import CoherenceModel, LdaModel
 from sklearn.feature_extraction.text import CountVectorizer
 
+from schema_validator import validate_payload
 
 CHUNK_MODE_WORDS = "words"
 CHUNK_MODE_CHAPTER = "chapter"
@@ -490,6 +491,7 @@ def write_topic_shift_json(
         "created_at": datetime.now(timezone.utc).isoformat(),
         "items": items,
     }
+    validate_payload(payload, "edits.schema.json", "theme mapper edits payload")
     output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"Topic shift JSON saved to: {output_path}")
 

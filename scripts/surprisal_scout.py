@@ -30,6 +30,8 @@ import numpy as np
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from schema_validator import validate_payload
+
 
 DEFAULT_TRANSITIONS = [
     "it is important to note",
@@ -528,6 +530,7 @@ def main() -> None:
         if not edits_payload:
             print("No slop sentences above threshold for edits output.")
         else:
+            validate_payload(edits_payload, "edits.schema.json", "surprisal edits payload")
             args.output_edits.write_text(
                 json.dumps(edits_payload, ensure_ascii=False, indent=2),
                 encoding="utf-8",

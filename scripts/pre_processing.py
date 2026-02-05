@@ -22,6 +22,8 @@ from typing import Iterable, List, Optional
 
 import nltk
 
+from schema_validator import validate_payload, validate_records
+
 try:
     from rich.console import Console
 except ImportError:  # pragma: no cover - optional dependency
@@ -319,7 +321,15 @@ def main() -> None:
         "paragraphs": tokenized_paragraphs,
     }
 
+    validate_payload(
+        manuscript_tokens_artifact,
+        "manuscript_tokens.schema.json",
+        "manuscript_tokens.json",
+    )
     if not args.skip_jsonl:
+        validate_records(paragraph_records, "paragraph_ids.schema.json", "paragraph")
+        validate_records(sentence_records, "sentence_ids.schema.json", "sentence")
+        validate_records(word_records, "word_ids.schema.json", "word")
         write_jsonl(output_dir / "paragraphs.jsonl", paragraph_records)
         write_jsonl(output_dir / "sentences.jsonl", sentence_records)
         write_jsonl(output_dir / "words.jsonl", word_records)

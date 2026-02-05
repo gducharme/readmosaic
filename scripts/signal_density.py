@@ -14,6 +14,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Optional
 
+from schema_validator import validate_payload
+
 STOPWORDS = {
     "a",
     "an",
@@ -284,6 +286,7 @@ def main() -> None:
         )
         if not edits_payload["items"]:
             raise SystemExit("No paragraphs below threshold to emit edits.")
+        validate_payload(edits_payload, "edits.schema.json", "signal density edits payload")
         args.edits_output.write_text(
             json.dumps(edits_payload, indent=2),
             encoding="utf-8",

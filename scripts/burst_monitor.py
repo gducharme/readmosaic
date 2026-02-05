@@ -24,6 +24,8 @@ from nltk.corpus import stopwords
 from nltk.util import ngrams
 from scipy import stats
 
+from schema_validator import validate_payload
+
 
 CONTENT_POS_PREFIXES = ("NN", "VB", "JJ")
 WORD_RE = re.compile(r"^[a-zA-Z]+$")
@@ -434,6 +436,7 @@ def main() -> None:
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "items": items,
             }
+            validate_payload(edits_payload, "edits.schema.json", "burst monitor edits payload")
             args.output_json.write_text(
                 json.dumps(edits_payload, ensure_ascii=False, indent=2),
                 encoding="utf-8",
