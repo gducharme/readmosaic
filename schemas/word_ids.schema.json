@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://readmosaic/schemas/word_ids.schema.json",
+  "title": "Pre-processed manuscript word records",
+  "type": "object",
+  "required": [
+    "id",
+    "order",
+    "prev_id",
+    "next_id",
+    "text",
+    "start_char",
+    "end_char",
+    "sentence_id",
+    "paragraph_id",
+    "manuscript_id",
+    "source"
+  ],
+  "properties": {
+    "id": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Stable word identifier."
+    },
+    "order": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Zero-based word order in the manuscript."
+    },
+    "prev_id": {
+      "type": ["integer", "null"],
+      "minimum": 1,
+      "description": "Previous word ID, or null for the first word."
+    },
+    "next_id": {
+      "type": ["integer", "null"],
+      "minimum": 1,
+      "description": "Next word ID, or null for the last word."
+    },
+    "text": {
+      "type": "string",
+      "description": "Word token text."
+    },
+    "start_char": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Start offset in the manuscript (inclusive)."
+    },
+    "end_char": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "End offset in the manuscript (exclusive)."
+    },
+    "sentence_id": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Parent sentence identifier."
+    },
+    "paragraph_id": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Parent paragraph identifier."
+    },
+    "manuscript_id": {
+      "type": "string",
+      "description": "Stable identifier for the manuscript or version."
+    },
+    "source": {
+      "type": "string",
+      "description": "Source path or URI for the manuscript."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Timestamp for when this artifact was produced."
+    },
+    "tokenization": {
+      "type": "object",
+      "description": "Metadata about the tokenizer or segmenter used to generate IDs.",
+      "properties": {
+        "method": {"type": "string"},
+        "model": {"type": "string"},
+        "notes": {"type": "string"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

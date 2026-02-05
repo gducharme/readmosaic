@@ -86,6 +86,26 @@ Run the script with:
 python scripts/slop_scrubber.py --help
 ```
 
+## Manuscript Pre-Processing
+
+The `scripts/pre_processing.py` CLI segments a manuscript into paragraph, sentence, and word JSONL artifacts with stable IDs, order, offsets, and cross-references. Run the script with `--help` for usage details and options.
+
+```bash
+python scripts/pre_processing.py path/to/manuscript.md --output-dir /preprocessed --manuscript-id draft-01
+```
+
+Outputs:
+
+- `/preprocessed/paragraphs.jsonl` for paragraph IDs, ordering, offsets, and prev/next links.
+- `/preprocessed/sentences.jsonl` for sentence IDs, ordering, offsets, and paragraph links.
+- `/preprocessed/words.jsonl` for word IDs, ordering, offsets, and sentence/paragraph links.
+
+Schemas for the JSONL record shapes live in:
+
+- `schemas/paragraph_ids.schema.json`
+- `schemas/sentence_ids.schema.json`
+- `schemas/word_ids.schema.json`
+
 ## Mosaic Orchestrator (MO)
 
 The Mosaic Orchestrator ties the full tool stack together, runs the analysis sweep,
@@ -121,6 +141,7 @@ The `schemas/` directory captures lightweight JSON Schema definitions used to st
 the editing pipeline. The initial set covers:
 
 - `manuscript_tokens.schema.json` for word-level IDs and offsets.
+- `paragraph_ids.schema.json`, `sentence_ids.schema.json`, and `word_ids.schema.json` for pre-processed manuscript IDs and cross-references.
 - `edits.schema.json` for normalized issue payloads.
 - `demonstration.schema.json` for problem demonstrations.
 - `proposal.schema.json` plus `patch.schema.json` for targeted fixes and verification.
