@@ -22,6 +22,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
+from datetime import datetime, timezone
 from typing import Iterable, List, Sequence
 
 import matplotlib.pyplot as plt
@@ -40,6 +41,9 @@ class EntropyWindow:
     bigram_entropy: float
 
 
+WORD_RE = re.compile(r"^[a-zA-Z']+$")
+
+
 def ensure_nltk() -> None:
     resources = [
         "tokenizers/punkt",
@@ -56,6 +60,63 @@ def ensure_nltk() -> None:
 
 def load_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def load_manuscript_tokens(preprocessing_dir: Path) -> dict:
+    tokens_path = preprocessing_dir / "manuscript_tokens.json"
+    if not tokens_path.exists():
+        raise SystemExit(f"Missing manuscript_tokens.json in {preprocessing_dir}")
+    return json.loads(tokens_path.read_text(encoding="utf-8"))
+
+
+def build_filtered_token_index(manuscript_tokens: dict) -> list[dict]:
+    filtered_tokens: list[dict] = []
+    for paragraph in manuscript_tokens.get("paragraphs", []):
+        paragraph_id = paragraph["paragraph_id"]
+        for token in paragraph.get("tokens", []):
+            text = token.get("text", "").lower()
+            if not WORD_RE.match(text):
+                continue
+            filtered_tokens.append(
+                {
+                    "paragraph_id": paragraph_id,
+                    "token_id": token["token_id"],
+                    "start_char": token["start_char"],
+                    "end_char": token["end_char"],
+                    "global_index": token["global_index"],
+                }
+            )
+    filtered_tokens.sort(key=lambda item: item["global_index"])
+    return filtered_tokens
+
+
+def build_window_location(
+    filtered_tokens: list[dict],
+    start: int,
+    end: int,
+) -> dict:
+    if not filtered_tokens:
+        return {}
+    safe_start = max(min(start, len(filtered_tokens) - 1), 0)
+    safe_end = max(min(end, len(filtered_tokens)), safe_start + 1)
+    anchor_index = min(safe_start + (safe_end - safe_start) // 2, len(filtered_tokens) - 1)
+    anchor = filtered_tokens[anchor_index]
+    paragraph_id = anchor["paragraph_id"]
+    window_tokens = [
+        token
+        for token in filtered_tokens[safe_start:safe_end]
+        if token["paragraph_id"] == paragraph_id
+    ]
+    if not window_tokens:
+        window_tokens = [anchor]
+    token_ids = [token["token_id"] for token in window_tokens]
+    char_start = min(token["start_char"] for token in window_tokens)
+    char_end = max(token["end_char"] for token in window_tokens)
+    return {
+        "paragraph_id": paragraph_id,
+        "token_ids": token_ids,
+        "char_range": {"start": char_start, "end": char_end},
+    }
 
 
 def normalize_tokens(tokens: Iterable[str]) -> List[str]:
@@ -250,6 +311,18 @@ def parse_args() -> argparse.Namespace:
         help="Output prefix or directory to save heatmap PNG + stats JSON.",
     )
     parser.add_argument(
+        "--preprocessing",
+        type=Path,
+        default=None,
+        help="Directory containing manuscript_tokens.json for window mapping.",
+    )
+    parser.add_argument(
+        "--output-edits",
+        type=Path,
+        default=None,
+        help="Optional output path for edits.schema.json payload.",
+    )
+    parser.add_argument(
         "--compare-files",
         nargs="*",
         type=Path,
@@ -263,6 +336,8 @@ def main() -> None:
     args = parse_args()
     input_path = args.input_file
     step_size = args.step_size or max(1, args.window_size // 2)
+    if args.output_edits and not args.preprocessing:
+        raise SystemExit("--output-edits requires --preprocessing for token mapping.")
     summary = summarize_file(
         input_path,
         window_size=args.window_size,
@@ -284,6 +359,12 @@ def main() -> None:
     summary["comparative_analysis"] = compare_results
 
     heatmap_path, json_path = resolve_output_paths(args.output, input_path)
+    filtered_token_index: list[dict] = []
+    manuscript_tokens = None
+    if args.preprocessing:
+        manuscript_tokens = load_manuscript_tokens(args.preprocessing)
+        filtered_token_index = build_filtered_token_index(manuscript_tokens)
+
     if heatmap_path:
         render_heatmap(
             [
@@ -300,6 +381,72 @@ def main() -> None:
         )
     if json_path:
         json_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+
+    if args.output_edits:
+        items = []
+        windows_by_index = {window["index"]: window for window in summary["windows"]}
+        for depression in summary["low_entropy_depressions"]:
+            window = windows_by_index.get(depression["index"])
+            if not window:
+                continue
+            location = build_window_location(
+                filtered_token_index,
+                depression["start_token"],
+                depression["end_token"],
+            )
+            if not location:
+                continue
+            items.append(
+                {
+                    "issue_id": f"entropy-{depression['index']}",
+                    "type": "entropy_low",
+                    "status": "open",
+                    "location": location,
+                    "evidence": {
+                        "summary": (
+                            "Low entropy window detected between tokens "
+                            f"{depression['start_token']}-{depression['end_token']} "
+                            f"(unigram={depression['unigram_entropy']:.4f}, "
+                            f"bigram={window['bigram_entropy']:.4f})."
+                        ),
+                        "detector": "entropy_evaluator",
+                        "signals": [
+                            {
+                                "name": "unigram_entropy",
+                                "value": round(depression["unigram_entropy"], 4),
+                                "units": "bits",
+                            },
+                            {
+                                "name": "bigram_entropy",
+                                "value": round(window["bigram_entropy"], 4),
+                                "units": "bits",
+                            },
+                            {
+                                "name": "window_range",
+                                "value": {
+                                    "start": depression["start_token"],
+                                    "end": depression["end_token"],
+                                },
+                                "units": "token_index",
+                            },
+                        ],
+                    },
+                }
+            )
+        if items:
+            edits_payload = {
+                "schema_version": "1.0",
+                "manuscript_id": manuscript_tokens["manuscript_id"],
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "items": items,
+            }
+            args.output_edits.write_text(
+                json.dumps(edits_payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            print(f"Saved edits payload to {args.output_edits}")
+        else:
+            print("No low-entropy windows mapped for edits payload.")
 
     print(json.dumps(summary, indent=2))
     if heatmap_path and json_path:
