@@ -8,10 +8,13 @@ sliding window Z-score analysis across uni/bi/tri-grams.
 from __future__ import annotations
 
 import argparse
+import json
 import pathlib
 import re
+import uuid
 from collections import Counter
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Iterable
 
 import nltk
@@ -47,6 +50,63 @@ def ensure_nltk_resources() -> None:
 
 def load_text(path: pathlib.Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def load_manuscript_tokens(preprocessing_dir: pathlib.Path) -> dict:
+    tokens_path = preprocessing_dir / "manuscript_tokens.json"
+    if not tokens_path.exists():
+        raise SystemExit(f"Missing manuscript_tokens.json in {preprocessing_dir}")
+    return json.loads(tokens_path.read_text(encoding="utf-8"))
+
+
+def build_filtered_token_index(manuscript_tokens: dict) -> list[dict]:
+    filtered_tokens: list[dict] = []
+    for paragraph in manuscript_tokens.get("paragraphs", []):
+        paragraph_id = paragraph["paragraph_id"]
+        for token in paragraph.get("tokens", []):
+            text = token.get("text", "")
+            if not WORD_RE.match(text):
+                continue
+            filtered_tokens.append(
+                {
+                    "paragraph_id": paragraph_id,
+                    "token_id": token["token_id"],
+                    "start_char": token["start_char"],
+                    "end_char": token["end_char"],
+                    "global_index": token["global_index"],
+                }
+            )
+    filtered_tokens.sort(key=lambda item: item["global_index"])
+    return filtered_tokens
+
+
+def build_window_location(
+    filtered_tokens: list[dict],
+    start: int,
+    end: int,
+) -> dict:
+    if not filtered_tokens:
+        return {}
+    safe_start = max(min(start, len(filtered_tokens) - 1), 0)
+    safe_end = max(min(end, len(filtered_tokens)), safe_start + 1)
+    anchor_index = min(safe_start + (safe_end - safe_start) // 2, len(filtered_tokens) - 1)
+    anchor = filtered_tokens[anchor_index]
+    paragraph_id = anchor["paragraph_id"]
+    window_tokens = [
+        token
+        for token in filtered_tokens[safe_start:safe_end]
+        if token["paragraph_id"] == paragraph_id
+    ]
+    if not window_tokens:
+        window_tokens = [anchor]
+    token_ids = [token["token_id"] for token in window_tokens]
+    char_start = min(token["start_char"] for token in window_tokens)
+    char_end = max(token["end_char"] for token in window_tokens)
+    return {
+        "paragraph_id": paragraph_id,
+        "token_ids": token_ids,
+        "char_range": {"start": char_start, "end": char_end},
+    }
 
 
 def tokenize_content_words(text: str) -> list[TokenInfo]:
@@ -240,6 +300,18 @@ def main() -> None:
         default=None,
         help="Optional output path for the plot image.",
     )
+    parser.add_argument(
+        "--preprocessing",
+        type=pathlib.Path,
+        default=None,
+        help="Directory containing manuscript_tokens.json for window mapping.",
+    )
+    parser.add_argument(
+        "--output-json",
+        type=pathlib.Path,
+        default=None,
+        help="Optional output path for edits.schema.json payload.",
+    )
 
     args = parser.parse_args()
     if args.window_size <= 0 or args.step_size <= 0:
@@ -247,10 +319,23 @@ def main() -> None:
 
     ensure_nltk_resources()
 
+    if args.output_json and not args.preprocessing:
+        raise SystemExit("--output-json requires --preprocessing for token mapping.")
+
     text = load_text(args.input_file)
     token_infos = tokenize_content_words(text)
     all_tokens = [token_info.token for token_info in token_infos]
     content_tokens = [token_info.token for token_info in token_infos if token_info.is_content]
+    manuscript_tokens = None
+    filtered_token_index: list[dict] = []
+    if args.preprocessing:
+        manuscript_tokens = load_manuscript_tokens(args.preprocessing)
+        filtered_token_index = build_filtered_token_index(manuscript_tokens)
+        if filtered_token_index and len(filtered_token_index) != len(all_tokens):
+            print(
+                "Warning: manuscript token count does not match burst tokens. "
+                "Window mappings may be approximate."
+            )
 
     windows = []
     n_sizes = (1, 2, 3)
@@ -292,6 +377,68 @@ def main() -> None:
 
     report = build_report(df, windows, args.threshold, args.top_n)
     print(report)
+
+    if args.output_json:
+        items = []
+        for window in windows:
+            for (term, n_size), z_score in window["zscores"].items():
+                if z_score < args.threshold:
+                    continue
+                location = build_window_location(
+                    filtered_token_index,
+                    window["start"],
+                    window["end"],
+                )
+                if not location:
+                    continue
+                issue_id = str(uuid.uuid4())
+                items.append(
+                    {
+                        "issue_id": issue_id,
+                        "type": "burst",
+                        "status": "open",
+                        "location": location,
+                        "evidence": {
+                            "summary": (
+                                f"Burst detected for '{term}' ({n_size}-gram) "
+                                f"in window {window['start']}-{window['end']} "
+                                f"(z={z_score:.2f})."
+                            ),
+                            "detector": "burst_monitor",
+                            "signals": [
+                                {"name": "term", "value": term},
+                                {"name": "ngram_size", "value": n_size},
+                                {"name": "z_score", "value": round(z_score, 4)},
+                                {
+                                    "name": "window_range",
+                                    "value": {
+                                        "start": window["start"],
+                                        "end": window["end"],
+                                    },
+                                    "units": "token_index",
+                                },
+                            ],
+                        },
+                        "extensions": {
+                            "progress_percent": round(window["progress"], 2),
+                        },
+                    }
+                )
+
+        if not items:
+            print("No bursty windows above threshold for JSON output.")
+        else:
+            edits_payload = {
+                "schema_version": "1.0",
+                "manuscript_id": manuscript_tokens["manuscript_id"],
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "items": items,
+            }
+            args.output_json.write_text(
+                json.dumps(edits_payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            print(f"JSON output saved to {args.output_json}")
 
     plot_terms_input = [term.strip() for term in args.plot_terms.split(",") if term.strip()]
     if args.plot_file or plot_terms_input:
