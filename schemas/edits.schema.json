@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://readmosaic/schemas/edits.schema.json",
+  "title": "Unified edits/issues payload",
+  "type": "object",
+  "required": ["schema_version", "manuscript_id", "items"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "description": "Schema version for the edits payload."
+    },
+    "manuscript_id": {
+      "type": "string",
+      "description": "Stable identifier for the manuscript or version."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Timestamp for when this edits payload was produced."
+    },
+    "items": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["issue_id", "type", "location", "evidence"],
+        "properties": {
+          "issue_id": {
+            "type": "string",
+            "description": "Stable identifier for the issue."
+          },
+          "type": {
+            "type": "string",
+            "description": "Issue type such as clarity, consistency, factuality, style, etc."
+          },
+          "status": {
+            "type": "string",
+            "description": "Lifecycle status for the issue.",
+            "enum": ["open", "triaged", "proposed", "resolved", "dismissed"]
+          },
+          "location": {
+            "type": "object",
+            "required": ["paragraph_id"],
+            "properties": {
+              "paragraph_id": {"type": "string"},
+              "token_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Token IDs implicated in the issue."
+              },
+              "char_range": {
+                "type": "object",
+                "properties": {
+                  "start": {"type": "integer", "minimum": 0},
+                  "end": {"type": "integer", "minimum": 0}
+                },
+                "additionalProperties": false
+              },
+              "anchor_text": {
+                "type": "string",
+                "description": "Anchor text for fuzzy matching."
+              }
+            },
+            "additionalProperties": false
+          },
+          "evidence": {
+            "type": "object",
+            "required": ["summary"],
+            "properties": {
+              "summary": {"type": "string"},
+              "signals": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {"type": "string"},
+                    "value": {},
+                    "units": {"type": "string"}
+                  },
+                  "required": ["name", "value"],
+                  "additionalProperties": true
+                }
+              },
+              "detector": {
+                "type": "string",
+                "description": "Name of the originating detector or script."
+              }
+            },
+            "additionalProperties": true
+          },
+          "impact": {
+            "type": "object",
+            "properties": {
+              "severity": {
+                "type": "string",
+                "enum": ["low", "medium", "high", "critical"]
+              },
+              "notes": {"type": "string"}
+            },
+            "additionalProperties": false
+          },
+          "suggested_actions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "routing": {
+            "type": "object",
+            "properties": {
+              "tool_family": {"type": "string"},
+              "strategy": {"type": "string"}
+            },
+            "additionalProperties": false
+          },
+          "extensions": {
+            "type": "object",
+            "description": "Open extension point for future fields.",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": true
+}

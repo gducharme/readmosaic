@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://readmosaic/schemas/patch.schema.json",
+  "title": "Targeted patch payload",
+  "type": "object",
+  "required": ["paragraph_id", "anchor", "replacement"],
+  "properties": {
+    "paragraph_id": {"type": "string"},
+    "anchor": {
+      "type": "object",
+      "required": ["text"],
+      "properties": {
+        "text": {"type": "string"},
+        "occurrence": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Which match to edit if the anchor appears multiple times."
+        },
+        "token_ids": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      },
+      "additionalProperties": false
+    },
+    "replacement": {
+      "type": "object",
+      "required": ["text"],
+      "properties": {
+        "text": {"type": "string"},
+        "mode": {
+          "type": "string",
+          "enum": ["replace", "insert_before", "insert_after", "delete"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "fallback": {
+      "type": "object",
+      "properties": {
+        "strategy": {
+          "type": "string",
+          "enum": ["skip", "fuzzy", "abort"]
+        },
+        "notes": {"type": "string"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

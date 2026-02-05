@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://readmosaic/schemas/demonstration.schema.json",
+  "title": "Issue demonstration payload",
+  "type": "object",
+  "required": ["schema_version", "manuscript_id", "items"],
+  "properties": {
+    "schema_version": {"type": "string"},
+    "manuscript_id": {"type": "string"},
+    "created_at": {"type": "string", "format": "date-time"},
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["issue_id", "context", "problem"],
+        "properties": {
+          "issue_id": {"type": "string"},
+          "context": {
+            "type": "object",
+            "required": ["before", "after"],
+            "properties": {
+              "before": {"type": "string"},
+              "after": {"type": "string"},
+              "highlight": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "start": {"type": "integer", "minimum": 0},
+                    "end": {"type": "integer", "minimum": 0}
+                  },
+                  "required": ["start", "end"],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false
+          },
+          "problem": {
+            "type": "object",
+            "required": ["summary", "harm"],
+            "properties": {
+              "summary": {"type": "string"},
+              "harm": {"type": "string"},
+              "evidence": {
+                "type": "array",
+                "items": {"type": "string"}
+              }
+            },
+            "additionalProperties": false
+          },
+          "notes": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": true
+}

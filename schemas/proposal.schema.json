@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://readmosaic/schemas/proposal.schema.json",
+  "title": "Fix proposal payload",
+  "type": "object",
+  "required": ["schema_version", "manuscript_id", "items"],
+  "properties": {
+    "schema_version": {"type": "string"},
+    "manuscript_id": {"type": "string"},
+    "created_at": {"type": "string", "format": "date-time"},
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["issue_id", "proposal_id", "edit"],
+        "properties": {
+          "issue_id": {"type": "string"},
+          "proposal_id": {"type": "string"},
+          "rationale": {"type": "string"},
+          "constraints": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
+          "edit": {
+            "type": "object",
+            "required": ["patch"],
+            "properties": {
+              "patch": {"$ref": "patch.schema.json"},
+              "preview": {
+                "type": "object",
+                "properties": {
+                  "before": {"type": "string"},
+                  "after": {"type": "string"}
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          },
+          "verification": {
+            "type": "object",
+            "properties": {
+              "status": {"type": "string", "enum": ["pending", "pass", "fail"]},
+              "scores": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "metric": {"type": "string"},
+                    "value": {},
+                    "delta": {}
+                  },
+                  "required": ["metric", "value"],
+                  "additionalProperties": true
+                }
+              },
+              "notes": {"type": "string"}
+            },
+            "additionalProperties": false
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": true
+}
