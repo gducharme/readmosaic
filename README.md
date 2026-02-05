@@ -88,7 +88,7 @@ python scripts/slop_scrubber.py --help
 
 ## Manuscript Pre-Processing
 
-The `scripts/pre_processing.py` CLI segments a manuscript into paragraph, sentence, and word JSONL artifacts with stable IDs, order, offsets, and cross-references. Run the script with `--help` for usage details and options.
+The `scripts/pre_processing.py` CLI segments a manuscript into paragraph, sentence, and word JSONL artifacts with stable IDs, order, offsets, and cross-references. It also emits a schema-aligned `manuscript_tokens.json` artifact for downstream token processing. Run the script with `--help` for usage details and options.
 
 ```bash
 python scripts/pre_processing.py path/to/manuscript.md --output-dir /preprocessed --manuscript-id draft-01
@@ -99,12 +99,14 @@ Outputs:
 - `/preprocessed/paragraphs.jsonl` for paragraph IDs, ordering, offsets, and prev/next links.
 - `/preprocessed/sentences.jsonl` for sentence IDs, ordering, offsets, and paragraph links.
 - `/preprocessed/words.jsonl` for word IDs, ordering, offsets, and sentence/paragraph links.
+- `/preprocessed/manuscript_tokens.json` for paragraph-ordered tokens with stable `paragraph_id`/`token_id` strings and paragraph-relative offsets.
 
 Schemas for the JSONL record shapes live in:
 
 - `schemas/paragraph_ids.schema.json`
 - `schemas/sentence_ids.schema.json`
 - `schemas/word_ids.schema.json`
+- `schemas/manuscript_tokens.schema.json`
 
 ## Mosaic Orchestrator (MO)
 

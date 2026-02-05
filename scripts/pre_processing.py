@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Pre-process manuscript text into paragraph, sentence, and word JSONL files.
 
+Also emits a single JSON artifact aligned to schemas/manuscript_tokens.schema.json.
+
 Usage examples:
   python scripts/pre_processing.py path/to/manuscript.md
   python scripts/pre_processing.py path/to/manuscript.txt --output-dir /preprocessed
@@ -14,6 +16,7 @@ import argparse
 import json
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, List, Optional
 
@@ -120,6 +123,14 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def build_paragraph_id(manuscript_id: str, index: int) -> str:
+    return f"{manuscript_id}-p{index:04d}"
+
+
+def build_token_id(manuscript_id: str, global_index: int) -> str:
+    return f"{manuscript_id}-t{global_index:06d}"
+
+
 def locate_tokens(text: str, tokens: Iterable[str]) -> List[tuple[str, int, int]]:
     spans: List[tuple[str, int, int]] = []
     cursor = 0
@@ -170,6 +181,7 @@ def main() -> None:
     paragraph_records: List[dict] = []
     sentence_records: List[dict] = []
     word_records: List[dict] = []
+    tokenized_paragraphs: List[dict] = []
 
     paragraph_ids = list(range(1, len(paragraphs) + 1))
     paragraph_links = build_prev_next(paragraph_ids)
@@ -177,6 +189,7 @@ def main() -> None:
     paragraph_start = 0
     sentence_id = 1
     word_id = 1
+    global_token_index = 0
 
     for idx, (paragraph, (prev_id, next_id)) in enumerate(
         zip(paragraphs, paragraph_links)
@@ -195,6 +208,32 @@ def main() -> None:
             "source": source,
         }
         paragraph_records.append(paragraph_record)
+
+        paragraph_id = build_paragraph_id(manuscript_id, idx + 1)
+        tokens = nltk.word_tokenize(paragraph_text)
+        token_spans = locate_tokens(paragraph_text, tokens)
+        token_records: List[dict] = []
+        for local_index, (token, token_start, token_end) in enumerate(token_spans):
+            token_records.append(
+                {
+                    "token_id": build_token_id(manuscript_id, global_token_index),
+                    "text": token,
+                    "start_char": token_start,
+                    "end_char": token_end,
+                    "global_index": global_token_index,
+                    "local_index": local_index,
+                }
+            )
+            global_token_index += 1
+
+        tokenized_paragraphs.append(
+            {
+                "paragraph_id": paragraph_id,
+                "order": idx,
+                "text": paragraph_text,
+                "tokens": token_records,
+            }
+        )
 
         sentences = nltk.sent_tokenize(paragraph_text)
         search_start = 0
@@ -252,15 +291,33 @@ def main() -> None:
 
         paragraph_start = paragraph_end + 2
 
+    manuscript_tokens_artifact = {
+        "schema_version": "1.0",
+        "manuscript_id": manuscript_id,
+        "source": source,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "tokenization": {
+            "method": "nltk",
+            "model": "punkt",
+            "notes": "Paragraph-level token offsets generated via nltk.word_tokenize.",
+        },
+        "paragraphs": tokenized_paragraphs,
+    }
+
     write_jsonl(output_dir / "paragraphs.jsonl", paragraph_records)
     write_jsonl(output_dir / "sentences.jsonl", sentence_records)
     write_jsonl(output_dir / "words.jsonl", word_records)
+    (output_dir / "manuscript_tokens.json").write_text(
+        json.dumps(manuscript_tokens_artifact, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
     console = Console() if Console else None
     summary_lines = [
         f"Paragraphs: {len(paragraph_records)}",
         f"Sentences: {len(sentence_records)}",
         f"Words: {len(word_records)}",
+        f"Tokens artifact: {output_dir / 'manuscript_tokens.json'}",
         f"Output directory: {output_dir}",
     ]
     if console:
