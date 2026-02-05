@@ -38,6 +38,7 @@ class ToolEntry:
     name: str
     description: str
     signature: str
+    params_schema: Any
 
 
 @dataclass
@@ -128,22 +129,29 @@ def build_manifest(tools_dir: Path) -> List[ToolEntry]:
         signature = "run_tool(text_block, anchor, params=None)"
         if callable(run_tool):
             signature = str(inspect.signature(run_tool))
+        params_schema: Any = {}
+        if hasattr(module, "PARAMS_SCHEMA"):
+            params_schema = getattr(module, "PARAMS_SCHEMA")
+        elif hasattr(module, "PARAMS_DOC"):
+            params_schema = getattr(module, "PARAMS_DOC")
         manifest.append(
             ToolEntry(
                 name=tool_path.stem,
                 description=description,
                 signature=signature,
+                params_schema=params_schema,
             )
         )
     return manifest
 
 
-def manifest_payload(manifest: Iterable[ToolEntry]) -> List[Dict[str, str]]:
+def manifest_payload(manifest: Iterable[ToolEntry]) -> List[Dict[str, Any]]:
     return [
         {
             "name": entry.name,
             "description": entry.description,
             "signature": entry.signature,
+            "params_schema": entry.params_schema,
         }
         for entry in manifest
     ]
