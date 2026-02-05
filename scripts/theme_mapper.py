@@ -425,7 +425,9 @@ def write_topic_shift_json(
             chunks[idx].start_token_index,
             chunks[idx].end_token_index,
         )
-        paragraph_id_value = paragraph_range or (location_data["paragraph_id"] if location_data else None)
+        paragraph_id_value = (
+            location_data["paragraph_id"] if location_data else paragraph_range
+        )
         if not paragraph_id_value:
             continue
         location: dict[str, object] = {"paragraph_id": paragraph_id_value}
@@ -468,6 +470,10 @@ def write_topic_shift_json(
                         {
                             "name": "delta_threshold",
                             "value": threshold,
+                        },
+                        {
+                            "name": "paragraph_range",
+                            "value": paragraph_range,
                         },
                     ],
                 },

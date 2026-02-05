@@ -191,9 +191,14 @@ def write_csv(path: Path, scores: Sequence[SentenceScore]) -> None:
             )
 
 
-def write_json(path: Path, scores: Sequence[SentenceScore]) -> None:
-    payload = [
-        {
+def write_json(
+    path: Path,
+    scores: Sequence[SentenceScore],
+    locations: Optional[Sequence[SentenceLocation]] = None,
+) -> None:
+    payload = []
+    for idx, score in enumerate(scores):
+        entry = {
             "index": score.index,
             "sentence": score.sentence,
             "token_count": score.token_count,
@@ -202,8 +207,14 @@ def write_json(path: Path, scores: Sequence[SentenceScore]) -> None:
             "is_slop": score.is_slop,
             "transitions": score.transitions,
         }
-        for score in scores
-    ]
+        if locations and idx < len(locations):
+            location = locations[idx]
+            entry["location"] = {
+                "paragraph_id": location.paragraph_id,
+                "char_range": location.char_range,
+                "token_ids": location.token_ids,
+            }
+        payload.append(entry)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
@@ -505,7 +516,7 @@ def main() -> None:
         print(f"CSV saved to: {args.output_csv}")
 
     if args.output_json:
-        write_json(args.output_json, scores)
+        write_json(args.output_json, scores, sentence_locations if manuscript_tokens else None)
         print(f"JSON saved to: {args.output_json}")
 
     if args.output_edits:

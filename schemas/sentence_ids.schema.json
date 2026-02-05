@@ -17,8 +17,7 @@
   ],
   "properties": {
     "id": {
-      "type": "integer",
-      "minimum": 1,
+      "type": "string",
       "description": "Stable sentence identifier."
     },
     "order": {
@@ -27,13 +26,11 @@
       "description": "Zero-based sentence order in the manuscript."
     },
     "prev_id": {
-      "type": ["integer", "null"],
-      "minimum": 1,
+      "type": ["string", "null"],
       "description": "Previous sentence ID, or null for the first sentence."
     },
     "next_id": {
-      "type": ["integer", "null"],
-      "minimum": 1,
+      "type": ["string", "null"],
       "description": "Next sentence ID, or null for the last sentence."
     },
     "text": {
@@ -51,8 +48,7 @@
       "description": "End offset in the manuscript (exclusive)."
     },
     "paragraph_id": {
-      "type": "integer",
-      "minimum": 1,
+      "type": "string",
       "description": "Parent paragraph identifier."
     },
     "manuscript_id": {
