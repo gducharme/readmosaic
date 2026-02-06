@@ -219,7 +219,7 @@ def build_issue_maps(
     words: List[WordRecord],
     token_index: Dict[str, int],
     dedupe_scope: str,
-) -> tuple[List[int], List[List[IssueDetail]], int, Dict[Path, int]]:
+) -> tuple[List[int], List[List[IssueDetail]], Dict[str, List[IssueDetail]], int, Dict[Path, int]]:
     total_tokens = len(words)
     counts = [0 for _ in range(total_tokens)]
     issue_lists: List[List[IssueDetail]] = [[] for _ in range(total_tokens)]
@@ -227,6 +227,7 @@ def build_issue_maps(
     missing_tokens: Dict[str, int] = {}
     deduped_total = 0
     deduped_by_file: Dict[Path, int] = {}
+    paragraph_issue_lists: Dict[str, List[IssueDetail]] = {}
 
     paragraph_to_indices: Dict[str, List[int]] = {}
     sentence_to_indices: Dict[str, List[int]] = {}
@@ -270,9 +271,11 @@ def build_issue_maps(
             paragraph_id = location.get("paragraph_id")
             if isinstance(paragraph_id, str) and paragraph_id in paragraph_to_indices:
                 detail = format_issue(item, "paragraph")
+                paragraph_issue_lists.setdefault(paragraph_id, []).append(detail)
                 for idx in paragraph_to_indices[paragraph_id]:
                     counts[idx] += 1
-                    issue_lists[idx].append(detail)
+                    # Paragraph-level issues influence confidence at word-level,
+                    # but paragraph issue details are shown on the paragraph label.
 
     if missing_tokens:
         missing_sample = ", ".join(list(missing_tokens.keys())[:5])
@@ -280,7 +283,7 @@ def build_issue_maps(
             "Some token IDs referenced in edits were not found in manuscript_tokens.json: "
             f"{missing_sample}"
         )
-    return counts, issue_lists, deduped_total, deduped_by_file
+    return counts, issue_lists, paragraph_issue_lists, deduped_total, deduped_by_file
 
 
 def tooltip_html(details: List[IssueDetail]) -> str:
@@ -305,6 +308,7 @@ def render_html(
     words: List[WordRecord],
     normalized_counts: List[float],
     issue_lists: List[List[IssueDetail]],
+    paragraph_issue_lists: Dict[str, List[IssueDetail]],
     num_sources: int,
 ) -> str:
     total_score = 0.0
@@ -320,8 +324,13 @@ def render_html(
 
     for idx, word in enumerate(words):
         if word.paragraph_id != current_paragraph:
+            paragraph_label = f"Paragraph {html.escape(word.paragraph_id)}"
+            paragraph_tooltip = tooltip_html(paragraph_issue_lists.get(word.paragraph_id, []))
             token_chunks.append(
-                f'<div class="paragraph-label">Paragraph {html.escape(word.paragraph_id)}</div>'
+                '<div class="paragraph-label">'
+                f"{paragraph_label}"
+                f'<span class="tooltip">{paragraph_tooltip}</span>'
+                "</div>"
             )
             current_paragraph = word.paragraph_id
             current_sentence = None
@@ -362,9 +371,10 @@ def render_html(
     .summary {{ margin-bottom: 1.5rem; padding: 0.75rem 1rem; background: #1b1b1b; border: 1px solid #333; border-radius: 8px; }}
     .legend {{ color: #c9c9c9; font-size: 0.92rem; margin-top: 0.35rem; }}
     .review {{ line-height: 1.85; font-size: 1.05rem; }}
-    .paragraph-label {{ margin-top: 1.15rem; font-size: 0.86rem; color: #9aa0a6; font-weight: 700; }}
+    .paragraph-label {{ margin-top: 1.15rem; font-size: 0.86rem; color: #9aa0a6; font-weight: 700; position: relative; cursor: help; }}
     .sentence-label {{ margin-top: 0.5rem; font-size: 0.78rem; color: #7f8489; }}
     .word {{ position: relative; cursor: help; border-bottom: 1px dotted rgba(255,255,255,0.2); }}
+    .paragraph-label:hover .tooltip,
     .word:hover .tooltip {{ display: block; }}
     .tooltip {{
       display: none;
@@ -417,7 +427,7 @@ def main() -> None:
             "Run the Mosaic tools to generate edits outputs first."
         )
 
-    issue_counts, issue_lists, deduped_total, deduped_by_file = build_issue_maps(
+    issue_counts, issue_lists, paragraph_issue_lists, deduped_total, deduped_by_file = build_issue_maps(
         edits_files, words, token_index, args.dedupe_scope
     )
     tool_sources = {edits_file.parent.name for edits_file in edits_files}
@@ -433,7 +443,13 @@ def main() -> None:
         ):
             print(f"- {edits_file}: {deduped_count}")
 
-    html_output = render_html(words, normalized_counts, issue_lists, num_sources)
+    html_output = render_html(
+        words,
+        normalized_counts,
+        issue_lists,
+        paragraph_issue_lists,
+        num_sources,
+    )
     args.output.write_text(html_output, encoding="utf-8")
     print(f"Wrote HTML review: {args.output}")
 
