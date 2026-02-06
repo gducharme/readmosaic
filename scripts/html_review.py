@@ -434,6 +434,24 @@ def render_html(
     .tooltip ul {{ margin: 0; padding-left: 1rem; }}
     .tooltip li {{ margin-bottom: 0.6rem; }}
     code {{ color: #ffb3a8; }}
+    .copy-toast {{
+      position: fixed;
+      right: 1rem;
+      bottom: 1rem;
+      background: rgba(27, 27, 27, 0.95);
+      border: 1px solid #3d3d3d;
+      border-radius: 8px;
+      padding: 0.5rem 0.75rem;
+      font-size: 0.85rem;
+      opacity: 0;
+      transform: translateY(8px);
+      transition: opacity 140ms ease, transform 140ms ease;
+      pointer-events: none;
+    }}
+    .copy-toast.show {{
+      opacity: 1;
+      transform: translateY(0);
+    }}
   </style>
 </head>
 <body>
@@ -442,6 +460,59 @@ def render_html(
     <div class="legend">Legend: deep green (clean) → light green → yellow → orange → coral-red (confidence based on normalized issue rate, count / {num_sources} source(s)).</div>
   </div>
   <div class="review">{''.join(token_chunks)}</div>
+  <div id="copy-toast" class="copy-toast" role="status" aria-live="polite"></div>
+  <script>
+    (() => {{
+      const toast = document.getElementById('copy-toast');
+      let toastTimeout;
+
+      const showToast = (message) => {{
+        if (!toast) return;
+        toast.textContent = message;
+        toast.classList.add('show');
+        window.clearTimeout(toastTimeout);
+        toastTimeout = window.setTimeout(() => toast.classList.remove('show'), 1700);
+      }};
+
+      const copyText = async (text) => {{
+        if (!text) return false;
+        if (navigator.clipboard && window.isSecureContext) {{
+          try {{
+            await navigator.clipboard.writeText(text);
+            return true;
+          }} catch (_error) {{
+            // Fallback to execCommand below.
+          }}
+        }}
+
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.setAttribute('readonly', '');
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        const success = document.execCommand('copy');
+        document.body.removeChild(textarea);
+        return success;
+      }};
+
+      const clickableSelectors = ['.word', '.sentence-label', '.paragraph-label'];
+      document.querySelectorAll(clickableSelectors.join(',')).forEach((element) => {{
+        element.addEventListener('click', async (event) => {{
+          event.stopPropagation();
+          const tooltip = element.querySelector('.tooltip');
+          const content = tooltip ? tooltip.innerText.trim() : '';
+          if (!content) {{
+            showToast('Nothing to copy.');
+            return;
+          }}
+          const copied = await copyText(content);
+          showToast(copied ? 'Issue details copied to clipboard.' : 'Unable to copy issue details.');
+        }});
+      }});
+    }})();
+  </script>
 </body>
 </html>
 """
