@@ -222,26 +222,27 @@ def build_issue_maps(
 ) -> tuple[
     List[int],
     List[List[IssueDetail]],
+    Dict[str, int],
     Dict[str, List[IssueDetail]],
+    Dict[str, int],
     Dict[str, List[IssueDetail]],
     int,
     Dict[Path, int],
 ]:
     total_tokens = len(words)
-    counts = [0 for _ in range(total_tokens)]
-    issue_lists: List[List[IssueDetail]] = [[] for _ in range(total_tokens)]
+    word_counts = [0 for _ in range(total_tokens)]
+    word_issue_lists: List[List[IssueDetail]] = [[] for _ in range(total_tokens)]
 
     missing_tokens: Dict[str, int] = {}
     deduped_total = 0
     deduped_by_file: Dict[Path, int] = {}
     paragraph_issue_lists: Dict[str, List[IssueDetail]] = {}
+    paragraph_counts: Dict[str, int] = {}
     sentence_issue_lists: Dict[str, List[IssueDetail]] = {}
+    sentence_counts: Dict[str, int] = {}
 
-    paragraph_to_indices: Dict[str, List[int]] = {}
-    sentence_to_indices: Dict[str, List[int]] = {}
-    for idx, word in enumerate(words):
-        paragraph_to_indices.setdefault(word.paragraph_id, []).append(idx)
-        sentence_to_indices.setdefault(word.sentence_id, []).append(idx)
+    paragraph_ids = {word.paragraph_id for word in words}
+    sentence_ids = {word.sentence_id for word in words}
 
     for edits_file in edits_files:
         payload = json.loads(edits_file.read_text(encoding="utf-8"))
@@ -265,26 +266,21 @@ def build_issue_maps(
                         continue
                     idx = token_index[token_id]
                     if 0 <= idx < total_tokens:
-                        counts[idx] += 1
-                        issue_lists[idx].append(detail)
+                        word_counts[idx] += 1
+                        word_issue_lists[idx].append(detail)
 
-            for sentence_id in sentence_ids_from_item(item):
-                if sentence_id not in sentence_to_indices:
-                    continue
+            sentence_ids_in_item = [sid for sid in sentence_ids_from_item(item) if sid in sentence_ids]
+            if sentence_ids_in_item:
                 detail = format_issue(item, "sentence")
-                sentence_issue_lists.setdefault(sentence_id, []).append(detail)
-                for idx in sentence_to_indices[sentence_id]:
-                    counts[idx] += 1
-                    issue_lists[idx].append(detail)
+                for sentence_id in sentence_ids_in_item:
+                    sentence_counts[sentence_id] = sentence_counts.get(sentence_id, 0) + 1
+                    sentence_issue_lists.setdefault(sentence_id, []).append(detail)
 
             paragraph_id = location.get("paragraph_id")
-            if isinstance(paragraph_id, str) and paragraph_id in paragraph_to_indices:
+            if isinstance(paragraph_id, str) and paragraph_id in paragraph_ids:
                 detail = format_issue(item, "paragraph")
+                paragraph_counts[paragraph_id] = paragraph_counts.get(paragraph_id, 0) + 1
                 paragraph_issue_lists.setdefault(paragraph_id, []).append(detail)
-                for idx in paragraph_to_indices[paragraph_id]:
-                    counts[idx] += 1
-                    # Paragraph-level issues influence confidence at word-level,
-                    # but paragraph issue details are shown on the paragraph label.
 
     if missing_tokens:
         missing_sample = ", ".join(list(missing_tokens.keys())[:5])
@@ -293,18 +289,20 @@ def build_issue_maps(
             f"{missing_sample}"
         )
     return (
-        counts,
-        issue_lists,
+        word_counts,
+        word_issue_lists,
+        sentence_counts,
         sentence_issue_lists,
+        paragraph_counts,
         paragraph_issue_lists,
         deduped_total,
         deduped_by_file,
     )
 
 
-def tooltip_html(details: List[IssueDetail]) -> str:
+def tooltip_html(details: List[IssueDetail], empty_message: str) -> str:
     if not details:
-        return "No detections mapped to this word."
+        return html.escape(empty_message)
     rows = []
     for detail in details:
         rows.append(
@@ -322,14 +320,16 @@ def tooltip_html(details: List[IssueDetail]) -> str:
 
 def render_html(
     words: List[WordRecord],
-    normalized_counts: List[float],
-    issue_lists: List[List[IssueDetail]],
+    word_normalized_counts: List[float],
+    word_issue_lists: List[List[IssueDetail]],
+    sentence_normalized_counts: Dict[str, float],
     sentence_issue_lists: Dict[str, List[IssueDetail]],
+    paragraph_normalized_counts: Dict[str, float],
     paragraph_issue_lists: Dict[str, List[IssueDetail]],
     num_sources: int,
 ) -> str:
     total_score = 0.0
-    for normalized_count in normalized_counts:
+    for normalized_count in word_normalized_counts:
         score, _ = confidence_for_count(normalized_count)
         total_score += score
     avg_confidence = total_score / len(words) if words else 1.0
@@ -338,16 +338,20 @@ def render_html(
     current_paragraph = None
     current_sentence = None
     prev_token: Optional[str] = None
-    sentence_to_indices: Dict[str, List[int]] = {}
-    for idx, word in enumerate(words):
-        sentence_to_indices.setdefault(word.sentence_id, []).append(idx)
 
     for idx, word in enumerate(words):
         if word.paragraph_id != current_paragraph:
+            paragraph_score = paragraph_normalized_counts.get(word.paragraph_id, 0.0)
+            _, paragraph_color = confidence_for_count(paragraph_score)
             paragraph_label = f"Paragraph {html.escape(word.paragraph_id)}"
-            paragraph_tooltip = tooltip_html(paragraph_issue_lists.get(word.paragraph_id, []))
+            paragraph_tooltip = tooltip_html(
+                paragraph_issue_lists.get(word.paragraph_id, []),
+                "No paragraph-level detections.",
+            )
             token_chunks.append(
-                '<div class="paragraph-label">'
+                '<div class="paragraph-label"'
+                f' style="color:{paragraph_color}; border-left-color:{paragraph_color};"'
+                ">"
                 f"{paragraph_label}"
                 f'<span class="tooltip">{paragraph_tooltip}</span>'
                 "</div>"
@@ -357,77 +361,56 @@ def render_html(
             prev_token = None
 
         if word.sentence_id != current_sentence:
-            sentence_issues = sentence_issue_lists.get(word.sentence_id, [])
-            if sentence_issues:
-                sentence_indices = sentence_to_indices.get(word.sentence_id, [])
-                sentence_avg = (
-                    sum(normalized_counts[index] for index in sentence_indices) / len(sentence_indices)
-                    if sentence_indices
-                    else 0.0
-                )
-                _, sentence_color = confidence_for_count(sentence_avg)
-                sentence_tooltip = tooltip_html(sentence_issues)
-                token_chunks.append(
-                    '<div class="sentence-label sentence-has-issues"'
-                    f' style="color:{sentence_color}; border-left-color:{sentence_color};"'
-                    ">"
-                    f"Sentence {html.escape(word.sentence_id)}"
-                    f'<span class="tooltip">{sentence_tooltip}</span>'
-                    "</div>"
-                )
-            else:
-                token_chunks.append(
-                    f'<div class="sentence-label">Sentence {html.escape(word.sentence_id)}</div>'
-                )
+            sentence_score = sentence_normalized_counts.get(word.sentence_id, 0.0)
+            _, sentence_color = confidence_for_count(sentence_score)
+            sentence_tooltip = tooltip_html(
+                sentence_issue_lists.get(word.sentence_id, []),
+                "No sentence-level detections.",
+            )
+            token_chunks.append(
+                '<div class="sentence-label"'
+                f' style="color:{sentence_color}; border-left-color:{sentence_color};"'
+                ">"
+                f"Sentence {html.escape(word.sentence_id)}"
+                f'<span class="tooltip">{sentence_tooltip}</span>'
+                "</div>"
+            )
             current_sentence = word.sentence_id
             prev_token = None
 
         if should_prefix_space(word.text, prev_token):
             token_chunks.append(" ")
 
-        _, color = confidence_for_count(normalized_counts[idx])
-        word_issues = issue_lists[idx]
-        if word_issues:
-            tooltip = tooltip_html(word_issues)
-            token_chunks.append(
-                "<span class=\"word word-has-issues\""
-                f" style=\"color:{color}; border-bottom-color:{color};\""
-                f" data-count=\"{normalized_counts[idx]:.3f}\""
-                f" data-issues=\"{len(word_issues)}\""
-                ">"
-                f"{html.escape(word.text)}"
-                f"<span class=\"tooltip\">{tooltip}</span>"
-                "</span>"
-            )
-        else:
-            token_chunks.append(
-                "<span class=\"word\""
-                f" style=\"color:{color};\""
-                f" data-count=\"{normalized_counts[idx]:.3f}\""
-                " >"
-                f"{html.escape(word.text)}"
-                "</span>"
-            )
+        _, color = confidence_for_count(word_normalized_counts[idx])
+        word_tooltip = tooltip_html(word_issue_lists[idx], "No word-level detections.")
+        token_chunks.append(
+            "<span class=\"word\""
+            f" style=\"color:{color}; border-bottom-color:{color};\""
+            f" data-count=\"{word_normalized_counts[idx]:.3f}\""
+            f" data-issues=\"{len(word_issue_lists[idx])}\""
+            ">"
+            f"{html.escape(word.text)}"
+            f"<span class=\"tooltip\">{word_tooltip}</span>"
+            "</span>"
+        )
         prev_token = word.text
 
     return f"""<!doctype html>
-<html lang=\"en\">
+<html lang="en">
 <head>
-  <meta charset=\"utf-8\" />
-  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Mosaic HTML Review</title>
   <style>
     body {{ font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 2rem; background: #111; color: #f7f7f7; }}
     .summary {{ margin-bottom: 1.5rem; padding: 0.75rem 1rem; background: #1b1b1b; border: 1px solid #333; border-radius: 8px; }}
     .legend {{ color: #c9c9c9; font-size: 0.92rem; margin-top: 0.35rem; }}
     .review {{ line-height: 1.85; font-size: 1.05rem; }}
-    .paragraph-label {{ margin-top: 1.15rem; font-size: 0.86rem; color: #9aa0a6; font-weight: 700; position: relative; cursor: help; }}
-    .sentence-label {{ margin-top: 0.5rem; font-size: 0.78rem; color: #7f8489; }}
-    .sentence-has-issues {{ position: relative; cursor: help; display: inline-block; border-left: 3px solid; padding-left: 0.45rem; border-radius: 3px; }}
-    .word {{ position: relative; }}
-    .word-has-issues {{ cursor: help; border-bottom: 1px dotted rgba(255,255,255,0.2); }}
+    .paragraph-label {{ margin-top: 1.15rem; font-size: 0.86rem; font-weight: 700; position: relative; cursor: help; display: inline-block; border-left: 3px solid; padding-left: 0.45rem; border-radius: 3px; }}
+    .sentence-label {{ margin-top: 0.5rem; font-size: 0.78rem; position: relative; cursor: help; display: inline-block; border-left: 3px solid; padding-left: 0.45rem; border-radius: 3px; }}
+    .word {{ position: relative; cursor: help; border-bottom: 1px dotted rgba(255,255,255,0.2); }}
     .paragraph-label:hover .tooltip,
-    .sentence-has-issues:hover .tooltip,
+    .sentence-label:hover .tooltip,
     .word:hover .tooltip {{ display: block; }}
     .tooltip {{
       display: none;
@@ -454,11 +437,11 @@ def render_html(
   </style>
 </head>
 <body>
-  <div class=\"summary\">
+  <div class="summary">
     <div><strong>Overall confidence:</strong> {avg_confidence:.2%} across {len(words)} tokens</div>
-    <div class=\"legend\">Legend: deep green (clean) → light green → yellow → orange → coral-red (confidence based on normalized issue rate, count / {num_sources} source(s)).</div>
+    <div class="legend">Legend: deep green (clean) → light green → yellow → orange → coral-red (confidence based on normalized issue rate, count / {num_sources} source(s)).</div>
   </div>
-  <div class=\"review\">{''.join(token_chunks)}</div>
+  <div class="review">{''.join(token_chunks)}</div>
 </body>
 </html>
 """
@@ -481,9 +464,11 @@ def main() -> None:
         )
 
     (
-        issue_counts,
-        issue_lists,
+        word_counts,
+        word_issue_lists,
+        sentence_counts,
         sentence_issue_lists,
+        paragraph_counts,
         paragraph_issue_lists,
         deduped_total,
         deduped_by_file,
@@ -494,7 +479,14 @@ def main() -> None:
     num_sources = len(tool_sources) or len(edits_files)
     if num_sources == 0:
         num_sources = 1
-    normalized_counts = [count / num_sources for count in issue_counts]
+
+    word_normalized_counts = [count / num_sources for count in word_counts]
+    sentence_normalized_counts = {
+        sentence_id: count / num_sources for sentence_id, count in sentence_counts.items()
+    }
+    paragraph_normalized_counts = {
+        paragraph_id: count / num_sources for paragraph_id, count in paragraph_counts.items()
+    }
 
     if deduped_total:
         print(f"Deduped {deduped_total} repeated token reference(s) (scope: {args.dedupe_scope}).")
@@ -505,9 +497,11 @@ def main() -> None:
 
     html_output = render_html(
         words,
-        normalized_counts,
-        issue_lists,
+        word_normalized_counts,
+        word_issue_lists,
+        sentence_normalized_counts,
         sentence_issue_lists,
+        paragraph_normalized_counts,
         paragraph_issue_lists,
         num_sources,
     )
