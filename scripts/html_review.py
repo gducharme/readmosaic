@@ -243,6 +243,7 @@ def build_issue_maps(
     Dict[str, List[IssueDetail]],
     int,
     Dict[Path, int],
+    Dict[str, int],
 ]:
     total_tokens = len(words)
     word_counts = [0 for _ in range(total_tokens)]
@@ -317,12 +318,6 @@ def build_issue_maps(
                 paragraph_counts[paragraph_id] = paragraph_counts.get(paragraph_id, 0) + 1
                 paragraph_issue_lists.setdefault(paragraph_id, []).append(detail)
 
-    if missing_tokens:
-        missing_sample = ", ".join(list(missing_tokens.keys())[:5])
-        raise ValueError(
-            "Some token IDs referenced in edits were not found in manuscript_tokens.json: "
-            f"{missing_sample}"
-        )
     return (
         word_counts,
         word_issue_lists,
@@ -332,7 +327,31 @@ def build_issue_maps(
         paragraph_issue_lists,
         deduped_total,
         deduped_by_file,
+        missing_tokens,
     )
+
+
+def maybe_use_edits_preprocessed(
+    preprocessed_dir: Path,
+    edits_root: Path,
+    missing_tokens: Dict[str, int],
+) -> Optional[Path]:
+    candidate = edits_root / "preprocessing"
+    if candidate.resolve() == preprocessed_dir.resolve():
+        return None
+    if not missing_tokens:
+        return None
+    if not (candidate / "words.jsonl").exists() or not (candidate / "manuscript_tokens.json").exists():
+        return None
+
+    candidate_index = load_token_index(candidate / "manuscript_tokens.json")
+    if not candidate_index:
+        return None
+
+    # Switch only when candidate clearly explains all currently missing token IDs.
+    if all(token_id in candidate_index for token_id in missing_tokens):
+        return candidate
+    return None
 
 
 def tooltip_html(details: List[IssueDetail], empty_message: str) -> str:
@@ -578,9 +597,43 @@ def main() -> None:
         paragraph_issue_lists,
         deduped_total,
         deduped_by_file,
+        missing_tokens,
     ) = build_issue_maps(
-        edits_files, words, token_index, args.dedupe_scope
+        edits_files,
+        words,
+        token_index,
+        args.dedupe_scope,
     )
+
+    fallback_preprocessed = maybe_use_edits_preprocessed(
+        preprocessed_dir,
+        args.edits_root,
+        missing_tokens,
+    )
+    if fallback_preprocessed:
+        print(
+            "Detected token ID mismatch between --preprocessed and --edits-root outputs; "
+            f"reloading tokens/words from {fallback_preprocessed}."
+        )
+        preprocessed_dir = fallback_preprocessed
+        words = load_words(preprocessed_dir / "words.jsonl")
+        token_index = load_token_index(preprocessed_dir / "manuscript_tokens.json")
+        (
+            word_counts,
+            word_issue_lists,
+            sentence_counts,
+            sentence_issue_lists,
+            paragraph_counts,
+            paragraph_issue_lists,
+            deduped_total,
+            deduped_by_file,
+            missing_tokens,
+        ) = build_issue_maps(
+            edits_files,
+            words,
+            token_index,
+            args.dedupe_scope,
+        )
     tool_sources = {edits_file.parent.name for edits_file in edits_files}
     num_sources = len(tool_sources) or len(edits_files)
     if num_sources == 0:
@@ -600,6 +653,16 @@ def main() -> None:
             deduped_by_file.items(), key=lambda item: item[1], reverse=True
         ):
             print(f"- {edits_file}: {deduped_count}")
+
+    if missing_tokens:
+        total_missing_refs = sum(missing_tokens.values())
+        print(
+            "Warning: ignored "
+            f"{total_missing_refs} missing token reference(s) across {len(missing_tokens)} token ID(s)."
+        )
+        missing_sample = ", ".join(list(sorted(missing_tokens.keys()))[:5])
+        print(f"- Example missing token IDs: {missing_sample}")
+        print("- Use --strict-missing-tokens to fail on missing token IDs.")
 
     html_output = render_html(
         words,
