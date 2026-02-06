@@ -19,10 +19,10 @@ from typing import Dict, Iterable, List, Optional
 
 CONFIDENCE_LEVELS = (
     (0.0, 1.0, "#1f7a3d"),
-    (0.25, 0.8, "#3aa45e"),
-    (0.5, 0.6, "#c09a2d"),
-    (0.75, 0.4, "#e57a44"),
-    (1.0, 0.2, "#ff6f61"),
+    (0.25, 0.8, "#d1b21f"),
+    (0.5, 0.6, "#e38b2c"),
+    (0.75, 0.4, "#d24b4b"),
+    (1.0, 0.2, "#8e3e8f"),
 )
 
 PUNCTUATION_CLOSERS = {
@@ -492,7 +492,7 @@ def render_html(
 <body>
   <div class="summary">
     <div><strong>Overall confidence:</strong> {avg_confidence:.2%} across {len(words)} tokens</div>
-    <div class="legend">Legend: deep green (clean) → light green → yellow → orange → coral-red (confidence based on normalized issue rate, count / {num_sources} source(s)).</div>
+    <div class="legend">Legend: green (clean) → yellow → orange → red → purple-red (confidence based on normalized issue rate, count / {num_sources} source(s)).</div>
   </div>
   <div class="review">{''.join(token_chunks)}</div>
   <div id="copy-toast" class="copy-toast" role="status" aria-live="polite"></div>
