@@ -214,6 +214,21 @@ def sentence_ids_from_item(item: dict) -> List[str]:
     return sorted(set(sentence_ids))
 
 
+def sentence_ids_from_token_ids(
+    token_ids: Iterable[str],
+    token_index: Dict[str, int],
+    words: List[WordRecord],
+) -> List[str]:
+    sentence_ids: set[str] = set()
+    for token_id in token_ids:
+        token_position = token_index.get(token_id)
+        if token_position is None:
+            continue
+        if 0 <= token_position < len(words):
+            sentence_ids.add(words[token_position].sentence_id)
+    return sorted(sentence_ids)
+
+
 def build_issue_maps(
     edits_files: Iterable[Path],
     words: List[WordRecord],
@@ -269,7 +284,15 @@ def build_issue_maps(
                         word_counts[idx] += 1
                         word_issue_lists[idx].append(detail)
 
-            sentence_ids_in_item = [sid for sid in sentence_ids_from_item(item) if sid in sentence_ids]
+            sentence_ids_in_item = [
+                sid for sid in sentence_ids_from_item(item) if sid in sentence_ids
+            ]
+            if not sentence_ids_in_item and token_ids:
+                sentence_ids_in_item = sentence_ids_from_token_ids(
+                    token_ids,
+                    token_index,
+                    words,
+                )
             if sentence_ids_in_item:
                 detail = format_issue(item, "sentence")
                 for sentence_id in sentence_ids_in_item:
@@ -277,7 +300,19 @@ def build_issue_maps(
                     sentence_issue_lists.setdefault(sentence_id, []).append(detail)
 
             paragraph_id = location.get("paragraph_id")
-            if isinstance(paragraph_id, str) and paragraph_id in paragraph_ids:
+            detector_name = str(
+                (item.get("evidence", {}) if isinstance(item.get("evidence"), dict) else {}).get(
+                    "detector", ""
+                )
+            )
+            skip_paragraph_attachment = (
+                detector_name == "surprisal_scout" and bool(sentence_ids_in_item)
+            )
+            if (
+                isinstance(paragraph_id, str)
+                and paragraph_id in paragraph_ids
+                and not skip_paragraph_attachment
+            ):
                 detail = format_issue(item, "paragraph")
                 paragraph_counts[paragraph_id] = paragraph_counts.get(paragraph_id, 0) + 1
                 paragraph_issue_lists.setdefault(paragraph_id, []).append(detail)
