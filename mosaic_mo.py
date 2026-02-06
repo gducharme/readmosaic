@@ -28,6 +28,7 @@ DEFAULT_BASE_URL = "http://localhost:1234/v1/chat/completions"
 DEFAULT_PROMPT_PATH = Path("prompts/Archivist_Core_V1.txt")
 NLTK_BOOTSTRAP_PATH = Path("scripts/setup_nltk_data.py")
 PREPROCESSING_PATH = Path("scripts/pre_processing.py")
+PARAGRAPH_BUNDLE_PATH = Path("scripts/paragraph_issue_bundle.py")
 DEFAULT_LM_TIMEOUT_S = 300
 
 
@@ -300,6 +301,52 @@ def run_preprocessing(input_path: Path, output_root: Path) -> Path:
     return preprocessing_dir
 
 
+def build_paragraph_issue_bundle(
+    preprocessing_dir: Path,
+    tool_results: List[Dict[str, Any]],
+    output_root: Path,
+    manuscript_id: str,
+) -> Path:
+    if not PARAGRAPH_BUNDLE_PATH.exists():
+        raise SystemExit(
+            f"Paragraph issue bundle script not found: {PARAGRAPH_BUNDLE_PATH}"
+        )
+
+    tool_results_path = output_root / "tool_results.json"
+    tool_results_path.write_text(json.dumps(tool_results, indent=2), encoding="utf-8")
+
+    bundle_path = output_root / "paragraph_issue_bundle.json"
+    subprocess.run(
+        [
+            sys.executable,
+            str(PARAGRAPH_BUNDLE_PATH),
+            "--preprocessing",
+            str(preprocessing_dir),
+            "--tool-results",
+            str(tool_results_path),
+            "--output",
+            str(bundle_path),
+            "--manuscript-id",
+            manuscript_id,
+        ],
+        check=True,
+    )
+    return bundle_path
+
+
+def load_issues_from_bundle(bundle_path: Path) -> List[Dict[str, Any]]:
+    payload = json.loads(bundle_path.read_text(encoding="utf-8"))
+    items = payload.get("items", []) if isinstance(payload, dict) else []
+    issues: List[Dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        for issue in item.get("issues", []):
+            if isinstance(issue, dict):
+                issues.append(issue)
+    return issues
+
+
 def call_lm_studio(
     base_url: str,
     model: str,
@@ -349,7 +396,13 @@ def main() -> None:
     tool_results = run_tools_with_progress(
         args.file, output_root, args.max_workers, preprocessing_dir
     )
-    issues = load_issues_from_tool_results(tool_results)
+    paragraph_bundle_path = build_paragraph_issue_bundle(
+        preprocessing_dir,
+        tool_results,
+        output_root,
+        args.file.stem,
+    )
+    issues = load_issues_from_bundle(paragraph_bundle_path)
     objectives_payload = build_objectives_payload(args.file.stem, issues)
     objectives_path = output_root / "edit_objectives.json"
     objectives_path.write_text(json.dumps(objectives_payload, indent=2), encoding="utf-8")
@@ -394,6 +447,7 @@ def main() -> None:
     console.print(f"- Culling Directives: {directives_path}")
     console.print(f"- Edit Objectives: {objectives_path}")
     console.print(f"- Proposal Payload: {proposals_path}")
+    console.print(f"- Paragraph Issue Bundle: {paragraph_bundle_path}")
 
 
 if __name__ == "__main__":
