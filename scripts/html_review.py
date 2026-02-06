@@ -219,7 +219,14 @@ def build_issue_maps(
     words: List[WordRecord],
     token_index: Dict[str, int],
     dedupe_scope: str,
-) -> tuple[List[int], List[List[IssueDetail]], Dict[str, List[IssueDetail]], int, Dict[Path, int]]:
+) -> tuple[
+    List[int],
+    List[List[IssueDetail]],
+    Dict[str, List[IssueDetail]],
+    Dict[str, List[IssueDetail]],
+    int,
+    Dict[Path, int],
+]:
     total_tokens = len(words)
     counts = [0 for _ in range(total_tokens)]
     issue_lists: List[List[IssueDetail]] = [[] for _ in range(total_tokens)]
@@ -228,6 +235,7 @@ def build_issue_maps(
     deduped_total = 0
     deduped_by_file: Dict[Path, int] = {}
     paragraph_issue_lists: Dict[str, List[IssueDetail]] = {}
+    sentence_issue_lists: Dict[str, List[IssueDetail]] = {}
 
     paragraph_to_indices: Dict[str, List[int]] = {}
     sentence_to_indices: Dict[str, List[int]] = {}
@@ -264,6 +272,7 @@ def build_issue_maps(
                 if sentence_id not in sentence_to_indices:
                     continue
                 detail = format_issue(item, "sentence")
+                sentence_issue_lists.setdefault(sentence_id, []).append(detail)
                 for idx in sentence_to_indices[sentence_id]:
                     counts[idx] += 1
                     issue_lists[idx].append(detail)
@@ -283,7 +292,14 @@ def build_issue_maps(
             "Some token IDs referenced in edits were not found in manuscript_tokens.json: "
             f"{missing_sample}"
         )
-    return counts, issue_lists, paragraph_issue_lists, deduped_total, deduped_by_file
+    return (
+        counts,
+        issue_lists,
+        sentence_issue_lists,
+        paragraph_issue_lists,
+        deduped_total,
+        deduped_by_file,
+    )
 
 
 def tooltip_html(details: List[IssueDetail]) -> str:
@@ -308,6 +324,7 @@ def render_html(
     words: List[WordRecord],
     normalized_counts: List[float],
     issue_lists: List[List[IssueDetail]],
+    sentence_issue_lists: Dict[str, List[IssueDetail]],
     paragraph_issue_lists: Dict[str, List[IssueDetail]],
     num_sources: int,
 ) -> str:
@@ -321,6 +338,9 @@ def render_html(
     current_paragraph = None
     current_sentence = None
     prev_token: Optional[str] = None
+    sentence_to_indices: Dict[str, List[int]] = {}
+    for idx, word in enumerate(words):
+        sentence_to_indices.setdefault(word.sentence_id, []).append(idx)
 
     for idx, word in enumerate(words):
         if word.paragraph_id != current_paragraph:
@@ -337,9 +357,28 @@ def render_html(
             prev_token = None
 
         if word.sentence_id != current_sentence:
-            token_chunks.append(
-                f'<div class="sentence-label">Sentence {html.escape(word.sentence_id)}</div>'
-            )
+            sentence_issues = sentence_issue_lists.get(word.sentence_id, [])
+            if sentence_issues:
+                sentence_indices = sentence_to_indices.get(word.sentence_id, [])
+                sentence_avg = (
+                    sum(normalized_counts[index] for index in sentence_indices) / len(sentence_indices)
+                    if sentence_indices
+                    else 0.0
+                )
+                _, sentence_color = confidence_for_count(sentence_avg)
+                sentence_tooltip = tooltip_html(sentence_issues)
+                token_chunks.append(
+                    '<div class="sentence-label sentence-has-issues"'
+                    f' style="color:{sentence_color}; border-left-color:{sentence_color};"'
+                    ">"
+                    f"Sentence {html.escape(word.sentence_id)}"
+                    f'<span class="tooltip">{sentence_tooltip}</span>'
+                    "</div>"
+                )
+            else:
+                token_chunks.append(
+                    f'<div class="sentence-label">Sentence {html.escape(word.sentence_id)}</div>'
+                )
             current_sentence = word.sentence_id
             prev_token = None
 
@@ -347,17 +386,28 @@ def render_html(
             token_chunks.append(" ")
 
         _, color = confidence_for_count(normalized_counts[idx])
-        tooltip = tooltip_html(issue_lists[idx])
-        token_chunks.append(
-            "<span class=\"word\""
-            f" style=\"color:{color};\""
-            f" data-count=\"{normalized_counts[idx]:.3f}\""
-            f" data-issues=\"{len(issue_lists[idx])}\""
-            ">"
-            f"{html.escape(word.text)}"
-            f"<span class=\"tooltip\">{tooltip}</span>"
-            "</span>"
-        )
+        word_issues = issue_lists[idx]
+        if word_issues:
+            tooltip = tooltip_html(word_issues)
+            token_chunks.append(
+                "<span class=\"word word-has-issues\""
+                f" style=\"color:{color}; border-bottom-color:{color};\""
+                f" data-count=\"{normalized_counts[idx]:.3f}\""
+                f" data-issues=\"{len(word_issues)}\""
+                ">"
+                f"{html.escape(word.text)}"
+                f"<span class=\"tooltip\">{tooltip}</span>"
+                "</span>"
+            )
+        else:
+            token_chunks.append(
+                "<span class=\"word\""
+                f" style=\"color:{color};\""
+                f" data-count=\"{normalized_counts[idx]:.3f}\""
+                " >"
+                f"{html.escape(word.text)}"
+                "</span>"
+            )
         prev_token = word.text
 
     return f"""<!doctype html>
@@ -373,8 +423,11 @@ def render_html(
     .review {{ line-height: 1.85; font-size: 1.05rem; }}
     .paragraph-label {{ margin-top: 1.15rem; font-size: 0.86rem; color: #9aa0a6; font-weight: 700; position: relative; cursor: help; }}
     .sentence-label {{ margin-top: 0.5rem; font-size: 0.78rem; color: #7f8489; }}
-    .word {{ position: relative; cursor: help; border-bottom: 1px dotted rgba(255,255,255,0.2); }}
+    .sentence-has-issues {{ position: relative; cursor: help; display: inline-block; border-left: 3px solid; padding-left: 0.45rem; border-radius: 3px; }}
+    .word {{ position: relative; }}
+    .word-has-issues {{ cursor: help; border-bottom: 1px dotted rgba(255,255,255,0.2); }}
     .paragraph-label:hover .tooltip,
+    .sentence-has-issues:hover .tooltip,
     .word:hover .tooltip {{ display: block; }}
     .tooltip {{
       display: none;
@@ -427,7 +480,14 @@ def main() -> None:
             "Run the Mosaic tools to generate edits outputs first."
         )
 
-    issue_counts, issue_lists, paragraph_issue_lists, deduped_total, deduped_by_file = build_issue_maps(
+    (
+        issue_counts,
+        issue_lists,
+        sentence_issue_lists,
+        paragraph_issue_lists,
+        deduped_total,
+        deduped_by_file,
+    ) = build_issue_maps(
         edits_files, words, token_index, args.dedupe_scope
     )
     tool_sources = {edits_file.parent.name for edits_file in edits_files}
@@ -447,6 +507,7 @@ def main() -> None:
         words,
         normalized_counts,
         issue_lists,
+        sentence_issue_lists,
         paragraph_issue_lists,
         num_sources,
     )
