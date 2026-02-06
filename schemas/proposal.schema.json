@@ -3,34 +3,65 @@
   "$id": "https://readmosaic/schemas/proposal.schema.json",
   "title": "Fix proposal payload",
   "type": "object",
-  "required": ["schema_version", "manuscript_id", "items"],
+  "required": [
+    "schema_version",
+    "manuscript_id",
+    "items"
+  ],
   "properties": {
-    "schema_version": {"type": "string"},
-    "manuscript_id": {"type": "string"},
-    "created_at": {"type": "string", "format": "date-time"},
+    "schema_version": {
+      "type": "string"
+    },
+    "manuscript_id": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
     "items": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["issue_id", "proposal_id", "edit"],
+        "required": [
+          "issue_id",
+          "proposal_id",
+          "edit"
+        ],
         "properties": {
-          "issue_id": {"type": "string"},
-          "proposal_id": {"type": "string"},
-          "rationale": {"type": "string"},
+          "issue_id": {
+            "type": "string"
+          },
+          "proposal_id": {
+            "type": "string"
+          },
+          "rationale": {
+            "type": "string"
+          },
           "constraints": {
             "type": "array",
-            "items": {"type": "string"}
+            "items": {
+              "type": "string"
+            }
           },
           "edit": {
             "type": "object",
-            "required": ["patch"],
+            "required": [
+              "patch"
+            ],
             "properties": {
-              "patch": {"$ref": "patch.schema.json"},
+              "patch": {
+                "$ref": "patch.schema.json"
+              },
               "preview": {
                 "type": "object",
                 "properties": {
-                  "before": {"type": "string"},
-                  "after": {"type": "string"}
+                  "before": {
+                    "type": "string"
+                  },
+                  "after": {
+                    "type": "string"
+                  }
                 },
                 "additionalProperties": false
               }
@@ -40,27 +71,45 @@
           "verification": {
             "type": "object",
             "properties": {
-              "status": {"type": "string", "enum": ["pending", "pass", "fail"]},
+              "status": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "pass",
+                  "fail"
+                ]
+              },
               "scores": {
                 "type": "array",
                 "items": {
                   "type": "object",
                   "properties": {
-                    "metric": {"type": "string"},
+                    "metric": {
+                      "type": "string"
+                    },
                     "value": {},
                     "delta": {}
                   },
-                  "required": ["metric", "value"],
+                  "required": [
+                    "metric",
+                    "value"
+                  ],
                   "additionalProperties": true
                 }
               },
-              "notes": {"type": "string"}
+              "notes": {
+                "type": "string"
+              }
             },
             "additionalProperties": false
           },
           "metadata": {
             "type": "object",
             "additionalProperties": true
+          },
+          "objective_id": {
+            "type": "string",
+            "description": "Traceability link to edit objective artifact."
           }
         },
         "additionalProperties": false

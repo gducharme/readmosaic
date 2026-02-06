@@ -23,6 +23,8 @@ DEFAULT_OUTPUT_PATH = Path("mre_outputs/approved_manuscript.md")
 DEFAULT_LLM_LOG_PATH = Path("mre_outputs/llm_responses.jsonl")
 DEFAULT_TOOL_LOG_PATH = Path("mre_outputs/tool_runs.jsonl")
 DEFAULT_TOOLS_DIR = Path("tools")
+DEFAULT_OBJECTIVES_PATH = Path("mosaic_outputs/edit_objectives.json")
+DEFAULT_PROPOSALS_PATH = Path("mosaic_outputs/proposals.json")
 CAPABILITIES_LOG = Path("mosaic_capabilities.log")
 
 
@@ -50,6 +52,7 @@ class StagedEdit:
     anchor: str
     before: str
     after: str
+    objective_id: str
 
 
 def parse_args() -> argparse.Namespace:
@@ -69,6 +72,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-fix", type=int, default=2, help="Max fix attempts per tool failure.")
     parser.add_argument("--max-json-retries", type=int, default=3, help="Retries for JSON parsing failures.")
     parser.add_argument("--threshold", type=int, default=70, help="Anchor match threshold (0-100).")
+    parser.add_argument("--objectives-output", type=Path, default=DEFAULT_OBJECTIVES_PATH, help="Path for objective artifact JSON.")
+    parser.add_argument("--proposals-output", type=Path, default=DEFAULT_PROPOSALS_PATH, help="Path for proposal artifact JSON.")
     return parser.parse_args()
 
 
@@ -350,6 +355,7 @@ def build_user_prompt(
     paragraph_index: int,
     paragraph: str,
     manifest: List[ToolEntry],
+    objective: Dict[str, Any],
 ) -> str:
     return (
         "Failure:\n"
@@ -358,13 +364,46 @@ def build_user_prompt(
         f"{paragraph}\n\n"
         f"Paragraph Index: {paragraph_index}\n"
         f"Anchor: {diagnostic.anchor}\n\n"
+        "Objective:\n"
+        f"{json.dumps(objective, indent=2)}\n\n"
         "Tool Manifest:\n"
         f"{json.dumps(manifest_payload(manifest), indent=2)}\n"
     )
 
 
+def build_objective(diagnostic: DiagnosticItem, paragraph_index: int) -> Dict[str, Any]:
+    issue_id = f"issue-{paragraph_index}-{abs(hash(diagnostic.failure + diagnostic.anchor)) % 10_000_000:07d}"
+    return {
+        "objective_id": f"objective-{issue_id}",
+        "issue_id": issue_id,
+        "hard_constraints": [
+            {"type": "entity", "value": diagnostic.anchor or "Anchor span", "rationale": "Preserve anchor-linked entities/facts."}
+        ],
+        "soft_constraints": [
+            "Keep tone aligned with surrounding paragraph.",
+            "Improve clarity while avoiding over-explanation.",
+        ],
+        "metric_targets": {
+            "surprisal_range": {"min": 0.2, "max": 0.8},
+            "entropy_delta_bounds": {"min": -0.15, "max": 0.25},
+            "repetition_reduction_pct": {"target_min": 5, "target_max": 35},
+        },
+        "acceptance_thresholds": {
+            "min_required_metrics": 3,
+            "must_pass": ["hard_constraints_preserved", "surprisal_range"],
+            "notes": "Pass when hard constraints hold and metrics stay in bounds.",
+        },
+        "rollback_criteria": [
+            "Hard constraints are violated.",
+            "Entropy delta exits objective bounds.",
+            "Repetition increases.",
+        ],
+    }
+
+
 def process_diagnostic(
     diagnostic: DiagnosticItem,
+    objective: Dict[str, Any],
     paragraphs: List[str],
     manifest: List[ToolEntry],
     args: argparse.Namespace,
@@ -379,7 +418,7 @@ def process_diagnostic(
     forge_attempts = 0
     forged = False
     while forge_attempts <= args.max_forge:
-        prompt = build_user_prompt(diagnostic, paragraph_index, before, manifest)
+        prompt = build_user_prompt(diagnostic, paragraph_index, before, manifest, objective)
         response = call_lm_json(
             args.base_url,
             args.model,
@@ -423,6 +462,7 @@ def process_diagnostic(
                 anchor=anchor,
                 before=before,
                 after=after,
+                objective_id=str(objective.get("objective_id", "")),
             )
         raise RuntimeError("LM response missing action.")
     raise RuntimeError("Exceeded forge attempts.")
@@ -490,19 +530,62 @@ def main() -> None:
     paragraphs = split_paragraphs(manuscript_text)
     manifest = build_manifest(args.tools_dir)
     staged: List[StagedEdit] = []
+    objectives: List[Dict[str, Any]] = []
 
     for diagnostic in diagnostics:
+        paragraph_index = diagnostic.paragraph_index
+        if paragraph_index is None or paragraph_index >= len(paragraphs):
+            paragraph_index = find_paragraph_index(diagnostic.anchor, paragraphs, args.threshold)
+        paragraph_index = max(0, min(paragraph_index, len(paragraphs) - 1))
+        objective = build_objective(diagnostic, paragraph_index)
+        objectives.append(objective)
         staged.append(
-            process_diagnostic(diagnostic, paragraphs, manifest, args, system_prompt)
+            process_diagnostic(diagnostic, objective, paragraphs, manifest, args, system_prompt)
         )
         manifest = build_manifest(args.tools_dir)
 
+    objectives_payload = {
+        "schema_version": "1.0",
+        "manuscript_id": manuscript_path.stem,
+        "created_at": datetime.utcnow().isoformat() + "Z",
+        "items": objectives,
+    }
+    args.objectives_output.parent.mkdir(parents=True, exist_ok=True)
+    args.objectives_output.write_text(json.dumps(objectives_payload, indent=2) + "\n", encoding="utf-8")
+
     approved = review_edits(staged, diagnostics, paragraphs, manifest, args, system_prompt)
+
+    proposals_payload = {
+        "schema_version": "1.0",
+        "manuscript_id": manuscript_path.stem,
+        "created_at": datetime.utcnow().isoformat() + "Z",
+        "items": [
+            {
+                "issue_id": objectives[i]["issue_id"],
+                "objective_id": objectives[i]["objective_id"],
+                "proposal_id": f"proposal-{objectives[i]['issue_id']}",
+                "edit": {
+                    "preview": {
+                        "before": edit.before,
+                        "after": edit.after,
+                    }
+                },
+                "verification": {
+                    "status": "pass" if edit in approved else "pending"
+                },
+            }
+            for i, edit in enumerate(staged)
+        ],
+    }
+    args.proposals_output.parent.mkdir(parents=True, exist_ok=True)
+    args.proposals_output.write_text(json.dumps(proposals_payload, indent=2) + "\n", encoding="utf-8")
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text("\n\n".join(paragraphs).strip() + "\n", encoding="utf-8")
     print(f"\nApproved edits: {len(approved)}")
     print(f"Output written to: {args.output}")
+    print(f"Objectives written to: {args.objectives_output}")
+    print(f"Proposals written to: {args.proposals_output}")
 
 
 if __name__ == "__main__":
