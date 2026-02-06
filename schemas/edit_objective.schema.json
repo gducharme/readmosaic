@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://readmosaic/schemas/edit_objective.schema.json",
+  "title": "Edit objective payload",
+  "type": "object",
+  "required": ["schema_version", "manuscript_id", "items"],
+  "properties": {
+    "schema_version": {"type": "string"},
+    "manuscript_id": {"type": "string"},
+    "created_at": {"type": "string", "format": "date-time"},
+    "items": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "objective_id",
+          "issue_id",
+          "hard_constraints",
+          "soft_constraints",
+          "metric_targets",
+          "acceptance_thresholds",
+          "rollback_criteria"
+        ],
+        "properties": {
+          "objective_id": {
+            "type": "string",
+            "description": "Stable identifier for this objective artifact."
+          },
+          "issue_id": {
+            "$ref": "edits.schema.json#/properties/items/items/properties/issue_id"
+          },
+          "hard_constraints": {
+            "type": "array",
+            "description": "Facts/entities that must remain unchanged in proposed edits.",
+            "items": {
+              "type": "object",
+              "required": ["type", "value"],
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": ["fact", "entity", "quote", "citation", "numerical_claim", "other"]
+                },
+                "value": {"type": "string"},
+                "rationale": {"type": "string"}
+              },
+              "additionalProperties": false
+            }
+          },
+          "soft_constraints": {
+            "type": "array",
+            "description": "Tone/style preferences that should be optimized, but not treated as absolute blockers.",
+            "items": {"type": "string"}
+          },
+          "metric_targets": {
+            "type": "object",
+            "required": ["surprisal_range", "entropy_delta_bounds", "repetition_reduction_pct"],
+            "properties": {
+              "surprisal_range": {
+                "type": "object",
+                "required": ["min", "max"],
+                "properties": {
+                  "min": {"type": "number"},
+                  "max": {"type": "number"}
+                },
+                "additionalProperties": false
+              },
+              "entropy_delta_bounds": {
+                "type": "object",
+                "required": ["min", "max"],
+                "properties": {
+                  "min": {"type": "number"},
+                  "max": {"type": "number"}
+                },
+                "additionalProperties": false
+              },
+              "repetition_reduction_pct": {
+                "type": "object",
+                "required": ["target_min", "target_max"],
+                "properties": {
+                  "target_min": {"type": "number", "minimum": 0, "maximum": 100},
+                  "target_max": {"type": "number", "minimum": 0, "maximum": 100}
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          },
+          "acceptance_thresholds": {
+            "type": "object",
+            "required": ["min_required_metrics", "must_pass"],
+            "properties": {
+              "min_required_metrics": {"type": "integer", "minimum": 1},
+              "must_pass": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": ["hard_constraints_preserved", "surprisal_range", "entropy_delta_bounds", "repetition_reduction_pct"]
+                }
+              },
+              "notes": {"type": "string"}
+            },
+            "additionalProperties": false
+          },
+          "rollback_criteria": {
+            "type": "array",
+            "description": "Conditions that trigger a rollback to pre-edit text.",
+            "items": {"type": "string"}
+          },
+          "extensions": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

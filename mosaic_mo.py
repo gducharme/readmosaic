@@ -11,6 +11,7 @@ import argparse
 import json
 import sys
 import subprocess
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -164,14 +165,116 @@ def run_tools_with_progress(
 
 
 def build_fidelity_context(
-    args: argparse.Namespace, tool_results: List[Dict[str, Any]]
+    args: argparse.Namespace,
+    tool_results: List[Dict[str, Any]],
+    objective_path: Path | None = None,
+    proposal_path: Path | None = None,
 ) -> Dict[str, Any]:
-    return {
+    payload: Dict[str, Any] = {
         "source_file": str(args.file),
         "model": args.model,
         "generated_at": datetime.utcnow().isoformat() + "Z",
         "tool_definitions": tool_definitions_payload(),
         "tool_results": tool_results,
+    }
+    if objective_path:
+        payload["objective_artifact"] = str(objective_path)
+    if proposal_path:
+        payload["proposal_artifact"] = str(proposal_path)
+    return payload
+
+
+def load_issues_from_tool_results(tool_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    issues: List[Dict[str, Any]] = []
+    for result in tool_results:
+        edits_path = result.get("edits_path")
+        if not edits_path:
+            continue
+        path = Path(edits_path)
+        if not path.exists():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        for issue in payload.get("items", []):
+            if not isinstance(issue, dict):
+                continue
+            normalized = dict(issue)
+            normalized.setdefault("issue_id", str(uuid.uuid4()))
+            normalized["source_tool"] = result.get("code")
+            issues.append(normalized)
+    return issues
+
+
+def build_objective_for_issue(issue: Dict[str, Any]) -> Dict[str, Any]:
+    issue_id = str(issue.get("issue_id") or str(uuid.uuid4()))
+    issue_type = str(issue.get("type") or "style")
+    objective_id = f"objective-{issue_id}"
+    return {
+        "objective_id": objective_id,
+        "issue_id": issue_id,
+        "hard_constraints": [
+            {
+                "type": "entity",
+                "value": str(issue.get("location", {}).get("anchor_text") or "Preserve anchored entities and claims."),
+                "rationale": "Anchor-linked terms should survive edits.",
+            }
+        ],
+        "soft_constraints": [
+            "Maintain original authorial voice.",
+            "Prefer concise, direct phrasing.",
+            f"Prioritize improvements for issue type '{issue_type}'.",
+        ],
+        "metric_targets": {
+            "surprisal_range": {"min": 0.2, "max": 0.8},
+            "entropy_delta_bounds": {"min": -0.15, "max": 0.25},
+            "repetition_reduction_pct": {"target_min": 5, "target_max": 35},
+        },
+        "acceptance_thresholds": {
+            "min_required_metrics": 3,
+            "must_pass": ["hard_constraints_preserved", "surprisal_range"],
+            "notes": "Accept only if hard constraints are preserved and metric targets trend positive.",
+        },
+        "rollback_criteria": [
+            "Any hard constraint is violated.",
+            "Entropy delta drops below lower bound.",
+            "Repetition increases relative to baseline.",
+        ],
+        "extensions": {
+            "source_tool": issue.get("source_tool"),
+            "issue_type": issue_type,
+        },
+    }
+
+
+def build_objectives_payload(manuscript_id: str, issues: List[Dict[str, Any]]) -> Dict[str, Any]:
+    return {
+        "schema_version": "1.0",
+        "manuscript_id": manuscript_id,
+        "created_at": datetime.utcnow().isoformat() + "Z",
+        "items": [build_objective_for_issue(issue) for issue in issues],
+    }
+
+
+def build_proposals_payload(manuscript_id: str, objectives: Dict[str, Any]) -> Dict[str, Any]:
+    items = []
+    for objective in objectives.get("items", []):
+        issue_id = objective.get("issue_id")
+        objective_id = objective.get("objective_id")
+        items.append(
+            {
+                "issue_id": issue_id,
+                "proposal_id": f"proposal-{issue_id}",
+                "objective_id": objective_id,
+                "status": "pending",
+            }
+        )
+    return {
+        "schema_version": "1.0",
+        "manuscript_id": manuscript_id,
+        "created_at": datetime.utcnow().isoformat() + "Z",
+        "items": items,
     }
 
 
@@ -246,7 +349,21 @@ def main() -> None:
     tool_results = run_tools_with_progress(
         args.file, output_root, args.max_workers, preprocessing_dir
     )
-    fidelity_context = build_fidelity_context(args, tool_results)
+    issues = load_issues_from_tool_results(tool_results)
+    objectives_payload = build_objectives_payload(args.file.stem, issues)
+    objectives_path = output_root / "edit_objectives.json"
+    objectives_path.write_text(json.dumps(objectives_payload, indent=2), encoding="utf-8")
+
+    proposals_payload = build_proposals_payload(args.file.stem, objectives_payload)
+    proposals_path = output_root / "proposal_payload.json"
+    proposals_path.write_text(json.dumps(proposals_payload, indent=2), encoding="utf-8")
+
+    fidelity_context = build_fidelity_context(
+        args,
+        tool_results,
+        objective_path=objectives_path,
+        proposal_path=proposals_path,
+    )
 
     fidelity_path = output_root / "fidelity_context.json"
     fidelity_path.write_text(json.dumps(fidelity_context, indent=2), encoding="utf-8")
@@ -275,6 +392,8 @@ def main() -> None:
     console.print("\n[bold green]Artifacts written:[/bold green]")
     console.print(f"- Fidelity Context: {fidelity_path}")
     console.print(f"- Culling Directives: {directives_path}")
+    console.print(f"- Edit Objectives: {objectives_path}")
+    console.print(f"- Proposal Payload: {proposals_path}")
 
 
 if __name__ == "__main__":
