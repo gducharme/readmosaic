@@ -383,51 +383,110 @@ def main() -> None:
     print(report)
 
     if args.output_json:
-        items = []
+        grouped_bursts: dict[tuple[str, tuple[str, ...]], dict[str, object]] = {}
         for window in windows:
+            location = build_window_location(
+                filtered_token_index,
+                window["start"],
+                window["end"],
+            )
+            if not location:
+                continue
+            paragraph_id = str(location.get("paragraph_id", ""))
+            token_ids = tuple(location.get("token_ids", []))
+            if not paragraph_id or not token_ids:
+                continue
+            group_key = (paragraph_id, token_ids)
+            group = grouped_bursts.setdefault(
+                group_key,
+                {
+                    "location": location,
+                    "progress_values": [],
+                    "bursts": [],
+                    "max_z": 0.0,
+                },
+            )
+
             for (term, n_size), z_score in window["zscores"].items():
                 if z_score < args.threshold:
                     continue
-                location = build_window_location(
-                    filtered_token_index,
-                    window["start"],
-                    window["end"],
-                )
-                if not location:
-                    continue
-                issue_id = str(uuid.uuid4())
-                items.append(
+                group["progress_values"].append(window["progress"])
+                group["bursts"].append(
                     {
-                        "issue_id": issue_id,
-                        "type": "burst",
-                        "status": "open",
-                        "location": location,
-                        "evidence": {
-                            "summary": (
-                                f"Burst detected for '{term}' ({n_size}-gram) "
-                                f"in window {window['start']}-{window['end']} "
-                                f"(z={z_score:.2f})."
-                            ),
-                            "detector": "burst_monitor",
-                            "signals": [
-                                {"name": "term", "value": term},
-                                {"name": "ngram_size", "value": n_size},
-                                {"name": "z_score", "value": round(z_score, 4)},
-                                {
-                                    "name": "window_range",
-                                    "value": {
-                                        "start": window["start"],
-                                        "end": window["end"],
-                                    },
-                                    "units": "token_index",
-                                },
-                            ],
-                        },
-                        "extensions": {
-                            "progress_percent": round(window["progress"], 2),
-                        },
+                        "term": term,
+                        "ngram_size": n_size,
+                        "z_score": round(z_score, 4),
+                        "window_start": window["start"],
+                        "window_end": window["end"],
                     }
                 )
+                group["max_z"] = max(float(group["max_z"]), float(z_score))
+
+        items = []
+        for group in grouped_bursts.values():
+            bursts = sorted(
+                group["bursts"],
+                key=lambda burst: float(burst["z_score"]),
+                reverse=True,
+            )
+            if not bursts:
+                continue
+            progress_values = group["progress_values"]
+            avg_progress = (
+                round(sum(progress_values) / len(progress_values), 2) if progress_values else 0.0
+            )
+            top_terms = [
+                f"{burst['term']} ({burst['ngram_size']}-gram, z={burst['z_score']:.2f})"
+                for burst in bursts[:5]
+            ]
+            issue_id = str(uuid.uuid4())
+            items.append(
+                {
+                    "issue_id": issue_id,
+                    "type": "burst",
+                    "status": "open",
+                    "location": group["location"],
+                    "evidence": {
+                        "summary": (
+                            f"{len(bursts)} burst signal(s) detected in this region. "
+                            f"Top signals: {', '.join(top_terms)}."
+                        ),
+                        "detector": "burst_monitor",
+                        "signals": [
+                            {
+                                "name": "burst_count",
+                                "value": len(bursts),
+                            },
+                            {
+                                "name": "max_z_score",
+                                "value": round(float(group["max_z"]), 4),
+                            },
+                            {
+                                "name": "bursts",
+                                "value": bursts,
+                            },
+                        ],
+                    },
+                    "extensions": {
+                        "progress_percent": avg_progress,
+                    },
+                }
+            )
+
+        if items:
+            items.sort(
+                key=lambda item: float(
+                    next(
+                        (
+                            signal.get("value", 0.0)
+                            for signal in item.get("evidence", {}).get("signals", [])
+                            if signal.get("name") == "max_z_score"
+                        ),
+                        0.0,
+                    )
+                ),
+                reverse=True,
+            )
 
         if not items:
             print("No bursty windows above threshold for JSON output.")
@@ -442,6 +501,23 @@ def main() -> None:
             args.output_json.write_text(
                 json.dumps(edits_payload, ensure_ascii=False, indent=2),
                 encoding="utf-8",
+            )
+            total_bursts = sum(
+                int(
+                    next(
+                        (
+                            signal.get("value", 0)
+                            for signal in item.get("evidence", {}).get("signals", [])
+                            if signal.get("name") == "burst_count"
+                        ),
+                        0,
+                    )
+                )
+                for item in items
+            )
+            print(
+                "Aggregated burst JSON items: "
+                f"{len(items)} region(s) from {total_bursts} burst signal(s)."
             )
             print(f"JSON output saved to {args.output_json}")
 
