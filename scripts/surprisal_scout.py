@@ -53,6 +53,7 @@ class SentenceScore:
     perplexity: float
     is_slop: bool
     transitions: List[str]
+    slop_reason: Optional[str] = None
 
 
 @dataclass
@@ -149,16 +150,25 @@ def build_scores(
 
 
 def apply_slop_threshold(
-    scores: Sequence[SentenceScore], percentile: float
-) -> float:
+    scores: Sequence[SentenceScore], percentile: float, outlier_percentile: float
+) -> tuple[float, float]:
     values = [s.avg_logprob for s in scores if not math.isnan(s.avg_logprob)]
     if not values:
-        return float("nan")
+        return float("nan"), float("nan")
     threshold = float(np.percentile(values, percentile))
+    outlier_threshold = float(np.percentile(values, outlier_percentile))
     for score in scores:
-        if not math.isnan(score.avg_logprob) and score.avg_logprob >= threshold:
+        if math.isnan(score.avg_logprob) or score.avg_logprob < threshold:
+            continue
+        has_transition_signal = bool(score.transitions)
+        is_extreme_outlier = score.avg_logprob >= outlier_threshold
+        if has_transition_signal or is_extreme_outlier:
             score.is_slop = True
-    return threshold
+            if has_transition_signal:
+                score.slop_reason = "high_logprob_plus_transition"
+            else:
+                score.slop_reason = "high_logprob_extreme_outlier"
+    return threshold, outlier_threshold
 
 
 def write_csv(path: Path, scores: Sequence[SentenceScore]) -> None:
@@ -333,6 +343,15 @@ def parse_args() -> argparse.Namespace:
         help="Percentile threshold for slop detection (default: 90)",
     )
     parser.add_argument(
+        "--outlier-percentile",
+        type=float,
+        default=97.0,
+        help=(
+            "Secondary percentile used as an outlier override for high-probability "
+            "sentences without transition-phrase hits (default: 97)"
+        ),
+    )
+    parser.add_argument(
         "--plot",
         type=Path,
         default=Path("surprisal_map.png"),
@@ -445,7 +464,20 @@ def build_edits_payload(
                             else None,
                         },
                         {"name": "transition_hits", "value": score.transitions},
+                        {"name": "slop_reason", "value": score.slop_reason},
                     ],
+                },
+                "impact": {
+                    "severity": (
+                        "medium"
+                        if score.slop_reason == "high_logprob_plus_transition"
+                        else "low"
+                    ),
+                    "notes": (
+                        "High-probability sentence with stock transition phrase."
+                        if score.slop_reason == "high_logprob_plus_transition"
+                        else "High-probability outlier sentence; verify manually before editing."
+                    ),
                 },
             }
         )
@@ -499,7 +531,11 @@ def main() -> None:
         args.max_length,
         transition_phrases,
     )
-    threshold = apply_slop_threshold(scores, args.percentile)
+    threshold, outlier_threshold = apply_slop_threshold(
+        scores,
+        args.percentile,
+        args.outlier_percentile,
+    )
 
     plot_surprisal_map(args.plot, scores, threshold)
 
@@ -511,6 +547,11 @@ def main() -> None:
     print(f"Sentences analyzed: {len(scores)}")
     if not math.isnan(threshold):
         print(f"Slop threshold (p{args.percentile:.0f}): {threshold:.4f}")
+    if not math.isnan(outlier_threshold):
+        print(
+            f"Outlier override threshold (p{args.outlier_percentile:.0f}): "
+            f"{outlier_threshold:.4f}"
+        )
     print(f"Slop-zone sentences: {slop_count}")
     print(f"Transition hits: {len(transition_hits)}")
     print(f"Plot saved to: {args.plot}")
