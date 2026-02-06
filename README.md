@@ -132,6 +132,18 @@ Run the script with `--help` for usage details and options.
 python scripts/confidence_review.py --preprocessed /preprocessed --edits-root /mosaic/outputs
 ```
 
+
+## HTML Review Script
+
+The `scripts/html_review.py` CLI generates a standalone HTML review page from Mosaic
+`_edits.json` outputs. It applies confidence coloring (green → yellow → orange → coral-red),
+tracks detections by word/sentence/paragraph scope, and adds a per-word hover bubble
+with issue details (`type`, `severity`, detector, and evidence summary).
+
+```bash
+python scripts/html_review.py --preprocessed /preprocessed --edits-root /mosaic/outputs --output html_review.html
+```
+
 ## Mosaic Orchestrator (MO)
 
 The Mosaic Orchestrator ties the full tool stack together, runs the analysis sweep,
