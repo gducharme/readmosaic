@@ -173,6 +173,31 @@ hot-reload them, and apply edits to a manuscript based on a diagnostics JSON fil
 python mre_minimal.py --file manuscript.md --diagnostics diagnostics.json --model llama3:8b-instruct-q8_0
 ```
 
+## Prompt Transformer Script
+
+The `scripts/prompt_transformer.py` CLI applies a selected prompt to each line or paragraph
+of a manuscript using a local LM Studio model.
+
+Use it when you want prompt-driven rewrites at a chosen resolution.
+
+```bash
+python scripts/prompt_transformer.py \
+  --file manuscript.md \
+  --prompt Revision_Assistant_Template.txt \
+  --model llama3:8b-instruct-q8_0 \
+  --resolution paragraph \
+  --output-dir prompt_outputs \
+  --preprocessed preprocessed
+```
+
+Key flags:
+
+- `--prompt`: prompt filename (resolved inside `prompts/`) or full path.
+- `--model`: LM Studio model identifier.
+- `--resolution`: `line` or `paragraph`.
+- `--output-dir`: directory for JSONL + Markdown outputs.
+- `--preprocessed`: optional pre-processing directory; paragraph mode uses `paragraphs.jsonl` when present.
+
 ## Schemas
 
 The `schemas/` directory captures lightweight JSON Schema definitions used to stabilize
