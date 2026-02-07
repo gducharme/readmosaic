@@ -184,6 +184,26 @@ the editing pipeline. The initial set covers:
 - `demonstration.schema.json` for problem demonstrations.
 - `proposal.schema.json` plus `patch.schema.json` for targeted fixes and verification.
 
+
+## Interactive Script Menu
+
+The `scripts/script_menu.py` CLI discovers Python tools in a scripts directory, reads each tool's `--help` output, and builds an interactive TUI menu.
+
+- Navigate script selection with **↑/↓** and **Enter**.
+- Fill or toggle arguments in a second screen.
+- Use **Esc** to back out to the previous menu.
+- Use **r** or select **Run script** to execute with your chosen arguments.
+
+```bash
+python scripts/script_menu.py
+```
+
+You can also inspect discovery without opening the interactive UI:
+
+```bash
+python scripts/script_menu.py --list
+```
+
 ## Mosaic Signal Density (MSD)
 
 The `scripts/signal_density.py` CLI estimates lexical density and signal concentration
