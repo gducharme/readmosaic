@@ -6,12 +6,50 @@ import argparse
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+import time
 from typing import Dict, List
 from urllib import error, request
 
 
 DEFAULT_BASE_URL = "http://localhost:1234/v1/chat/completions"
 DEFAULT_PROMPTS_DIR = Path("prompts")
+
+
+class ProgressBar:
+    """Simple terminal progress bar with count and ETA."""
+
+    def __init__(self, total: int, width: int = 30) -> None:
+        self.total = total
+        self.width = width
+        self.start = time.monotonic()
+
+    @staticmethod
+    def _format_seconds(seconds: float) -> str:
+        seconds = max(0, int(seconds))
+        minutes, sec = divmod(seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+        if hours:
+            return f"{hours:d}:{minutes:02d}:{sec:02d}"
+        return f"{minutes:02d}:{sec:02d}"
+
+    def render(self, completed: int) -> str:
+        ratio = completed / self.total if self.total else 1.0
+        filled = min(self.width, int(ratio * self.width))
+        bar = "#" * filled + "-" * (self.width - filled)
+
+        elapsed = time.monotonic() - self.start
+        if completed and completed < self.total:
+            eta_seconds = (elapsed / completed) * (self.total - completed)
+            eta = self._format_seconds(eta_seconds)
+        elif completed >= self.total:
+            eta = "00:00"
+        else:
+            eta = "--:--"
+
+        return (
+            f"\r[{bar}] {completed}/{self.total} "
+            f"({ratio * 100:5.1f}%) ETA {eta}"
+        )
 
 
 def parse_args() -> argparse.Namespace:
@@ -182,6 +220,8 @@ def main() -> None:
     jsonl_path = out_dir / f"{args.resolution}_{model_slug}_{timestamp}.jsonl"
     md_path = out_dir / f"{args.resolution}_{model_slug}_{timestamp}.md"
 
+    progress = ProgressBar(total=len(units))
+
     with jsonl_path.open("w", encoding="utf-8") as jsonl_file, md_path.open("w", encoding="utf-8") as md_file:
         md_file.write(f"# Prompt Transformation Output\n\n")
         md_file.write(f"- input: `{args.file}`\n")
@@ -190,7 +230,8 @@ def main() -> None:
         md_file.write(f"- resolution: `{args.resolution}`\n")
         md_file.write(f"- preview: `{args.preview}`\n\n")
 
-        for unit in units:
+        print(progress.render(0), end="", flush=True)
+        for index, unit in enumerate(units, start=1):
             source_text = str(unit["text"])
             rewritten = "[preview mode: no model call]"
             if not args.preview:
@@ -218,6 +259,10 @@ def main() -> None:
             md_file.write(f"{source_text}\n\n")
             md_file.write("### Rewrite\n")
             md_file.write(f"{rewritten}\n\n")
+
+            print(progress.render(index), end="", flush=True)
+
+    print()
 
     print(f"Processed {len(units)} {args.resolution}(s)")
     print(f"JSONL output: {jsonl_path}")
