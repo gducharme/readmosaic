@@ -17,8 +17,9 @@ from rich.table import Table
 
 
 LONG_OPTION_RE = re.compile(
-    r"^\s*(?:-[A-Za-z],\s*)?(--[A-Za-z0-9][A-Za-z0-9\-_]*)(?:[ =]([A-Z][A-Z0-9_\-<>\[\]]*))?"
+    r"^\s*(?:-[A-Za-z],\s*)?(--[A-Za-z0-9][A-Za-z0-9\-_]*)(?:[ =]([^\s\]]+))?"
 )
+POSITIONAL_RE = re.compile(r"^\s{2,}([A-Za-z][A-Za-z0-9_]*)\s{2,}.+")
 
 
 @dataclass
@@ -28,6 +29,7 @@ class ArgumentSpec:
     placeholder: str = ""
     value: str = ""
     enabled: bool = False
+    positional: bool = False
 
 
 @dataclass
@@ -116,6 +118,9 @@ class ScriptMenuApp:
                 return
 
     def _render_argument(self, arg: ArgumentSpec) -> str:
+        if arg.positional:
+            value = arg.value if arg.value else "<empty>"
+            return f"{arg.flag} (required): {value}"
         if arg.takes_value:
             value = arg.value if arg.value else "<empty>"
             return f"{arg.flag} ({arg.placeholder or 'VALUE'}): {value}"
@@ -156,6 +161,10 @@ class ScriptMenuApp:
 def build_command(script: ScriptSpec) -> List[str]:
     cmd = [sys.executable, str(script.path)]
     for arg in script.arguments:
+        if arg.positional:
+            if arg.value:
+                cmd.append(arg.value)
+            continue
         if arg.takes_value:
             if arg.value:
                 cmd.extend([arg.flag, arg.value])
@@ -165,16 +174,45 @@ def build_command(script: ScriptSpec) -> List[str]:
 
 
 def parse_help_arguments(script_path: Path) -> List[ArgumentSpec]:
-    result = subprocess.run(
-        [sys.executable, str(script_path), "--help"],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            [sys.executable, str(script_path), "--help"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except subprocess.TimeoutExpired:
+        return []
+
     help_text = result.stdout + "\n" + result.stderr
     args: List[ArgumentSpec] = []
     seen: set[str] = set()
+    in_positional_block = False
 
     for line in help_text.splitlines():
+        section_line = line.strip().lower()
+        if section_line == "positional arguments:":
+            in_positional_block = True
+            continue
+        if section_line in {"options:", "optional arguments:"}:
+            in_positional_block = False
+
+        if in_positional_block:
+            positional_match = POSITIONAL_RE.match(line)
+            if positional_match:
+                name = positional_match.group(1)
+                if name not in seen:
+                    seen.add(name)
+                    args.append(
+                        ArgumentSpec(
+                            flag=name,
+                            takes_value=True,
+                            placeholder=name.upper(),
+                            positional=True,
+                        )
+                    )
+            continue
+
         match = LONG_OPTION_RE.match(line)
         if not match:
             continue
