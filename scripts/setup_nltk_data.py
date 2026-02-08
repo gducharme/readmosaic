@@ -10,6 +10,7 @@ import nltk
 RESOURCE_MAP = {
     "tokenizers/punkt": "punkt",
     "corpora/stopwords": "stopwords",
+    "corpora/brown": "brown",
     "taggers/averaged_perceptron_tagger": "averaged_perceptron_tagger",
     "corpora/wordnet": "wordnet",
     "corpora/omw-1.4": "omw-1.4",
