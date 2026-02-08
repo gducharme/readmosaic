@@ -198,6 +198,16 @@ Key flags:
 - `--output-dir`: directory for JSONL + Markdown outputs.
 - `--preprocessed`: optional pre-processing directory; paragraph mode uses `paragraphs.jsonl` when present.
 
+## Kokoro Paragraph Reader
+
+The `scripts/kokoro_paragraph_reader.py` CLI reads paragraphs from a pre-processing directory (`paragraphs.jsonl`) using Kokoro TTS, then asks whether to continue (`Continue`, `Yes`, or `No`) after each paragraph.
+
+```bash
+python scripts/kokoro_paragraph_reader.py /preprocessed --voice af_heart
+```
+
+Use `--no-playback` if you only want synthesis flow without speaker output.
+
 ## Schemas
 
 The `schemas/` directory captures lightweight JSON Schema definitions used to stabilize
