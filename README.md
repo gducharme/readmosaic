@@ -45,6 +45,17 @@ The `scripts/entropy_evaluator.py` CLI calculates Shannon entropy across unigram
 ```bash
 python scripts/entropy_evaluator.py path/to/manuscript.txt --output results/entropy
 ```
+
+## Word Frequency Benchmark (WFB)
+
+The `scripts/word_frequency_benchmark.py` CLI lists the top manuscript words (default top 10), includes raw counts, and compares each term against the NLTK Brown corpus as a rough “humanity average” baseline. The output includes per-million rates and a relative ratio versus corpus usage.
+
+```bash
+python scripts/word_frequency_benchmark.py path/to/manuscript.txt --top-n 10
+```
+
+Use `--include-stopwords` if you want function words in the ranking and `--output-json` to persist the report.
+
 ## Narrative Burst Monitor (NBM)
 
 The `scripts/burst_monitor.py` CLI scans manuscripts for statistically significant bursts of terms (uni/bi/tri-grams) using a sliding-window Z-score model. It focuses on content words (nouns, verbs, adjectives) and ignores stop words so you can spot concept clumping without noise.
