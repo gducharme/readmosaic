@@ -35,6 +35,7 @@ class ArgumentSpec:
 @dataclass
 class ScriptSpec:
     path: Path
+    blurb: str = ""
     arguments: List[ArgumentSpec] = field(default_factory=list)
 
 
@@ -64,13 +65,15 @@ class ScriptMenuApp:
             stdscr.addstr(1, 2, "Mosaic Script Runner", curses.A_BOLD)
             stdscr.addstr(2, 2, "↑/↓ move • Enter select • Esc exit")
             for idx, script in enumerate(self.scripts):
-                y = 4 + idx
+                y = 4 + (idx * 2)
                 if y >= h - 1:
                     break
                 name = script.path.name
                 marker = "➤ " if idx == self.script_index else "  "
                 attr = curses.A_REVERSE if idx == self.script_index else curses.A_NORMAL
                 stdscr.addstr(y, 2, f"{marker}{name}", attr)
+                blurb = script.blurb or "No description available."
+                stdscr.addstr(y + 1, 6, blurb[: max(0, w - 8)], curses.A_DIM)
             key = stdscr.getch()
             if key == curses.KEY_UP:
                 self.script_index = (self.script_index - 1) % len(self.scripts)
@@ -227,21 +230,50 @@ def parse_help_arguments(script_path: Path) -> List[ArgumentSpec]:
     return args
 
 
+def parse_help_blurb(script_path: Path) -> str:
+    try:
+        result = subprocess.run(
+            [sys.executable, str(script_path), "--help"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except subprocess.TimeoutExpired:
+        return ""
+
+    help_text = result.stdout + "\n" + result.stderr
+    lines = [line.strip() for line in help_text.splitlines()]
+
+    for line in lines:
+        lowered = line.lower()
+        if not line or lowered.startswith("usage:"):
+            continue
+        return line
+    return ""
+
+
 def discover_scripts(scripts_dir: Path) -> List[ScriptSpec]:
     scripts: List[ScriptSpec] = []
     for path in sorted(scripts_dir.glob("*.py")):
         if path.name.startswith("__"):
             continue
-        scripts.append(ScriptSpec(path=path, arguments=parse_help_arguments(path)))
+        scripts.append(
+            ScriptSpec(
+                path=path,
+                blurb=parse_help_blurb(path),
+                arguments=parse_help_arguments(path),
+            )
+        )
     return scripts
 
 
 def list_scripts(console: Console, scripts: List[ScriptSpec]) -> None:
     table = Table(title="Discovered Scripts")
     table.add_column("Script")
+    table.add_column("Description")
     table.add_column("Arguments", justify="right")
     for script in scripts:
-        table.add_row(script.path.name, str(len(script.arguments)))
+        table.add_row(script.path.name, script.blurb or "-", str(len(script.arguments)))
     console.print(table)
 
 
