@@ -325,3 +325,13 @@ If you need to wipe the database, stop the container and remove the data directo
 docker compose down
 rm -rf neo4j/data
 ```
+
+## Critics Runner
+
+The `scripts/critics_runner.py` CLI scans `prompts/critics` for markdown files, sends each file's full contents to a local LM Studio chat-completions endpoint, and writes a single unstructured JSON object where each key is the critic filename stem and each value is the model response.
+
+```bash
+python scripts/critics_runner.py --model llama3:8b-instruct-q8_0
+```
+
+Use `--output` to control the destination path, or let it default to `critics_outputs/critics_responses_<timestamp>.json`.
