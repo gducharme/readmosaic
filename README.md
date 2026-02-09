@@ -164,6 +164,29 @@ python mosaic_mo.py --file manuscript_v1.md --model llama3:8b-instruct-q8_0
 
 Use `--help` for full CLI options, including the LM Studio base URL override and output directory.
 
+
+## Culling Resolver Pipeline
+
+The `scripts/culling_resolver.py` CLI resolves **one culling node at a time** into a strict JSON deletion action. It is deletion-only: if a directive asks for rewrite/edit behavior, the model is instructed to refuse and the resolver continues to the next item.
+
+Default inputs:
+
+- `--sentences`: `./mosaic_outputs/preprocessing/sentences.jsonl`
+- `--culling-directives`: `./mosaic_outputs/culling_directives.md`
+- `--output-dir`: `./mosaic_outputs/culling_items/`
+
+Per-item flow:
+
+1. Initial resolution against the indexed manuscript.
+2. Retry with narrower context if schema validation fails or confidence is below threshold.
+3. If still unresolved, mark `manual_review_required`.
+
+Each per-item artifact stores attempt-level `request_id` and model `response_id` plus raw prompt/response payloads for auditability.
+
+```bash
+python scripts/culling_resolver.py --model llama3:8b-instruct-q8_0
+```
+
 ## Mosaic Recursive Engine (MRE) Minimal Prototype
 
 The `mre_minimal.py` script is a greenfield, single-pass engine that can forge new tools,
