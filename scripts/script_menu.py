@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import argparse
 import curses
+import json
 import re
 import shlex
 import subprocess
 import sys
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import List
 
@@ -37,6 +39,43 @@ class ScriptSpec:
     path: Path
     blurb: str = ""
     arguments: List[ArgumentSpec] = field(default_factory=list)
+
+
+def script_to_cache_payload(script: ScriptSpec) -> dict:
+    return {
+        "path": str(script.path),
+        "blurb": script.blurb,
+        "arguments": [
+            {
+                "flag": arg.flag,
+                "takes_value": arg.takes_value,
+                "placeholder": arg.placeholder,
+                "value": arg.value,
+                "enabled": arg.enabled,
+                "positional": arg.positional,
+            }
+            for arg in script.arguments
+        ],
+    }
+
+
+def script_from_cache_payload(payload: dict) -> ScriptSpec:
+    return ScriptSpec(
+        path=Path(payload["path"]),
+        blurb=str(payload.get("blurb", "")),
+        arguments=[
+            ArgumentSpec(
+                flag=str(arg.get("flag", "")),
+                takes_value=bool(arg.get("takes_value", False)),
+                placeholder=str(arg.get("placeholder", "")),
+                value=str(arg.get("value", "")),
+                enabled=bool(arg.get("enabled", False)),
+                positional=bool(arg.get("positional", False)),
+            )
+            for arg in payload.get("arguments", [])
+            if isinstance(arg, dict)
+        ],
+    )
 
 
 class ScriptMenuApp:
@@ -267,6 +306,42 @@ def discover_scripts(scripts_dir: Path) -> List[ScriptSpec]:
     return scripts
 
 
+def load_scripts_from_cache(cache_path: Path) -> List[ScriptSpec] | None:
+    if not cache_path.exists():
+        return None
+    try:
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+
+    scripts_payload = payload.get("scripts")
+    if not isinstance(scripts_payload, list):
+        return None
+
+    scripts: List[ScriptSpec] = []
+    for item in scripts_payload:
+        if not isinstance(item, dict):
+            continue
+        try:
+            scripts.append(script_from_cache_payload(item))
+        except KeyError:
+            continue
+    return scripts
+
+
+def write_scripts_cache(cache_path: Path, scripts: List[ScriptSpec]) -> None:
+    payload = {
+        "cache_version": 1,
+        "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "scripts": [script_to_cache_payload(script) for script in scripts],
+    }
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def list_scripts(console: Console, scripts: List[ScriptSpec]) -> None:
     table = Table(title="Discovered Scripts")
     table.add_column("Script")
@@ -280,6 +355,15 @@ def list_scripts(console: Console, scripts: List[ScriptSpec]) -> None:
 def parse_cli_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Interactive menu for Mosaic scripts.")
     parser.add_argument("--scripts-dir", default="scripts", help="Directory containing scripts.")
+    parser.add_argument(
+        "--cache-file",
+        help="Path to script discovery cache JSON (defaults to <scripts-dir>/.script_menu_cache.json).",
+    )
+    parser.add_argument(
+        "--regen",
+        action="store_true",
+        help="Delete any existing cache and regenerate script metadata from scratch.",
+    )
     parser.add_argument("--list", action="store_true", help="List discovered scripts and exit.")
     return parser.parse_args()
 
@@ -293,7 +377,15 @@ def main() -> None:
         console.print(f"[red]Scripts directory not found:[/red] {scripts_dir}")
         raise SystemExit(1)
 
-    scripts = discover_scripts(scripts_dir)
+    cache_path = Path(args.cache_file) if args.cache_file else scripts_dir / ".script_menu_cache.json"
+
+    if args.regen and cache_path.exists():
+        cache_path.unlink()
+
+    scripts = load_scripts_from_cache(cache_path)
+    if scripts is None:
+        scripts = discover_scripts(scripts_dir)
+        write_scripts_cache(cache_path, scripts)
     if not scripts:
         console.print("[yellow]No scripts discovered.[/yellow]")
         return
