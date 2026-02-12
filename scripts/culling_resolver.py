@@ -2,16 +2,22 @@
 """Resolve culling directives one item at a time into deletion actions."""
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+
 import argparse
 import json
 import re
 import uuid
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
-from urllib import error, request
 
-DEFAULT_BASE_URL = "http://localhost:1234/v1/chat/completions"
+from libs.local_llm import DEFAULT_LM_STUDIO_CHAT_COMPLETIONS_URL, post_chat_completion
+
+
+DEFAULT_BASE_URL = DEFAULT_LM_STUDIO_CHAT_COMPLETIONS_URL
 DEFAULT_SENTENCES = Path("mosaic_outputs/preprocessing/sentences.jsonl")
 DEFAULT_DIRECTIVES = Path("mosaic_outputs/culling_directives.md")
 DEFAULT_OUTPUT_DIR = Path("mosaic_outputs/culling_items")
@@ -194,18 +200,8 @@ def call_lm(base_url: str, model: str, system_prompt: str, user_prompt: str, tim
         ],
         "temperature": 0.1,
     }
-    req = request.Request(
-        base_url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with request.urlopen(req, timeout=timeout) as response:
-            body = response.read().decode("utf-8")
-    except error.URLError as exc:
-        raise SystemExit(f"Failed to contact model endpoint at {base_url}: {exc}") from exc
-    return json.loads(body)
+    response_payload = post_chat_completion(base_url, payload, timeout)
+    return response_payload
 
 
 def extract_content(response_payload: dict[str, Any]) -> str:
