@@ -14,7 +14,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from libs.local_llm import DEFAULT_LM_STUDIO_CHAT_COMPLETIONS_URL, post_chat_completion
+from libs.local_llm import DEFAULT_LM_STUDIO_CHAT_COMPLETIONS_URL, request_chat_completion_content
 
 
 DEFAULT_BASE_URL = DEFAULT_LM_STUDIO_CHAT_COMPLETIONS_URL
@@ -191,27 +191,15 @@ def build_prompt(item: CullingItem, manuscript_index: str, nearby_context: str, 
     return system, user
 
 
-def call_lm(base_url: str, model: str, system_prompt: str, user_prompt: str, timeout: int) -> dict[str, Any]:
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        "temperature": 0.1,
-    }
-    response_payload = post_chat_completion(base_url, payload, timeout)
-    return response_payload
-
-
-def extract_content(response_payload: dict[str, Any]) -> str:
-    choices = response_payload.get("choices") or []
-    if not choices:
-        return ""
-    msg = choices[0].get("message") if isinstance(choices[0], dict) else {}
-    if not isinstance(msg, dict):
-        return ""
-    return str(msg.get("content") or "").strip()
+def call_lm(base_url: str, model: str, system_prompt: str, user_prompt: str, timeout: int) -> str:
+    return request_chat_completion_content(
+        base_url,
+        model,
+        system_prompt,
+        user_prompt,
+        timeout,
+        temperature=0.1,
+    )
 
 
 def parse_json_strict(content: str) -> dict[str, Any] | None:
@@ -288,9 +276,7 @@ def resolve_item(
         system_prompt, user_prompt = build_prompt(item, manuscript_context, nearby_context, attempt)
 
         request_id = str(uuid.uuid4())
-        lm_response = call_lm(args.base_url, args.model, system_prompt, user_prompt, args.timeout)
-        response_id = lm_response.get("id")
-        content = extract_content(lm_response)
+        content = call_lm(args.base_url, args.model, system_prompt, user_prompt, args.timeout)
 
         parsed = parse_json_strict(content)
         errors = ["invalid_json"] if parsed is None else validate_resolution(parsed)
@@ -306,11 +292,10 @@ def resolve_item(
             {
                 "attempt": attempt,
                 "request_id": request_id,
-                "response_id": response_id,
+                "response_id": None,
                 "system_prompt": system_prompt,
                 "user_prompt": user_prompt,
                 "raw_response_content": content,
-                "raw_response_payload": lm_response,
                 "parsed_resolution": parsed,
                 "validation_errors": errors,
                 "low_confidence": low_confidence,

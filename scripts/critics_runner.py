@@ -13,8 +13,7 @@ from datetime import datetime, timezone
 
 from libs.local_llm import (
     DEFAULT_LM_STUDIO_CHAT_COMPLETIONS_URL,
-    extract_message_content,
-    post_chat_completion,
+    request_chat_completion_content,
 )
 
 DEFAULT_BASE_URL = DEFAULT_LM_STUDIO_CHAT_COMPLETIONS_URL
@@ -57,22 +56,14 @@ def parse_args() -> argparse.Namespace:
 
 
 def call_lm(base_url: str, model: str, system_prompt: str, manuscript_text: str, timeout: int) -> str:
-    payload = {
-        "model": model,
-        "messages": [
-            {
-                "role": "system",
-                "content": system_prompt,
-            },
-            {
-                "role": "user",
-                "content": manuscript_text,
-            }
-        ],
-        "temperature": 0.2,
-    }
-    parsed = post_chat_completion(base_url, payload, timeout)
-    return extract_message_content(parsed)
+    return request_chat_completion_content(
+        base_url,
+        model,
+        system_prompt,
+        manuscript_text,
+        timeout,
+        temperature=0.2,
+    )
 
 
 def gather_critic_files(critics_dir: Path) -> list[Path]:
