@@ -15,8 +15,7 @@ from typing import Dict, List
 
 from libs.local_llm import (
     DEFAULT_LM_STUDIO_CHAT_COMPLETIONS_URL,
-    extract_message_content,
-    post_chat_completion,
+    request_chat_completion_content,
 )
 
 
@@ -180,16 +179,14 @@ def call_lm(base_url: str, model: str, system_prompt: str, text: str, timeout: i
         "Return only the revised text for this unit without commentary.\n\n"
         f"SOURCE:\n{text}"
     )
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        "temperature": 0.2,
-    }
-    parsed = post_chat_completion(base_url, payload, timeout)
-    return extract_message_content(parsed)
+    return request_chat_completion_content(
+        base_url,
+        model,
+        system_prompt,
+        user_prompt,
+        timeout,
+        temperature=0.2,
+    )
 
 
 def main() -> None:

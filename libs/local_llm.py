@@ -67,3 +67,24 @@ def extract_message_content(response_payload: dict[str, object]) -> str:
     if not isinstance(content, str):
         raise SystemExit("Model response missing string 'choices[0].message.content'.")
     return content.strip()
+
+
+def request_chat_completion_content(
+    base_url: str,
+    model: str,
+    system_prompt: str,
+    user_content: str,
+    timeout: int,
+    temperature: float = 0.0,
+) -> str:
+    """Send a standard system+user chat request and return assistant text content."""
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ],
+        "temperature": temperature,
+    }
+    parsed = post_chat_completion(base_url, payload, timeout)
+    return extract_message_content(parsed)

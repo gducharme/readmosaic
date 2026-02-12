@@ -15,8 +15,7 @@ from typing import Any, Dict, List
 
 from libs.local_llm import (
     DEFAULT_LM_STUDIO_CHAT_COMPLETIONS_URL,
-    extract_message_content,
-    post_chat_completion,
+    request_chat_completion_content,
 )
 from schema_validator import validate_payload
 
@@ -157,23 +156,6 @@ def build_user_payload(chunk: Dict[str, Any], flags: Dict[str, bool]) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
-def call_lm(base_url: str, model: str, system_prompt: str, user_payload: str, timeout: int) -> Dict[str, Any]:
-    request_payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_payload},
-        ],
-        "temperature": 0.0,
-        "response_format": {"type": "json_object"},
-    }
-    parsed = post_chat_completion(base_url, request_payload, timeout)
-    content = extract_message_content(parsed)
-    try:
-        return json.loads(content)
-    except json.JSONDecodeError as exc:
-        raise SystemExit(f"Model returned non-JSON content: {content}") from exc
-
 
 def summarize_issues(issues: List[Dict[str, Any]]) -> Dict[str, int]:
     summary = {"total_issues": len(issues), "critical": 0, "major": 0, "minor": 0, "house_style": 0}
@@ -247,7 +229,18 @@ def main() -> None:
         merged_issues: List[Dict[str, Any]] = []
         for chunk in chunks:
             user_payload = build_user_payload(chunk, flags)
-            model_output = call_lm(args.base_url, args.model, system_prompt, user_payload, args.timeout)
+            content = request_chat_completion_content(
+                args.base_url,
+                args.model,
+                system_prompt,
+                user_payload,
+                args.timeout,
+                temperature=0.0,
+            )
+            try:
+                model_output = json.loads(content)
+            except json.JSONDecodeError as exc:
+                raise SystemExit(f"Model returned non-JSON content: {content}") from exc
             issues = model_output.get("issues", [])
             if not isinstance(issues, list):
                 raise SystemExit(f"Invalid model response for chunk {chunk['index']}: 'issues' must be a list.")
