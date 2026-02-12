@@ -144,15 +144,49 @@ def _build_chunk(units: List[SentenceUnit], index: int) -> Dict[str, Any]:
     }
 
 
-def build_user_payload(chunk: Dict[str, Any], flags: Dict[str, bool]) -> str:
+def align_issue_sentence_indices(
+    issues: List[Dict[str, Any]], chunk: Dict[str, Any], total_sentences: int
+) -> List[Dict[str, Any]]:
+    """Align issue sentence_index values to pre-processing global sentence order."""
+    aligned: List[Dict[str, Any]] = []
+    sentence_start_order = int(chunk.get("sentence_start_order", 0))
+    sentence_count = int(chunk.get("sentence_count", 0))
+
+    for issue in issues:
+        issue_copy = dict(issue)
+        raw_index = issue_copy.get("sentence_index")
+        try:
+            local_index = int(raw_index)
+        except (TypeError, ValueError):
+            aligned.append(issue_copy)
+            continue
+
+        if 1 <= local_index <= sentence_count:
+            global_index = sentence_start_order + local_index
+        elif 0 <= local_index < sentence_count:
+            global_index = sentence_start_order + local_index + 1
+        else:
+            aligned.append(issue_copy)
+            continue
+
+        issue_copy["sentence_index"] = max(1, min(global_index, total_sentences))
+        aligned.append(issue_copy)
+
+    return aligned
+
+
+def build_user_payload(chunk: Dict[str, Any], flags: Dict[str, bool], total_sentences: int) -> str:
     payload = {
         "mode": "ultra_precision_grammar_audit",
+        "document": {"sentence_count": total_sentences},
         "chunk": {
             "index": chunk["index"],
             "total": chunk["total"],
             "text": chunk["text"],
             "sentence_start_order": chunk["sentence_start_order"],
             "sentence_end_order": chunk["sentence_end_order"],
+            "sentence_start_index": chunk["sentence_start_order"] + 1,
+            "sentence_end_index": chunk["sentence_end_order"] + 1,
             "sentence_start_id": chunk["sentence_start_id"],
             "sentence_end_id": chunk["sentence_end_id"],
             "sentence_count": chunk["sentence_count"],
@@ -221,6 +255,7 @@ def main() -> None:
     else:
         system_prompt = args.prompt.read_text(encoding="utf-8")
         chunks = chunk_sentence_units(sentence_units, args.chunk_size)
+        total_sentences = len(sentence_units)
         if not chunks:
             chunks = [
                 {
@@ -234,11 +269,12 @@ def main() -> None:
                     "sentence_count": 0,
                 }
             ]
+            total_sentences = 0
 
         merged_issues: List[Dict[str, Any]] = []
 
         def run_chunk(chunk: Dict[str, Any]) -> List[Dict[str, Any]]:
-            user_payload = build_user_payload(chunk, flags)
+            user_payload = build_user_payload(chunk, flags, total_sentences)
             content = request_chat_completion_content(
                 args.base_url,
                 args.model,
@@ -254,7 +290,7 @@ def main() -> None:
             issues = model_output.get("issues", [])
             if not isinstance(issues, list):
                 raise SystemExit(f"Invalid model response for chunk {chunk['index']}: 'issues' must be a list.")
-            return issues
+            return align_issue_sentence_indices(issues, chunk, total_sentences)
 
         total_chunks = len(chunks)
         if args.concurrency == 1:
