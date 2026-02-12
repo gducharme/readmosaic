@@ -259,12 +259,17 @@ def main() -> None:
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }
 
-    validate_payload(report, DEFAULT_SCHEMA_NAME, "grammar_audit_report")
-
     args.output_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out_file = args.output_dir / f"grammar_audit_issues_{stamp}.json"
     out_file.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    try:
+        validate_payload(report, DEFAULT_SCHEMA_NAME, "grammar_audit_report")
+    except ValueError as exc:
+        raise SystemExit(
+            f"Saved grammar issues report (schema-invalid): {out_file}\n{exc}"
+        ) from exc
 
     print(f"Saved grammar issues report: {out_file}")
 
