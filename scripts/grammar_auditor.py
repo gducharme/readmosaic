@@ -9,6 +9,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 import argparse
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from dataclasses import dataclass
 from typing import Any, Dict, List
@@ -48,6 +49,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR, help="Directory for output report.")
     parser.add_argument("--timeout", type=int, default=240, help="Request timeout in seconds.")
     parser.add_argument("--chunk-size", type=int, default=1000, help="Words per chunk (recommended 800-1200).")
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=1,
+        help="Number of chunk requests to run in parallel. Defaults to 1 (sequential).",
+    )
     parser.add_argument("--preview", action="store_true", help="Do not call model; emit a stub report.")
 
     parser.add_argument("--include-optional-preferences", action="store_true")
@@ -194,6 +201,8 @@ def main() -> None:
         raise SystemExit(f"Prompt file not found: {args.prompt}")
     if args.chunk_size < 100:
         raise SystemExit("--chunk-size must be >= 100 words.")
+    if args.concurrency < 1:
+        raise SystemExit("--concurrency must be >= 1.")
 
     sentence_units = load_sentence_units(args)
     input_source = str(args.preprocessed / "sentences.jsonl") if args.preprocessed else str(args.file)
@@ -227,7 +236,8 @@ def main() -> None:
             ]
 
         merged_issues: List[Dict[str, Any]] = []
-        for chunk in chunks:
+
+        def run_chunk(chunk: Dict[str, Any]) -> List[Dict[str, Any]]:
             user_payload = build_user_payload(chunk, flags)
             content = request_chat_completion_content(
                 args.base_url,
@@ -244,7 +254,27 @@ def main() -> None:
             issues = model_output.get("issues", [])
             if not isinstance(issues, list):
                 raise SystemExit(f"Invalid model response for chunk {chunk['index']}: 'issues' must be a list.")
-            merged_issues.extend(issues)
+            return issues
+
+        total_chunks = len(chunks)
+        if args.concurrency == 1:
+            for idx, chunk in enumerate(chunks, start=1):
+                issues = run_chunk(chunk)
+                merged_issues.extend(issues)
+                print(f"Progress: {idx}/{total_chunks} chunks processed")
+        else:
+            completed = 0
+            with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
+                futures = {pool.submit(run_chunk, chunk): chunk for chunk in chunks}
+                for future in as_completed(futures):
+                    chunk = futures[future]
+                    try:
+                        issues = future.result()
+                    except Exception as exc:
+                        raise SystemExit(f"Chunk {chunk['index']} failed: {exc}") from exc
+                    merged_issues.extend(issues)
+                    completed += 1
+                    print(f"Progress: {completed}/{total_chunks} chunks processed")
 
         summary = summarize_issues(merged_issues)
         report = {
