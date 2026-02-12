@@ -2,17 +2,25 @@
 """Ultra-precision grammar auditing CLI with strict JSON output aggregation."""
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+
 import argparse
 import json
 from datetime import datetime, timezone
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Dict, List
-from urllib import error, request
 
+from libs.local_llm import (
+    DEFAULT_LM_STUDIO_CHAT_COMPLETIONS_URL,
+    extract_message_content,
+    post_chat_completion,
+)
 from schema_validator import validate_payload
 
-DEFAULT_BASE_URL = "http://localhost:1234/v1/chat/completions"
+DEFAULT_BASE_URL = DEFAULT_LM_STUDIO_CHAT_COMPLETIONS_URL
 DEFAULT_PROMPT_PATH = Path("prompts/Ultra_Precision_Grammar_Auditor.txt")
 DEFAULT_SCHEMA_NAME = "grammar_audit_report.schema.json"
 DEFAULT_OUTPUT_DIR = Path("grammar_outputs")
@@ -159,21 +167,8 @@ def call_lm(base_url: str, model: str, system_prompt: str, user_payload: str, ti
         "temperature": 0.0,
         "response_format": {"type": "json_object"},
     }
-    req = request.Request(
-        base_url,
-        data=json.dumps(request_payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-
-    try:
-        with request.urlopen(req, timeout=timeout) as response:
-            body = response.read().decode("utf-8")
-    except error.URLError as exc:
-        raise SystemExit(f"Failed to contact model endpoint at {base_url}: {exc}") from exc
-
-    parsed = json.loads(body)
-    content = parsed["choices"][0]["message"]["content"]
+    parsed = post_chat_completion(base_url, request_payload, timeout)
+    content = extract_message_content(parsed)
     try:
         return json.loads(content)
     except json.JSONDecodeError as exc:

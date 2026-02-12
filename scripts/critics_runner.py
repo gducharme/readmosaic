@@ -2,13 +2,22 @@
 """Run every critic prompt in prompts/critics against a local LM Studio endpoint."""
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+
 import argparse
 import json
 from datetime import datetime, timezone
-from pathlib import Path
-from urllib import error, request
 
-DEFAULT_BASE_URL = "http://localhost:1234/v1/chat/completions"
+from libs.local_llm import (
+    DEFAULT_LM_STUDIO_CHAT_COMPLETIONS_URL,
+    extract_message_content,
+    post_chat_completion,
+)
+
+DEFAULT_BASE_URL = DEFAULT_LM_STUDIO_CHAT_COMPLETIONS_URL
 DEFAULT_CRITICS_DIR = Path("prompts/critics")
 
 
@@ -62,20 +71,8 @@ def call_lm(base_url: str, model: str, system_prompt: str, manuscript_text: str,
         ],
         "temperature": 0.2,
     }
-    req = request.Request(
-        base_url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with request.urlopen(req, timeout=timeout) as response:
-            body = response.read().decode("utf-8")
-    except error.URLError as exc:
-        raise SystemExit(f"Failed to contact model endpoint at {base_url}: {exc}") from exc
-
-    parsed = json.loads(body)
-    return str(parsed["choices"][0]["message"]["content"]).strip()
+    parsed = post_chat_completion(base_url, payload, timeout)
+    return extract_message_content(parsed)
 
 
 def gather_critic_files(critics_dir: Path) -> list[Path]:
