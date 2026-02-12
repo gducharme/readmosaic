@@ -8,6 +8,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 from datetime import datetime, timezone
 import time
@@ -41,7 +42,7 @@ class ProgressBar:
             return f"{hours:d}:{minutes:02d}:{sec:02d}"
         return f"{minutes:02d}:{sec:02d}"
 
-    def render(self, completed: int) -> str:
+    def render(self, completed: int, failed: int = 0) -> str:
         ratio = completed / self.total if self.total else 1.0
         filled = min(self.width, int(ratio * self.width))
         bar = "#" * filled + "-" * (self.width - filled)
@@ -55,9 +56,13 @@ class ProgressBar:
         else:
             eta = "--:--"
 
+        status = f"{completed}/{self.total}"
+        if failed:
+            status += f" | failed: {failed}"
+
         return (
             f"\r[{bar}] {completed}/{self.total} "
-            f"({ratio * 100:5.1f}%) ETA {eta}"
+            f"({ratio * 100:5.1f}%) ETA {eta} [{status}]"
         )
 
 
@@ -109,6 +114,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Build artifacts without calling the model (useful for sanity checks).",
     )
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=1,
+        help="Number of requests to run in parallel (default: 1).",
+    )
     return parser.parse_args()
 
 
@@ -117,6 +128,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise SystemExit(f"Input file not found: {args.file}")
     if args.preprocessed and not args.preprocessed.exists():
         raise SystemExit(f"Pre-processed directory not found: {args.preprocessed}")
+    if args.concurrency < 1:
+        raise SystemExit("--concurrency must be at least 1")
 
 
 def resolve_prompt_path(prompt_value: str) -> Path:
@@ -224,42 +237,68 @@ def main() -> None:
         md_file.write(f"- model: `{args.model}`\n")
         md_file.write(f"- resolution: `{args.resolution}`\n")
         md_file.write(f"- preview: `{args.preview}`\n\n")
+        md_file.write(f"- concurrency: `{args.concurrency}`\n\n")
 
-        print(progress.render(0), end="", flush=True)
-        for index, unit in enumerate(units, start=1):
+        rows: List[Dict[str, object]] = []
+        failures = 0
+
+        def process_unit(unit: Dict[str, object]) -> Dict[str, object]:
             source_text = str(unit["text"])
             rewritten = "[preview mode: no model call]"
+            error: str | None = None
             if not args.preview:
-                rewritten = call_lm(
-                    args.base_url,
-                    args.model,
-                    prompt_text,
-                    source_text,
-                    args.timeout,
-                    args.resolution,
-                )
+                try:
+                    rewritten = call_lm(
+                        args.base_url,
+                        args.model,
+                        prompt_text,
+                        source_text,
+                        args.timeout,
+                        args.resolution,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    error = str(exc)
+                    rewritten = f"[error] {error}"
 
-            output_row = {
+            return {
                 "unit": unit,
                 "model": args.model,
                 "resolution": args.resolution,
                 "prompt": str(prompt_path),
                 "source_text": source_text,
                 "rewritten_text": rewritten,
+                "error": error,
             }
-            jsonl_file.write(json.dumps(output_row, ensure_ascii=False) + "\n")
 
+        print(progress.render(0, failed=0), end="", flush=True)
+        with ThreadPoolExecutor(max_workers=args.concurrency) as executor:
+            futures = [executor.submit(process_unit, unit) for unit in units]
+            for completed, future in enumerate(as_completed(futures), start=1):
+                row = future.result()
+                rows.append(row)
+                if row.get("error"):
+                    failures += 1
+                print(progress.render(completed, failed=failures), end="", flush=True)
+
+        rows.sort(key=lambda row: int(row["unit"]["unit_index"]))
+
+        for row in rows:
+            unit = row["unit"]
+            source_text = str(row["source_text"])
+            rewritten = str(row["rewritten_text"])
+
+            jsonl_file.write(json.dumps(row, ensure_ascii=False) + "\n")
             md_file.write(f"## Unit {unit['unit_index']}\n\n")
             md_file.write("### Source\n")
             md_file.write(f"{source_text}\n\n")
             md_file.write("### Rewrite\n")
             md_file.write(f"{rewritten}\n\n")
 
-            print(progress.render(index), end="", flush=True)
-
     print()
 
     print(f"Processed {len(units)} {args.resolution}(s)")
+    if failures:
+        print(f"Completed with {failures} failed request(s).")
     print(f"JSONL output: {jsonl_path}")
     print(f"Markdown output: {md_path}")
 
