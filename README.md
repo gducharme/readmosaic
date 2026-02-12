@@ -335,3 +335,37 @@ python scripts/critics_runner.py --model llama3:8b-instruct-q8_0
 ```
 
 Use `--output` to control the destination path, or let it default to `critics_outputs/critics_responses_<timestamp>.json`.
+
+## Ultra-Precision Grammar Auditor (UPGA)
+
+The `scripts/grammar_auditor.py` CLI runs a strict grammar-only audit against a local LM Studio model using `prompts/Ultra_Precision_Grammar_Auditor.txt` and writes all detected issues to a single JSON file. It prefers `--preprocessed` sentence artifacts so chunking aligns to sentence boundaries and never cuts final sentences mid-chunk.
+
+Key behavior:
+
+- Uses sentence-boundary chunked analysis (`--chunk-size`, default 1000 words) to keep chunks grammatically complete.
+- Supports strictness flags for optional preferences, style choices, ambiguity, CMOS strictness, and clause-level parse output.
+- Aggregates all issues from all chunks into one report file in `grammar_outputs/`.
+- Validates output against `schemas/grammar_audit_report.schema.json`.
+
+Example:
+
+```bash
+python scripts/grammar_auditor.py \
+  --preprocessed mosaic_outputs/preprocessing \
+  --model llama3:8b-instruct-q8_0 \
+  --include-ambiguities \
+  --strict-cmos \
+  --clause-level-parse
+```
+
+Preview without model calls:
+
+```bash
+python scripts/grammar_auditor.py --preprocessed mosaic_outputs/preprocessing --model stub --preview
+```
+
+Fallback mode (when preprocessed artifacts are unavailable):
+
+```bash
+python scripts/grammar_auditor.py --file docs/sample.md --model llama3:8b-instruct-q8_0
+```
