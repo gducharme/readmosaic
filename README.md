@@ -369,3 +369,35 @@ Fallback mode (when preprocessed artifacts are unavailable):
 ```bash
 python scripts/grammar_auditor.py --file docs/sample.md --model llama3:8b-instruct-q8_0
 ```
+
+## Quotation & Delimiter Precision Auditor
+
+The `scripts/quotation_delimiter_auditor.py` CLI runs a delimiter-focused audit (quotes, apostrophes, brackets/parentheses, nesting, punctuation placement consistency, prime misuse, and encoding artifacts) against a local LM Studio model using `prompts/Quotation_Delimiter_Precision_Auditor.txt`.
+
+Key behavior:
+
+- Uses sentence-boundary chunked analysis (`--chunk-size`, default 1000 words).
+- Aggregates all issues from all chunks into one report file in `quotation_audit_outputs/`.
+- Validates output against `schemas/quotation_delimiter_audit_report.schema.json`.
+- Supports optional em/en dash misuse detection inside quotes via `--flag-em-en-dash-misuse`.
+
+Example:
+
+```bash
+python scripts/quotation_delimiter_auditor.py \
+  --preprocessed mosaic_outputs/preprocessing \
+  --model llama3:8b-instruct-q8_0 \
+  --flag-em-en-dash-misuse
+```
+
+Preview without model calls:
+
+```bash
+python scripts/quotation_delimiter_auditor.py --preprocessed mosaic_outputs/preprocessing --model stub --preview
+```
+
+Fallback mode (when preprocessed artifacts are unavailable):
+
+```bash
+python scripts/quotation_delimiter_auditor.py --file docs/sample.md --model llama3:8b-instruct-q8_0
+```

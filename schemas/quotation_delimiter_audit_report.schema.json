@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://readmosaic/schemas/quotation_delimiter_audit_report.schema.json",
+  "title": "Quotation Delimiter Audit Report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "tool",
+    "input_file",
+    "prompt_file",
+    "model",
+    "flags",
+    "status",
+    "detected_punctuation_convention",
+    "issues",
+    "summary",
+    "generated_at"
+  ],
+  "properties": {
+    "tool": {
+      "const": "quotation_delimiter_precision_auditor"
+    },
+    "input_file": {
+      "type": "string",
+      "minLength": 1
+    },
+    "prompt_file": {
+      "type": "string",
+      "minLength": 1
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "flags": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "flag_em_en_dash_misuse"
+      ],
+      "properties": {
+        "flag_em_en_dash_misuse": { "type": "boolean" }
+      }
+    },
+    "status": {
+      "type": "string",
+      "enum": ["ok", "sound", "error"]
+    },
+    "detected_punctuation_convention": {
+      "type": "string",
+      "minLength": 1
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "sentence_index",
+          "sentence_text",
+          "excerpt",
+          "location",
+          "issue_type",
+          "classification",
+          "explanation",
+          "minimal_correction",
+          "confidence"
+        ],
+        "properties": {
+          "sentence_index": { "type": "integer", "minimum": 1 },
+          "sentence_text": { "type": "string", "minLength": 1 },
+          "excerpt": { "type": "string", "minLength": 1 },
+          "location": { "type": "string", "minLength": 1 },
+          "issue_type": {
+            "type": "string",
+            "enum": [
+              "Straight vs curly quotes",
+              "Single vs double quotes",
+              "Opening vs closing quote correctness",
+              "Apostrophe correctness",
+              "Parentheses balance",
+              "Bracket balance",
+              "Nested punctuation",
+              "Quote–punctuation placement consistency",
+              "Prime vs quotation mark misuse",
+              "Encoding artifact",
+              "Em/en dash misuse inside quotes"
+            ]
+          },
+          "classification": {
+            "type": "string",
+            "enum": ["Error", "Inconsistency", "Style choice", "Encoding artifact"]
+          },
+          "explanation": { "type": "string", "minLength": 1 },
+          "minimal_correction": { "type": "string", "minLength": 1 },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "total_issues",
+        "error",
+        "inconsistency",
+        "style_choice",
+        "encoding_artifact"
+      ],
+      "properties": {
+        "total_issues": { "type": "integer", "minimum": 0 },
+        "error": { "type": "integer", "minimum": 0 },
+        "inconsistency": { "type": "integer", "minimum": 0 },
+        "style_choice": { "type": "integer", "minimum": 0 },
+        "encoding_artifact": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "note": { "type": "string" },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}
