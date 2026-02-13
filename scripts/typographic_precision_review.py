@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Interactive reviewer for typographic/grammar auditor issue outputs.
 
-Loads auditor JSON output plus pre-processing sentence artifacts, then walks issue-by-issue
-with surrounding sentence context and prompts for accept/reject decisions.
+Loads auditor JSON output and reviews records under the top-level ``issues`` key.
 """
 from __future__ import annotations
 
@@ -16,21 +15,15 @@ from typing import Any
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Review auditor issue outputs line-by-line with ±2 sentence context and "
-            "interactive accept/reject decisions. Default action accepts correction."
+            "Review auditor issues from a JSON file and capture interactive "
+            "accept/reject decisions. Default action accepts correction."
         )
     )
     parser.add_argument(
         "--audit",
         type=Path,
         required=True,
-        help="Path to auditor JSON output (object with issues, array of issues, or single issue object).",
-    )
-    parser.add_argument(
-        "--preprocessed",
-        type=Path,
-        required=True,
-        help="Pre-processing directory containing sentences.jsonl.",
+        help="Path to auditor JSON output (object with an 'issues' array).",
     )
     parser.add_argument(
         "--output",
@@ -38,43 +31,7 @@ def parse_args() -> argparse.Namespace:
         default=Path("typographic_review_decisions.json"),
         help="Where to write review decisions JSON (default: typographic_review_decisions.json).",
     )
-    parser.add_argument(
-        "--context-window",
-        type=int,
-        default=2,
-        help="Number of preceding/following sentences to display (default: 2).",
-    )
     return parser.parse_args()
-
-
-def load_sentences(preprocessed_dir: Path) -> list[dict[str, Any]]:
-    sentences_path = preprocessed_dir / "sentences.jsonl"
-    if not sentences_path.exists():
-        raise RuntimeError(
-            f"Missing file: {sentences_path}. Run scripts/pre_processing.py first."
-        )
-
-    sentences: list[dict[str, Any]] = []
-    with sentences_path.open("r", encoding="utf-8") as handle:
-        for line_number, raw_line in enumerate(handle, start=1):
-            line = raw_line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise RuntimeError(
-                    f"Invalid JSON in {sentences_path} at line {line_number}."
-                ) from exc
-
-            if "text" not in record:
-                raise RuntimeError(
-                    f"Missing 'text' field in {sentences_path} at line {line_number}."
-                )
-            sentences.append(record)
-
-    sentences.sort(key=lambda record: int(record.get("order", 0)))
-    return sentences
 
 
 def load_issues(audit_path: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -86,39 +43,14 @@ def load_issues(audit_path: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"Invalid JSON in {audit_path}.") from exc
 
-    metadata: dict[str, Any] = {}
     if isinstance(payload, dict) and isinstance(payload.get("issues"), list):
         issues = [issue for issue in payload["issues"] if isinstance(issue, dict)]
-        metadata = {
-            key: value
-            for key, value in payload.items()
-            if key != "issues"
-        }
+        metadata = {key: value for key, value in payload.items() if key != "issues"}
         return issues, metadata
-
-    if isinstance(payload, list):
-        issues = [issue for issue in payload if isinstance(issue, dict)]
-        return issues, metadata
-
-    if isinstance(payload, dict) and "sentence_index" in payload:
-        return [payload], metadata
 
     raise RuntimeError(
-        "Unsupported audit JSON format. Expected object with 'issues', array of issues, or single issue object."
+        "Unsupported audit JSON format. Expected object with top-level 'issues' array."
     )
-
-
-def display_context(sentences: list[dict[str, Any]], target_index_1_based: int, window: int) -> None:
-    total = len(sentences)
-    target_index_1_based = max(1, min(target_index_1_based, total if total else 1))
-    start = max(1, target_index_1_based - window)
-    end = min(total, target_index_1_based + window)
-
-    print(f"\nContext ({window} preceding and {window} following, when available):")
-    for idx in range(start, end + 1):
-        prefix = "=>" if idx == target_index_1_based else "  "
-        text = str(sentences[idx - 1].get("text", "")).strip()
-        print(f"{prefix} [{idx:>4}] {text}")
 
 
 def prompt_decision(default_correction: str) -> tuple[str, str]:
@@ -145,21 +77,15 @@ def main() -> int:
     args = parse_args()
 
     try:
-        sentences = load_sentences(args.preprocessed)
         issues, metadata = load_issues(args.audit)
     except RuntimeError as error:
         print(str(error), file=sys.stderr)
-        return 1
-
-    if not sentences:
-        print("No sentences found in sentences.jsonl.", file=sys.stderr)
         return 1
 
     if not issues:
         print("No issues found in the audit payload.")
         decisions_payload = {
             "audit_file": str(args.audit),
-            "preprocessed": str(args.preprocessed),
             "metadata": metadata,
             "decisions": [],
             "summary": {"reviewed": 0, "accepted": 0, "accepted_with_edit": 0, "rejected": 0},
@@ -176,7 +102,6 @@ def main() -> int:
     total_issues = len(issues)
     for issue_number, issue in enumerate(issues, start=1):
         sentence_index = int(issue.get("sentence_index", 1))
-        sentence_index = max(1, min(sentence_index, len(sentences)))
 
         print("\n" + "=" * 80)
         print(f"Issue {issue_number}/{total_issues}")
@@ -193,11 +118,9 @@ def main() -> int:
             proposed = str(issue.get("sentence_text", "")).strip()
 
         print("\nCurrent sentence text:")
-        print(str(issue.get("sentence_text", sentences[sentence_index - 1].get("text", ""))))
+        print(str(issue.get("sentence_text", "N/A")))
         print("\nProposed correction (default accept):")
         print(proposed)
-
-        display_context(sentences, sentence_index, args.context_window)
 
         decision, final_correction = prompt_decision(proposed)
         if decision == "quit":
@@ -233,7 +156,6 @@ def main() -> int:
 
     decisions_payload = {
         "audit_file": str(args.audit),
-        "preprocessed": str(args.preprocessed),
         "metadata": metadata,
         "decisions": decisions,
         "summary": summary,
