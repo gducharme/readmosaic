@@ -16,7 +16,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
-from urllib import request
+from urllib import error, request
+from urllib.parse import urlparse
 
 from rich.console import Console
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
@@ -373,15 +374,43 @@ def call_lm_studio(
         "temperature": 0.2,
     }
     data = json.dumps(payload).encode("utf-8")
+    endpoint = normalize_chat_completions_url(base_url)
     req = request.Request(
-        base_url,
+        endpoint,
         data=data,
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+        method="POST",
     )
-    with request.urlopen(req, timeout=timeout_s) as response:
-        response_data = response.read().decode("utf-8")
+    try:
+        with request.urlopen(req, timeout=timeout_s) as response:
+            response_data = response.read().decode("utf-8")
+    except error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"HTTP {exc.code} from LM Studio at {endpoint}: {detail[:600]}"
+        ) from exc
     completion = json.loads(response_data)
     return completion["choices"][0]["message"]["content"]
+
+
+def normalize_chat_completions_url(base_url: str) -> str:
+    """Normalize user input to a chat-completions endpoint URL."""
+    raw = base_url.strip()
+    if not raw:
+        return DEFAULT_BASE_URL
+
+    parsed = urlparse(raw)
+    path = parsed.path.rstrip("/")
+    if path.endswith("/chat/completions"):
+        return raw.rstrip("/")
+    if path.endswith("/v1"):
+        return f"{raw.rstrip('/')}/chat/completions"
+    if path == "":
+        return f"{raw.rstrip('/')}/v1/chat/completions"
+    return raw.rstrip("/")
 
 
 def main() -> None:
