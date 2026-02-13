@@ -401,3 +401,24 @@ Fallback mode (when preprocessed artifacts are unavailable):
 ```bash
 python scripts/quotation_delimiter_auditor.py --file docs/sample.md --model llama3:8b-instruct-q8_0
 ```
+
+## Typographic Precision Review (Interactive)
+
+The `scripts/typographic_precision_review.py` CLI reviews auditor issue output line-by-line with local sentence context from pre-processing artifacts.
+
+Key behavior:
+
+- Accepts auditor payloads in three shapes: full report object with `issues`, raw issue array, or a single issue object.
+- Requires `--preprocessed` and reads `sentences.jsonl` so each issue can be reviewed with context.
+- Displays the target sentence plus the two preceding and two following sentences by default.
+- Prompts per issue with default **accept** behavior (`Y` on Enter), and supports reject (`n`) or edit correction (`e`).
+- Writes all decisions to JSON for downstream application/reconciliation.
+
+Example:
+
+```bash
+python scripts/typographic_precision_review.py \
+  --audit quotation_audit_outputs/quotation_audit_20260101_120000.json \
+  --preprocessed mosaic_outputs/preprocessing \
+  --output quotation_audit_review.json
+```
