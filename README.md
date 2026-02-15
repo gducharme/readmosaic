@@ -54,7 +54,7 @@ The `scripts/word_frequency_benchmark.py` CLI lists the top manuscript words (de
 python scripts/word_frequency_benchmark.py path/to/manuscript.txt --top-n 10
 ```
 
-Use `--include-stopwords` if you want function words in the ranking and `--output-json` to persist the report.
+Use `--include-stopwords` if you want function words in the ranking, `--output-json` to persist the benchmark payload, and `--frequency-report-file` to emit a compact word-frequency JSON object (`word -> count`).
 
 ## Narrative Burst Monitor (NBM)
 

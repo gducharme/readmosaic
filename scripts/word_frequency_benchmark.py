@@ -42,6 +42,14 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="Optional path to write the report payload as JSON.",
     )
+    parser.add_argument(
+        "--frequency-report-file",
+        type=Path,
+        help=(
+            "Optional path to write a compact word-frequency JSON object "
+            "(word -> manuscript_count)."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -58,6 +66,16 @@ def ensure_nltk_resources() -> None:
 
 def tokenize(text: str) -> list[str]:
     return [token.lower() for token in TOKEN_PATTERN.findall(text)]
+
+
+def build_frequency_report(
+    manuscript_tokens: list[str],
+    include_stopwords: bool,
+) -> dict[str, int]:
+    stopwords: set[str] = set(nltk.corpus.stopwords.words("english")) if not include_stopwords else set()
+    filtered_tokens = [token for token in manuscript_tokens if token not in stopwords]
+    counts = Counter(filtered_tokens)
+    return dict(counts.most_common())
 
 
 def build_report(
@@ -152,6 +170,17 @@ def main() -> None:
     if args.output_json:
         args.output_json.write_text(json.dumps(report, indent=2), encoding="utf-8")
         print(f"\nSaved JSON report: {args.output_json}")
+
+    if args.frequency_report_file:
+        frequency_report = build_frequency_report(
+            manuscript_tokens=manuscript_tokens,
+            include_stopwords=args.include_stopwords,
+        )
+        args.frequency_report_file.write_text(
+            json.dumps(frequency_report, indent=2),
+            encoding="utf-8",
+        )
+        print(f"Saved frequency report: {args.frequency_report_file}")
 
 
 if __name__ == "__main__":
