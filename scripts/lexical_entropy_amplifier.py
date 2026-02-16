@@ -69,6 +69,14 @@ def parse_args() -> argparse.Namespace:
         help="Optional markdown report path with before/after paragraph pairs.",
     )
     parser.add_argument(
+        "--exceptions-json",
+        type=Path,
+        help=(
+            "Optional JSON file listing words to exclude from rewriting. "
+            "Supported formats: array of strings, or object with `words` array."
+        ),
+    )
+    parser.add_argument(
         "--max-words",
         type=int,
         default=10,
@@ -208,6 +216,28 @@ def load_overused_words(path: Path, max_words: int) -> list[str]:
         return [word for word, _ in ranked_by_count[:max_words]]
 
     raise SystemExit("Unsupported overuse report format. Expected object JSON payload.")
+
+
+def load_exception_words(path: Path) -> set[str]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+
+    if isinstance(payload, list):
+        words = payload
+    elif isinstance(payload, dict):
+        words = payload.get("words", [])
+    else:
+        raise SystemExit("Unsupported exceptions format. Expected array or object with `words`.")
+
+    if not isinstance(words, list):
+        raise SystemExit("Invalid exceptions file: `words` must be a list.")
+
+    out: set[str] = set()
+    for item in words:
+        if isinstance(item, str):
+            token = item.strip().lower()
+            if token:
+                out.add(token)
+    return out
 
 
 def build_text_frequency(paragraphs: list[dict[str, Any]]) -> Counter[str]:
@@ -401,12 +431,18 @@ def main() -> None:
         raise SystemExit(f"Expected paragraphs artifact not found: {paragraphs_path}")
     if not args.overuse_report.exists():
         raise SystemExit(f"Overuse report not found: {args.overuse_report}")
+    if args.exceptions_json and not args.exceptions_json.exists():
+        raise SystemExit(f"Exceptions file not found: {args.exceptions_json}")
 
     paragraphs = read_jsonl(paragraphs_path)
     if not paragraphs:
         raise SystemExit("No paragraph records found in paragraphs.jsonl")
 
     target_words = load_overused_words(args.overuse_report, args.max_words)
+    exception_words = load_exception_words(args.exceptions_json) if args.exceptions_json else set()
+    if exception_words:
+        target_words = [word for word in target_words if word not in exception_words]
+
     text_frequency = build_text_frequency(paragraphs)
 
     embedding_model = SentenceTransformer(args.embedding_model)
