@@ -84,6 +84,30 @@ python scripts/lexical_entropy_amplifier.py \
 
 `--overuse-report` supports either the `word_frequency_benchmark.py --output-json` payload (`top_words`) or a compact frequency map (`word -> count`).
 
+
+## Lexical Enhancer (Interactive LEA v2)
+
+The `scripts/lexical_enhancer.py` CLI is an interactive version of lexical expansion. It loads preprocessing once, then loops on user-selected target words.
+
+For each target word, it:
+
+- finds matching paragraphs,
+- generates the same four suggestion methods as LEA,
+- runs LLM rewrite proposals paragraph-by-paragraph,
+- requires manual review (`accept`, `edit`, or `skip`) for each paragraph,
+- only then returns control so you can choose the next target word.
+
+Example:
+
+```bash
+python scripts/lexical_enhancer.py \
+  --preprocessing /preprocessed \
+  --model llama3:8b-instruct-q8_0 \
+  --output-json lexical_enhancer_review.json
+```
+
+Type `quit` at the target word prompt to end and save the session artifact.
+
 ## Narrative Burst Monitor (NBM)
 
 The `scripts/burst_monitor.py` CLI scans manuscripts for statistically significant bursts of terms (uni/bi/tri-grams) using a sliding-window Z-score model. It focuses on content words (nouns, verbs, adjectives) and ignores stop words so you can spot concept clumping without noise.
