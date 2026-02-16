@@ -56,6 +56,34 @@ python scripts/word_frequency_benchmark.py path/to/manuscript.txt --top-n 10
 
 Use `--include-stopwords` if you want function words in the ranking, `--output-json` to persist the benchmark payload, and `--frequency-report-file` to emit a compact word-frequency JSON object (`word -> count`).
 
+## Lexical Entropy Amplifier (LEA)
+
+The `scripts/lexical_entropy_amplifier.py` CLI takes an overuse/frequency report plus a preprocessing directory and builds rewrite bundles to reduce lexical attractors while preserving narrative profile.
+
+For each overused word, it:
+
+- finds paragraphs containing that word,
+- generates suggestions from four methods:
+  - **A**: frequency band jump (prefer lower Zipf frequency candidates when available),
+  - **B**: embedding drift with SentenceTransformers,
+  - **C**: WordNet lateral expansion (coordinate terms / hyponyms),
+  - **D**: Datamuse thesaurus suggestions,
+- sends paragraph + suggestion bundle to a local LLM with instruction: _"escape the lexical attractor while preserving semantic identity"_,
+- records before/after paragraph replacements keyed by target word.
+
+Example:
+
+```bash
+python scripts/lexical_entropy_amplifier.py \
+  --preprocessing /preprocessed \
+  --overuse-report overuse_report.json \
+  --model llama3:8b-instruct-q8_0 \
+  --output-json lexical_bundles.json \
+  --output-markdown lexical_bundles.md
+```
+
+`--overuse-report` supports either the `word_frequency_benchmark.py --output-json` payload (`top_words`) or a compact frequency map (`word -> count`).
+
 ## Narrative Burst Monitor (NBM)
 
 The `scripts/burst_monitor.py` CLI scans manuscripts for statistically significant bursts of terms (uni/bi/tri-grams) using a sliding-window Z-score model. It focuses on content words (nouns, verbs, adjectives) and ignores stop words so you can spot concept clumping without noise.
