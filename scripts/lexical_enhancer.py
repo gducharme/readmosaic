@@ -133,10 +133,10 @@ def _prompt_target_word() -> str:
 
 def _prompt_review_action() -> str:
     while True:
-        action = input("Review action [a=accept, e=edit, s=skip, q=quit session]: ").strip().lower()
-        if action in {"a", "e", "s", "q"}:
+        action = input("Review action [a=accept, e=edit, r=retry, s=skip, q=quit session]: ").strip().lower()
+        if action in {"a", "e", "r", "s", "q"}:
             return action
-        print("Invalid action. Use one of: a, e, s, q")
+        print("Invalid action. Use one of: a, e, r, s, q")
 
 
 def _print_suggestions(suggestions: dict[str, list[str]]) -> None:
@@ -188,25 +188,57 @@ def _review_paragraph(
     print("-" * 80)
     print("BEFORE:\n")
     print(before)
-    print("\nGenerating rewrite...\n")
+    failed_generations: list[str] = []
 
-    proposed_after = rewrite_paragraph(
-        paragraph_text=before,
-        target_word=target_word,
-        suggestions=suggestions,
-        base_url=args.lm_base_url,
-        model=args.model,
-        timeout=args.timeout,
-    )
+    while True:
+        print("\nGenerating rewrite...\n")
 
-    print("PROPOSED AFTER:\n")
-    print(proposed_after)
+        proposed_after = rewrite_paragraph(
+            paragraph_text=before,
+            target_word=target_word,
+            suggestions=suggestions,
+            base_url=args.lm_base_url,
+            model=args.model,
+            timeout=args.timeout,
+            do_not_repeat=failed_generations,
+        )
 
-    action = _prompt_review_action()
-    if action == "q":
-        raise KeyboardInterrupt
-    if action == "s":
-        print("Skipped paragraph.")
+        print("PROPOSED AFTER:\n")
+        print(proposed_after)
+
+        action = _prompt_review_action()
+        if action == "q":
+            raise KeyboardInterrupt
+        if action == "r":
+            failed_generations.append(proposed_after)
+            print("Retrying with prior failed generations marked as do-not-repeat.")
+            continue
+        if action == "s":
+            print("Skipped paragraph.")
+            return {
+                "bundle_id": f"{paragraph_id}:{target_word}:{occurrence_index}",
+                "target_word": target_word,
+                "paragraph_id": paragraph_id,
+                "occurrence": occurrence_index,
+                "occurrence_label": occurrence_label,
+                "before": before,
+                "after": before,
+                "suggestions": suggestions,
+                "review_status": "skipped",
+                "proposed_after": proposed_after,
+                "failed_generations": failed_generations,
+            }
+        if action == "e":
+            print("Enter your final reviewed paragraph text. Press Enter when done.")
+            final_after = input("Final paragraph: ").strip()
+            if not final_after:
+                final_after = proposed_after
+                print("No manual edit entered; keeping proposed rewrite.")
+            status = "edited"
+        else:
+            final_after = proposed_after
+            status = "accepted"
+
         return {
             "bundle_id": f"{paragraph_id}:{target_word}:{occurrence_index}",
             "target_word": target_word,
@@ -214,33 +246,11 @@ def _review_paragraph(
             "occurrence": occurrence_index,
             "occurrence_label": occurrence_label,
             "before": before,
-            "after": before,
+            "after": final_after,
             "suggestions": suggestions,
-            "review_status": "skipped",
-            "proposed_after": proposed_after,
+            "review_status": status,
+            "failed_generations": failed_generations,
         }
-    if action == "e":
-        print("Enter your final reviewed paragraph text. Press Enter when done.")
-        final_after = input("Final paragraph: ").strip()
-        if not final_after:
-            final_after = proposed_after
-            print("No manual edit entered; keeping proposed rewrite.")
-        status = "edited"
-    else:
-        final_after = proposed_after
-        status = "accepted"
-
-    return {
-        "bundle_id": f"{paragraph_id}:{target_word}:{occurrence_index}",
-        "target_word": target_word,
-        "paragraph_id": paragraph_id,
-        "occurrence": occurrence_index,
-        "occurrence_label": occurrence_label,
-        "before": before,
-        "after": final_after,
-        "suggestions": suggestions,
-        "review_status": status,
-    }
 
 
 def _build_suggestions(

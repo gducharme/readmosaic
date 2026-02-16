@@ -379,6 +379,7 @@ def rewrite_paragraph(
     base_url: str,
     model: str,
     timeout: int,
+    do_not_repeat: list[str] | None = None,
 ) -> str:
     system_prompt = (
         "You are a precision prose editor. Escape lexical attractors while preserving semantic identity, "
@@ -396,6 +397,8 @@ def rewrite_paragraph(
             "Return exactly one full paragraph, no bullets or commentary.",
         ],
     }
+    if do_not_repeat:
+        user_payload["do_not_repeat"] = do_not_repeat
     return request_chat_completion_content(
         base_url=base_url,
         model=model,
