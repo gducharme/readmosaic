@@ -113,6 +113,30 @@ def parse_args() -> argparse.Namespace:
         help="Optional comma-separated generic verb lemma override list.",
     )
     parser.add_argument(
+        "--include-empty",
+        action="store_true",
+        help=(
+            "Include generic verb hits even when no ranked suggestions survive filters. "
+            "Useful for auditing every occurrence."
+        ),
+    )
+    parser.add_argument(
+        "--print-text",
+        action="store_true",
+        help=(
+            "Print a human-readable report with one block per generic-verb occurrence "
+            "(Original / Generic / Suggestions)."
+        ),
+    )
+    parser.add_argument(
+        "--strict-verbnet",
+        action="store_true",
+        help=(
+            "Require every candidate to have a VerbNet class. Disabled by default to "
+            "avoid dropping valid WordNet alternatives."
+        ),
+    )
+    parser.add_argument(
         "--output-json",
         type=Path,
         help="Optional path to save full JSON report.",
@@ -241,6 +265,7 @@ def rank_candidates(
     obj_text: str,
     top_k: int,
     frequency_delta_threshold: float,
+    strict_verbnet: bool,
 ) -> list[dict[str, float | str | int]]:
     original_frequency = zipf_frequency(original_verb, "en")
     original_concrete = concreteness(original_verb, concreteness_table)
@@ -255,7 +280,7 @@ def rank_candidates(
         if candidate_concrete < original_concrete:
             continue
 
-        if not verbnet_compatible(candidate):
+        if strict_verbnet and not verbnet_compatible(candidate):
             continue
 
         sim = semantic_similarity(embedder, context, f"{candidate} {obj_text}")
@@ -268,6 +293,7 @@ def rank_candidates(
                 "concreteness": round(candidate_concrete, 4),
                 "zipf_frequency": round(candidate_frequency, 4),
                 "depth": depth,
+                "verbnet_compatible": int(verbnet_compatible(candidate)),
             }
         )
 
@@ -283,6 +309,8 @@ def process_sentence_records(
     generic_verbs: set[str],
     top_k: int,
     frequency_delta_threshold: float,
+    include_empty: bool,
+    strict_verbnet: bool,
 ) -> list[dict[str, Any]]:
     output: list[dict[str, Any]] = []
     for record in sentence_records:
@@ -301,8 +329,9 @@ def process_sentence_records(
                     obj_text=obj.text,
                     top_k=top_k,
                     frequency_delta_threshold=frequency_delta_threshold,
+                    strict_verbnet=strict_verbnet,
                 )
-                if not ranked:
+                if not ranked and not include_empty:
                     continue
                 output.append(
                     {
@@ -316,6 +345,19 @@ def process_sentence_records(
                     }
                 )
     return output
+
+
+def print_human_readable_report(results: list[dict[str, Any]]) -> None:
+    for hit in results:
+        suggestions = [str(item.get("candidate", "")).strip() for item in hit.get("suggestions", [])]
+        suggestion_text = ", ".join(s for s in suggestions if s)
+        if not suggestion_text:
+            suggestion_text = "(no suggestions after filters)"
+
+        print(f"Original: {hit.get('sentence', '').strip()}")
+        print(f"Generic: {hit.get('verb', '').strip()} → {hit.get('object', '').strip()}")
+        print(f"Suggestions: [{suggestion_text}]")
+        print()
 
 
 def read_raw_manuscript(path: Path) -> list[dict[str, Any]]:
@@ -371,6 +413,8 @@ def main() -> None:
         generic_verbs=generic_verbs,
         top_k=args.top_k,
         frequency_delta_threshold=args.frequency_delta_threshold,
+        include_empty=args.include_empty,
+        strict_verbnet=args.strict_verbnet,
     )
 
     payload = {
@@ -380,6 +424,10 @@ def main() -> None:
         "results": upgrades,
         "result_count": len(upgrades),
     }
+
+    if args.print_text:
+        print_human_readable_report(upgrades)
+
     print(json.dumps(payload, indent=2))
 
     if args.output_json:
