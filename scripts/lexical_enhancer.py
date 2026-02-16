@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -20,7 +21,6 @@ from lexical_entropy_amplifier import (
     DEFAULT_EMBEDDING_MODEL,
     build_text_frequency,
     ensure_nltk_resources,
-    find_paragraphs_for_word,
     load_exception_words,
     method_a_frequency_band_jump,
     method_b_embedding_drift,
@@ -70,10 +70,13 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--max-paragraphs-per-word",
+        "--max-occurrences-per-word",
         type=int,
-        default=3,
-        help="Maximum paragraphs to rewrite per target word (default: 3).",
+        default=0,
+        help=(
+            "Maximum total occurrences to review per target word across all paragraphs. "
+            "Use 0 for no limit (default: 0)."
+        ),
     )
     parser.add_argument(
         "--method-a-top-n",
@@ -143,11 +146,37 @@ def _print_suggestions(suggestions: dict[str, list[str]]) -> None:
         print(f"- {method_name}: {joined}")
 
 
+def _find_word_occurrences(
+    paragraphs: list[dict[str, Any]],
+    word: str,
+    max_items: int | None = None,
+) -> list[tuple[dict[str, Any], int, int]]:
+    pattern = re.compile(rf"\b{re.escape(word)}\b", flags=re.IGNORECASE)
+    matches: list[tuple[dict[str, Any], int, int]] = []
+    for paragraph in paragraphs:
+        text = paragraph.get("text")
+        if not isinstance(text, str):
+            continue
+
+        occurrence_count = len(pattern.findall(text))
+        if occurrence_count == 0:
+            continue
+
+        for occurrence_in_paragraph in range(1, occurrence_count + 1):
+            matches.append((paragraph, occurrence_in_paragraph, occurrence_count))
+
+    if max_items is None or max_items <= 0:
+        return matches
+    return matches[:max_items]
+
+
 def _review_paragraph(
     paragraph: dict[str, Any],
     target_word: str,
     suggestions: dict[str, list[str]],
     args: argparse.Namespace,
+    occurrence_label: str,
+    occurrence_index: int,
 ) -> dict[str, Any] | None:
     paragraph_id = str(paragraph.get("id", "unknown"))
     before = str(paragraph.get("text", "")).strip()
@@ -155,7 +184,7 @@ def _review_paragraph(
         return None
 
     print("\n" + "=" * 80)
-    print(f"Paragraph: {paragraph_id} | target: {target_word}")
+    print(f"Paragraph: {paragraph_id} | target: {target_word} | {occurrence_label}")
     print("-" * 80)
     print("BEFORE:\n")
     print(before)
@@ -179,9 +208,11 @@ def _review_paragraph(
     if action == "s":
         print("Skipped paragraph.")
         return {
-            "bundle_id": f"{paragraph_id}:{target_word}",
+            "bundle_id": f"{paragraph_id}:{target_word}:{occurrence_index}",
             "target_word": target_word,
             "paragraph_id": paragraph_id,
+            "occurrence": occurrence_index,
+            "occurrence_label": occurrence_label,
             "before": before,
             "after": before,
             "suggestions": suggestions,
@@ -200,9 +231,11 @@ def _review_paragraph(
         status = "accepted"
 
     return {
-        "bundle_id": f"{paragraph_id}:{target_word}",
+        "bundle_id": f"{paragraph_id}:{target_word}:{occurrence_index}",
         "target_word": target_word,
         "paragraph_id": paragraph_id,
+        "occurrence": occurrence_index,
+        "occurrence_label": occurrence_label,
         "before": before,
         "after": final_after,
         "suggestions": suggestions,
@@ -279,30 +312,36 @@ def main() -> None:
             print(f"'{target_word}' is in exceptions and will be skipped.")
             continue
 
-        candidates = find_paragraphs_for_word(
+        occurrences = _find_word_occurrences(
             paragraphs=paragraphs,
             word=target_word,
-            max_items=args.max_paragraphs_per_word,
+            max_items=args.max_occurrences_per_word,
         )
-        if not candidates:
+        if not occurrences:
             print(f"No matching paragraphs found for '{target_word}'.")
             continue
-
-        suggestions = _build_suggestions(
-            target_word=target_word,
-            args=args,
-            text_frequency=text_frequency,
-            embedding_model=embedding_model,
-        )
-        _print_suggestions(suggestions)
+        print(f"Found {len(occurrences)} occurrence(s) for '{target_word}' across preprocessing.")
 
         try:
-            for paragraph in candidates:
+            for i, (paragraph, occurrence_in_paragraph, total_in_paragraph) in enumerate(occurrences, start=1):
+                suggestions = _build_suggestions(
+                    target_word=target_word,
+                    args=args,
+                    text_frequency=text_frequency,
+                    embedding_model=embedding_model,
+                )
+                _print_suggestions(suggestions)
+                occurrence_label = (
+                    f"occurrence {i}/{len(occurrences)} "
+                    f"(paragraph hit {occurrence_in_paragraph}/{total_in_paragraph})"
+                )
                 reviewed = _review_paragraph(
                     paragraph=paragraph,
                     target_word=target_word,
                     suggestions=suggestions,
                     args=args,
+                    occurrence_label=occurrence_label,
+                    occurrence_index=i,
                 )
                 if reviewed is not None:
                     bundles.append(reviewed)
