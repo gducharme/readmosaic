@@ -167,6 +167,8 @@ python scripts/direct_signal_filter.py --help
 
 The `scripts/vivid_verb_upgrader.py` CLI detects generic/light verbs with direct objects and suggests more vivid troponym alternatives using WordNet + VerbNet filtering, then ranks candidates by semantic fit, concreteness, frequency penalty, and specificity depth.
 
+By default, VVU reads `./concreteness.csv` using the schema: `verb,category,concreteness_hint`.
+
 Run the script with:
 
 ```bash
