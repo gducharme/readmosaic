@@ -162,6 +162,26 @@ Run the script with:
 python scripts/direct_signal_filter.py --help
 ```
 
+
+## Vivid Verb Upgrader (VVU)
+
+The `scripts/vivid_verb_upgrader.py` CLI detects generic/light verbs with direct objects and suggests more vivid troponym alternatives using WordNet + VerbNet filtering, then ranks candidates by semantic fit, concreteness, frequency penalty, and specificity depth.
+
+Run the script with:
+
+```bash
+python scripts/vivid_verb_upgrader.py --help
+```
+
+Examples:
+
+```bash
+python scripts/vivid_verb_upgrader.py manuscript.md --concreteness-csv concreteness.csv
+python scripts/vivid_verb_upgrader.py --preprocessed /preprocessed/sentences.jsonl --concreteness-csv concreteness.csv --output-json vvu.json
+```
+
+`--preprocessed` accepts either a `sentences.jsonl` file or a preprocessing directory containing `sentences.jsonl`.
+
 ## Manuscript Pre-Processing
 
 The `scripts/pre_processing.py` CLI segments a manuscript into paragraph, sentence, and word JSONL artifacts with stable IDs, order, offsets, and cross-references. It also emits a schema-aligned `manuscript_tokens.json` artifact for downstream token processing. Run the script with `--help` for usage details and options.
