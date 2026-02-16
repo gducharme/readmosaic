@@ -165,7 +165,7 @@ python scripts/direct_signal_filter.py --help
 
 ## Vivid Verb Upgrader (VVU)
 
-The `scripts/vivid_verb_upgrader.py` CLI detects generic/light verbs with direct objects and suggests more vivid troponym alternatives using WordNet + VerbNet filtering, then ranks candidates by semantic fit, concreteness, frequency penalty, and specificity depth.
+The `scripts/vivid_verb_upgrader.py` CLI detects generic/light verbs with direct objects and suggests more vivid troponym alternatives using WordNet candidates ranked by semantic fit, concreteness, frequency penalty, and specificity depth. VerbNet filtering is optional via `--strict-verbnet`.
 
 By default, VVU reads `./concreteness.csv` using the schema: `verb,category,concreteness_hint`.
 
@@ -183,6 +183,13 @@ python scripts/vivid_verb_upgrader.py --preprocessed /preprocessed/sentences.jso
 ```
 
 `--preprocessed` accepts either a `sentences.jsonl` file or a preprocessing directory containing `sentences.jsonl`.
+
+
+Helpful output flags:
+
+- `--print-text` prints one human-readable block per occurrence in the form `Original / Generic / Suggestions`.
+- `--include-empty` keeps occurrences even when all candidates are filtered out (for full auditing).
+- `--strict-verbnet` re-enables strict VerbNet gating for every candidate.
 
 ## Manuscript Pre-Processing
 
