@@ -184,7 +184,14 @@ def verb_depth(synset: wn.synset) -> int:
 def get_troponyms(verb: str) -> list[tuple[str, int]]:
     candidates: dict[str, int] = {}
     for synset in wn.synsets(verb, pos=wn.VERB):
-        for troponym in synset.troponyms():
+        # NLTK WordNet exposes verb "troponyms" through hyponyms().
+        # Some wrappers may provide troponyms(); prefer it when present.
+        if hasattr(synset, "troponyms"):
+            related_synsets = synset.troponyms()
+        else:
+            related_synsets = synset.hyponyms()
+
+        for troponym in related_synsets:
             depth = verb_depth(troponym)
             for lemma in troponym.lemma_names():
                 normalized = lemma.replace("_", "-").lower()
