@@ -130,13 +130,30 @@ def parse_args() -> argparse.Namespace:
 
 def ensure_nltk_resources() -> None:
     for resource in ("corpora/wordnet", "corpora/omw-1.4", "corpora/stopwords"):
-        try:
-            nltk.data.find(resource)
-        except LookupError as exc:
-            raise SystemExit(
-                "Missing NLTK data resource: "
-                f"{resource}. Run `python scripts/setup_nltk_data.py` to install prerequisites."
-            ) from exc
+        candidates = (resource, f"{resource}.zip")
+        if any(_nltk_resource_exists(candidate) for candidate in candidates):
+            continue
+
+        # Some environments report resources as installed via nltk.download(),
+        # but keep them in a location that's not indexed until we attempt a
+        # direct download by package name.
+        package_name = resource.split("/")[-1]
+        nltk.download(package_name, quiet=True)
+        if any(_nltk_resource_exists(candidate) for candidate in candidates):
+            continue
+
+        raise SystemExit(
+            "Missing NLTK data resource: "
+            f"{resource}. Run `python scripts/setup_nltk_data.py` to install prerequisites."
+        )
+
+
+def _nltk_resource_exists(resource: str) -> bool:
+    try:
+        nltk.data.find(resource)
+    except LookupError:
+        return False
+    return True
 
 
 def tokenize(text: str) -> list[str]:
