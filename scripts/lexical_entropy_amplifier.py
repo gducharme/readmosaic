@@ -249,7 +249,11 @@ def build_text_frequency(paragraphs: list[dict[str, Any]]) -> Counter[str]:
     return counter
 
 
-def find_paragraphs_for_word(paragraphs: list[dict[str, Any]], word: str, max_items: int) -> list[dict[str, Any]]:
+def find_paragraphs_for_word(
+    paragraphs: list[dict[str, Any]],
+    word: str,
+    max_items: int | None = None,
+) -> list[dict[str, Any]]:
     matches: list[dict[str, Any]] = []
     pattern = re.compile(rf"\b{re.escape(word)}\b", flags=re.IGNORECASE)
     for paragraph in paragraphs:
@@ -258,9 +262,9 @@ def find_paragraphs_for_word(paragraphs: list[dict[str, Any]], word: str, max_it
             continue
         if pattern.search(text):
             matches.append(paragraph)
-            if len(matches) >= max_items:
-                break
-    return matches
+    if max_items is None or max_items <= 0:
+        return matches
+    return matches[:max_items]
 
 
 def method_a_frequency_band_jump(target_word: str, text_freq: Counter[str], top_n: int) -> list[str]:
