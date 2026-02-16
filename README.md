@@ -91,10 +91,10 @@ The `scripts/lexical_enhancer.py` CLI is an interactive version of lexical expan
 
 For each target word, it:
 
-- finds matching paragraphs,
+- scans all preprocessing paragraphs for every occurrence of the target word (including repeated hits within a paragraph),
 - generates the same four suggestion methods as LEA,
-- runs LLM rewrite proposals paragraph-by-paragraph,
-- requires manual review (`accept`, `edit`, or `skip`) for each paragraph,
+- runs LLM rewrite proposals occurrence-by-occurrence,
+- requires manual review (`accept`, `edit`, or `skip`) for each occurrence review,
 - only then returns control so you can choose the next target word.
 
 Example:
