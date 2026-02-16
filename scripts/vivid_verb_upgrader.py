@@ -46,6 +46,11 @@ GENERIC_VERBS = {
 
 DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 DEFAULT_CONCRETENESS_FALLBACK = 2.5
+CONCRETENESS_HINT_MAP = {
+    "high": 4.2,
+    "medium": 3.0,
+    "low": 1.8,
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -73,7 +78,10 @@ def parse_args() -> argparse.Namespace:
         "--concreteness-csv",
         type=Path,
         default=Path("concreteness.csv"),
-        help="Path to concreteness CSV with columns Word and Conc.M (default: ./concreteness.csv).",
+        help=(
+            "Path to concreteness CSV with columns verb, category, and "
+            "concreteness_hint (default: ./concreteness.csv)."
+        ),
     )
     parser.add_argument(
         "--spacy-model",
@@ -116,13 +124,15 @@ def load_concreteness(path: Path) -> dict[str, float]:
     if not path.exists():
         raise SystemExit(f"Concreteness CSV not found: {path}")
     df = pd.read_csv(path)
-    required_columns = {"Word", "Conc.M"}
+    required_columns = {"verb", "category", "concreteness_hint"}
     if not required_columns.issubset(df.columns):
         raise SystemExit(
             f"Concreteness CSV missing required columns {sorted(required_columns)}: {path}"
         )
-    words = df["Word"].astype(str).str.lower()
-    scores = pd.to_numeric(df["Conc.M"], errors="coerce").fillna(DEFAULT_CONCRETENESS_FALLBACK)
+
+    words = df["verb"].astype(str).str.strip().str.lower()
+    hints = df["concreteness_hint"].astype(str).str.strip().str.lower()
+    scores = hints.map(CONCRETENESS_HINT_MAP).fillna(DEFAULT_CONCRETENESS_FALLBACK)
     return dict(zip(words, scores))
 
 
