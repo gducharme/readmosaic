@@ -48,6 +48,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prompt", type=Path, default=DEFAULT_PROMPT_PATH, help="System prompt file path.")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR, help="Directory for output report.")
     parser.add_argument("--timeout", type=int, default=240, help="Request timeout in seconds.")
+    parser.add_argument(
+        "--json-retries",
+        type=int,
+        default=1,
+        help="Number of retries when the model returns non-JSON output.",
+    )
     parser.add_argument("--chunk-size", type=int, default=1000, help="Words per chunk (recommended 800-1200).")
     parser.add_argument(
         "--concurrency",
@@ -237,6 +243,8 @@ def main() -> None:
         raise SystemExit("--chunk-size must be >= 100 words.")
     if args.concurrency < 1:
         raise SystemExit("--concurrency must be >= 1.")
+    if args.json_retries < 0:
+        raise SystemExit("--json-retries must be >= 0.")
 
     sentence_units = load_sentence_units(args)
     input_source = str(args.preprocessed / "sentences.jsonl") if args.preprocessed else str(args.file)
@@ -275,18 +283,33 @@ def main() -> None:
 
         def run_chunk(chunk: Dict[str, Any]) -> List[Dict[str, Any]]:
             user_payload = build_user_payload(chunk, flags, total_sentences)
-            content = request_chat_completion_content(
-                args.base_url,
-                args.model,
-                system_prompt,
-                user_payload,
-                args.timeout,
-                temperature=0.0,
-            )
-            try:
-                model_output = json.loads(content)
-            except json.JSONDecodeError as exc:
-                raise SystemExit(f"Model returned non-JSON content: {content}") from exc
+            max_attempts = args.json_retries + 1
+            model_output: Dict[str, Any] | None = None
+            for attempt in range(1, max_attempts + 1):
+                content = request_chat_completion_content(
+                    args.base_url,
+                    args.model,
+                    system_prompt,
+                    user_payload,
+                    args.timeout,
+                    temperature=0.0,
+                )
+                try:
+                    model_output = json.loads(content)
+                    break
+                except json.JSONDecodeError as exc:
+                    if attempt == max_attempts:
+                        raise SystemExit(f"Model returned non-JSON content: {content}") from exc
+                    print(
+                        (
+                            f"Chunk {chunk['index']}: received non-JSON output "
+                            f"(attempt {attempt}/{max_attempts}); retrying..."
+                        ),
+                        file=sys.stderr,
+                    )
+
+            if model_output is None:
+                raise SystemExit(f"Chunk {chunk['index']} failed: missing model output after retries.")
             issues = model_output.get("issues", [])
             if not isinstance(issues, list):
                 raise SystemExit(f"Invalid model response for chunk {chunk['index']}: 'issues' must be a list.")
