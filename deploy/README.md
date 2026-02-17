@@ -1,24 +1,86 @@
 # Deploy Runtime Scaffold
 
-This directory contains the initial deploy-oriented Go module for the Mosaic terminal runtime.
+This directory contains the deploy-oriented Go module for the Mosaic terminal runtime.
 
 ## Entrypoints
 
-- **Run locally**: `go run ./cmd/server`
-- **Build binary**: `go build -o bin/mosaic-server ./cmd/server`
-- **Container/deploy entrypoint**: use the built `cmd/server` binary as your process entry.
+- **Run locally**: `make run`
+- **Build binary**: `make build`
+- **Run tests**: `make test`
+- **Offline CI checks**: `make ci-offline`
 
-## Startup flow
+## Startup flow contract
 
-1. Load configuration from environment (`MOSAIC_SSH_HOST`, `MOSAIC_SSH_PORT`).
-2. Construct a Wish SSH server instance.
-3. Attach middleware chain (rate limiting, username routing, session context).
+1. Load configuration from environment.
+2. Build Wish SSH server runtime.
+3. Attach middleware chain in strict order:
+   - `rate-limiting`
+   - `username-routing`
+   - `session-context`
 4. Listen on internal port `2222` by default.
+
+This flow is protected by integration tests in `internal/server/runtime_test.go`.
+
+## Configuration
+
+- `MOSAIC_SSH_HOST` (default `0.0.0.0`, must not be empty)
+- `MOSAIC_SSH_PORT` (default `2222`, integer)
+- `MOSAIC_SSH_HOST_KEY_PATH` (default `.data/host_ed25519`)
+- `MOSAIC_SSH_IDLE_TIMEOUT` (default `120s`)
+- `MOSAIC_SSH_MAX_SESSIONS` (default `32`)
+- `MOSAIC_SSH_RATE_LIMIT_PER_SEC` (default `20`)
+
+## Host key strategy
+
+Current default behavior uses a file path (`MOSAIC_SSH_HOST_KEY_PATH`); if missing, a placeholder key file is created automatically in this scaffold.
 
 ## Layout
 
-- `cmd/server/main.go` — standard startup entrypoint.
-- `internal/config` — environment config loading.
-- `internal/server` — Wish server builder + launcher.
-- `internal/router` — middleware chain registration.
+- `cmd/server/main.go` — composition root + process lifecycle.
+- `internal/config` — env parsing/validation.
+- `internal/server` — runtime assembly and `Run(ctx)`.
+- `internal/router` — middleware descriptors + middleware logic.
 - `internal/{tui,theme,content,commands,store,rtl,model}` — feature package placeholders.
+
+## Operational snippets
+
+### systemd (example)
+
+```ini
+[Unit]
+Description=Mosaic SSH Terminal
+After=network.target
+
+[Service]
+WorkingDirectory=/opt/mosaic/deploy
+Environment=MOSAIC_SSH_PORT=2222
+ExecStart=/opt/mosaic/deploy/bin/mosaic-server
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### Container run (example)
+
+```bash
+docker run --rm -p 2222:2222 \
+  -e MOSAIC_SSH_HOST=0.0.0.0 \
+  -e MOSAIC_SSH_PORT=2222 \
+  mosaic-terminal:latest
+```
+
+## Healthcheck strategy
+
+SSH transport has no HTTP health endpoint in this scaffold. Use a TCP healthcheck on `${MOSAIC_SSH_HOST}:${MOSAIC_SSH_PORT}` and watch startup/session lifecycle logs.
+
+## Using real upstream dependencies
+
+This scaffold currently uses local shim replacements in `go.mod` for restricted/offline environments.
+
+To switch to upstream modules:
+
+1. Remove `replace github.com/charmbracelet/...` lines from `go.mod`.
+2. Set real versions for `github.com/charmbracelet/wish` and `github.com/charmbracelet/ssh`.
+3. Run `go mod tidy` (with internet access).
+4. Delete `third_party/charmbracelet` if no longer needed.

@@ -1,0 +1,8 @@
+# github.com/charmbracelet/ssh v0.0.0 => ./third_party/charmbracelet/ssh
+## explicit; go 1.22
+github.com/charmbracelet/ssh
+# github.com/charmbracelet/wish v0.0.0 => ./third_party/charmbracelet/wish
+## explicit; go 1.22
+github.com/charmbracelet/wish
+# github.com/charmbracelet/ssh => ./third_party/charmbracelet/ssh
+# github.com/charmbracelet/wish => ./third_party/charmbracelet/wish

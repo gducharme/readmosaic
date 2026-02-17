@@ -10,14 +10,17 @@ import (
 )
 
 func main() {
-	cfg := config.LoadFromEnv()
+	cfg, err := config.LoadFromEnv()
+	if err != nil {
+		log.Fatalf("load config: %v", err)
+	}
 
-	wishServer, err := server.Build(cfg, router.DefaultMiddleware())
+	runtime, err := server.New(cfg, router.DefaultChain(cfg.RateLimitPerSec))
 	if err != nil {
 		log.Fatalf("build ssh server: %v", err)
 	}
 
-	if err := server.Start(context.Background(), wishServer); err != nil {
-		log.Fatalf("start ssh server: %v", err)
+	if err := runtime.Run(context.Background()); err != nil {
+		log.Fatalf("run ssh server: %v", err)
 	}
 }

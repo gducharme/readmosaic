@@ -1,45 +1,118 @@
 package config
 
 import (
+	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
+	"time"
+)
+
+const (
+	defaultHost            = "0.0.0.0"
+	defaultPort            = 2222
+	defaultHostKeyPath     = ".data/host_ed25519"
+	defaultIdleTimeout     = 120 * time.Second
+	defaultMaxSessions     = 32
+	defaultRateLimitPerSec = 20
 )
 
 // Config captures startup settings for the deploy entrypoint.
 type Config struct {
-	Host string
-	Port int
+	Host            string
+	Port            int
+	HostKeyPath     string
+	IdleTimeout     time.Duration
+	MaxSessions     int
+	RateLimitPerSec int
 }
 
 // LoadFromEnv loads runtime configuration from environment variables.
-func LoadFromEnv() Config {
-	cfg := Config{
-		Host: readEnv("MOSAIC_SSH_HOST", "0.0.0.0"),
-		Port: readEnvInt("MOSAIC_SSH_PORT", 2222),
+func LoadFromEnv() (Config, error) {
+	host, err := readRequiredOrDefault("MOSAIC_SSH_HOST", defaultHost)
+	if err != nil {
+		return Config{}, err
 	}
 
-	return cfg
-}
-
-func readEnv(key, fallback string) string {
-	value := os.Getenv(key)
-	if value == "" {
-		return fallback
+	port, err := readInt("MOSAIC_SSH_PORT", defaultPort, 1, 65535)
+	if err != nil {
+		return Config{}, err
 	}
 
-	return value
+	idleTimeout, err := readDuration("MOSAIC_SSH_IDLE_TIMEOUT", defaultIdleTimeout)
+	if err != nil {
+		return Config{}, err
+	}
+
+	maxSessions, err := readInt("MOSAIC_SSH_MAX_SESSIONS", defaultMaxSessions, 1, 1024)
+	if err != nil {
+		return Config{}, err
+	}
+
+	rateLimit, err := readInt("MOSAIC_SSH_RATE_LIMIT_PER_SEC", defaultRateLimitPerSec, 1, 1000)
+	if err != nil {
+		return Config{}, err
+	}
+
+	hostKeyPath := readString("MOSAIC_SSH_HOST_KEY_PATH", defaultHostKeyPath)
+
+	return Config{
+		Host:            host,
+		Port:            port,
+		HostKeyPath:     filepath.Clean(hostKeyPath),
+		IdleTimeout:     idleTimeout,
+		MaxSessions:     maxSessions,
+		RateLimitPerSec: rateLimit,
+	}, nil
 }
 
-func readEnvInt(key string, fallback int) int {
-	raw := os.Getenv(key)
+func readString(key, fallback string) string {
+	if raw, ok := os.LookupEnv(key); ok {
+		return raw
+	}
+
+	return fallback
+}
+
+func readRequiredOrDefault(key, fallback string) (string, error) {
+	raw, ok := os.LookupEnv(key)
+	if !ok {
+		return fallback, nil
+	}
 	if raw == "" {
-		return fallback
+		return "", fmt.Errorf("%s must not be empty", key)
+	}
+
+	return raw, nil
+}
+
+func readInt(key string, fallback, min, max int) (int, error) {
+	raw, ok := os.LookupEnv(key)
+	if !ok {
+		return fallback, nil
 	}
 
 	parsed, err := strconv.Atoi(raw)
 	if err != nil {
-		return fallback
+		return 0, fmt.Errorf("%s must be an integer: %w", key, err)
+	}
+	if parsed < min || parsed > max {
+		return 0, fmt.Errorf("%s must be between %d and %d", key, min, max)
 	}
 
-	return parsed
+	return parsed, nil
+}
+
+func readDuration(key string, fallback time.Duration) (time.Duration, error) {
+	raw, ok := os.LookupEnv(key)
+	if !ok {
+		return fallback, nil
+	}
+
+	parsed, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a valid duration: %w", key, err)
+	}
+
+	return parsed, nil
 }

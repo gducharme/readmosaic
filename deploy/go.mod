@@ -8,4 +8,5 @@ require (
 )
 
 replace github.com/charmbracelet/ssh => ./third_party/charmbracelet/ssh
+
 replace github.com/charmbracelet/wish => ./third_party/charmbracelet/wish
