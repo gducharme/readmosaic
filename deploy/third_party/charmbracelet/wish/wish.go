@@ -107,6 +107,12 @@ func WithMiddleware(middleware ...Middleware) Option {
 	}
 }
 
+func (s *Server) Address() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.Addr
+}
+
 func (s *Server) ListenAndServe() error {
 	ln, err := net.Listen("tcp", s.Addr)
 	if err != nil {
@@ -144,7 +150,7 @@ func (s *Server) ListenAndServe() error {
 			if s.idleTimeout > 0 {
 				_ = c.SetDeadline(time.Now().Add(s.idleTimeout))
 			}
-			sess := &session{ctx: context.Background(), conn: c, values: map[string]any{}, user: "guest"}
+			sess := &session{ctx: context.Background(), conn: c, values: map[any]any{}, user: "guest"}
 			reader := bufio.NewReader(c)
 			if line, lineErr := reader.ReadString('\n'); lineErr == nil && line != "" {
 				sess.user = strings.TrimSpace(line)
@@ -168,7 +174,7 @@ func (s *Server) Shutdown(context.Context) error {
 type session struct {
 	ctx    context.Context
 	conn   net.Conn
-	values map[string]any
+	values map[any]any
 	user   string
 }
 
@@ -180,8 +186,12 @@ func (s *session) Context() context.Context {
 	return s.ctx
 }
 
-func (s *session) SetValue(key string, value any) {
+func (s *session) SetValue(key any, value any) {
 	s.values[key] = value
+}
+
+func (s *session) Value(key any) any {
+	return s.values[key]
 }
 
 func (s *session) Write(p []byte) (n int, err error) {

@@ -9,6 +9,7 @@ type Handler func(Session)
 type Session interface {
 	User() string
 	Context() context.Context
-	SetValue(key string, value any)
+	SetValue(key any, value any)
+	Value(key any) any
 	Write(p []byte) (n int, err error)
 }
