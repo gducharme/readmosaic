@@ -64,7 +64,7 @@ func (r *Runtime) MiddlewareIDs() []string {
 
 // Address returns the configured (and once running, resolved) listener address.
 func (r *Runtime) Address() string {
-	return r.server.Addr
+	return r.server.Address()
 }
 
 // Run starts the server and exits after shutdown or fatal listen errors.
@@ -81,7 +81,7 @@ func (r *Runtime) Run(ctx context.Context) error {
 		_ = r.server.Shutdown(shutdownCtx)
 	}()
 
-	log.Printf("level=info event=startup version=%s mode=%s listen=%s middleware=%v", version, serverMode, r.server.Addr, r.middlewareIDs)
+	log.Printf("level=info event=startup version=%s mode=%s listen=%s middleware=%v", version, serverMode, r.server.Address(), r.middlewareIDs)
 	err := r.server.ListenAndServe()
 	if errors.Is(err, wish.ErrServerClosed) || err == nil {
 		<-shutdownDone

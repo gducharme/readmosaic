@@ -107,6 +107,12 @@ func WithMiddleware(middleware ...Middleware) Option {
 	}
 }
 
+func (s *Server) Address() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.Addr
+}
+
 func (s *Server) ListenAndServe() error {
 	ln, err := net.Listen("tcp", s.Addr)
 	if err != nil {
