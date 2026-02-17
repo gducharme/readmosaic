@@ -5,6 +5,8 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -23,6 +25,8 @@ const (
 	minimumRateLimit          = 1
 	maximumConfiguredSessions = 1024
 )
+
+var arweaveTxIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
 
 // Config captures startup settings for the deploy entrypoint.
 type Config struct {
@@ -90,27 +94,31 @@ func LoadFromEnv() (Config, error) {
 		return Config{}, err
 	}
 
-	cfg.ManifestoENTxID, err = readRequired("ARWEAVE_TXID_MANIFESTO_EN")
-	if err != nil {
+	missingRequired := make([]string, 0, 5)
+	cfg.ManifestoENTxID = readRequiredCollect("ARWEAVE_TXID_MANIFESTO_EN", &missingRequired)
+	cfg.ManifestoARTxID = readRequiredCollect("ARWEAVE_TXID_MANIFESTO_AR", &missingRequired)
+	cfg.ManifestoZHTxID = readRequiredCollect("ARWEAVE_TXID_MANIFESTO_ZH", &missingRequired)
+	cfg.GenesisTxID = readRequiredCollect("ARWEAVE_TXID_GENESIS", &missingRequired)
+	btcAnchorHeightRaw := readRequiredCollect("BTC_ANCHOR_HEIGHT", &missingRequired)
+	if len(missingRequired) > 0 {
+		sort.Strings(missingRequired)
+		return Config{}, fmt.Errorf("missing required environment variables: %s", strings.Join(missingRequired, ", "))
+	}
+
+	if err := validateArweaveTxID("ARWEAVE_TXID_MANIFESTO_EN", cfg.ManifestoENTxID); err != nil {
+		return Config{}, err
+	}
+	if err := validateArweaveTxID("ARWEAVE_TXID_MANIFESTO_AR", cfg.ManifestoARTxID); err != nil {
+		return Config{}, err
+	}
+	if err := validateArweaveTxID("ARWEAVE_TXID_MANIFESTO_ZH", cfg.ManifestoZHTxID); err != nil {
+		return Config{}, err
+	}
+	if err := validateArweaveTxID("ARWEAVE_TXID_GENESIS", cfg.GenesisTxID); err != nil {
 		return Config{}, err
 	}
 
-	cfg.ManifestoARTxID, err = readRequired("ARWEAVE_TXID_MANIFESTO_AR")
-	if err != nil {
-		return Config{}, err
-	}
-
-	cfg.ManifestoZHTxID, err = readRequired("ARWEAVE_TXID_MANIFESTO_ZH")
-	if err != nil {
-		return Config{}, err
-	}
-
-	cfg.GenesisTxID, err = readRequired("ARWEAVE_TXID_GENESIS")
-	if err != nil {
-		return Config{}, err
-	}
-
-	cfg.BTCAnchorHeight, err = readRequiredInt("BTC_ANCHOR_HEIGHT", 0, 10_000_000)
+	cfg.BTCAnchorHeight, err = parseRequiredInt("BTC_ANCHOR_HEIGHT", btcAnchorHeightRaw, 0, 10_000_000)
 	if err != nil {
 		return Config{}, err
 	}
@@ -142,35 +150,25 @@ func (c Config) Validate() error {
 	if c.HostKeyPath == "." {
 		return fmt.Errorf("MOSAIC_SSH_HOST_KEY_PATH must not resolve to current directory")
 	}
+	if c.Neo4jURI == "" && (c.Neo4jUser != "" || c.Neo4jPassword != "") {
+		return fmt.Errorf("NEO4J_USER and NEO4J_PASSWORD require NEO4J_URI")
+	}
+	if c.Neo4jURI != "" && (c.Neo4jUser == "" || c.Neo4jPassword == "") {
+		return fmt.Errorf("NEO4J_URI requires both NEO4J_USER and NEO4J_PASSWORD")
+	}
+
 	return nil
 }
 
-func readRequired(key string) (string, error) {
+func readRequiredCollect(key string, missing *[]string) string {
 	raw, ok := os.LookupEnv(key)
-	trimmed := strings.TrimSpace(raw)
+	trimmed := normalizeEnvValue(raw)
 	if !ok || trimmed == "" {
-		return "", fmt.Errorf("%s is required", key)
+		*missing = append(*missing, key)
+		return ""
 	}
 
-	return trimmed, nil
-}
-
-func readRequiredInt(key string, min, max int) (int, error) {
-	raw, ok := os.LookupEnv(key)
-	trimmed := strings.TrimSpace(raw)
-	if !ok || trimmed == "" {
-		return 0, fmt.Errorf("%s is required", key)
-	}
-
-	parsed64, err := strconv.ParseInt(trimmed, 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("%s must be an integer", key)
-	}
-	if parsed64 < int64(min) || parsed64 > int64(max) || parsed64 > math.MaxInt {
-		return 0, fmt.Errorf("%s must be between %d and %d", key, min, max)
-	}
-
-	return int(parsed64), nil
+	return trimmed
 }
 
 func readOptional(key string) string {
@@ -179,7 +177,7 @@ func readOptional(key string) string {
 		return ""
 	}
 
-	return strings.TrimSpace(raw)
+	return normalizeEnvValue(raw)
 }
 
 func readRequiredOrDefault(key, fallback string) (string, error) {
@@ -187,7 +185,7 @@ func readRequiredOrDefault(key, fallback string) (string, error) {
 	if !ok {
 		return fallback, nil
 	}
-	trimmed := strings.TrimSpace(raw)
+	trimmed := normalizeEnvValue(raw)
 	if trimmed == "" {
 		return "", fmt.Errorf("%s must not be empty", key)
 	}
@@ -201,7 +199,15 @@ func readInt(key string, fallback, min, max int) (int, error) {
 		return fallback, nil
 	}
 
-	parsed64, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	return parseRequiredInt(key, normalizeEnvValue(raw), min, max)
+}
+
+func parseRequiredInt(key, raw string, min, max int) (int, error) {
+	if raw == "" {
+		return 0, fmt.Errorf("%s is required", key)
+	}
+
+	parsed64, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil {
 		return 0, fmt.Errorf("%s must be an integer", key)
 	}
@@ -218,7 +224,7 @@ func readDuration(key string, fallback time.Duration) (time.Duration, error) {
 		return fallback, nil
 	}
 
-	parsed, err := time.ParseDuration(strings.TrimSpace(raw))
+	parsed, err := time.ParseDuration(normalizeEnvValue(raw))
 	if err != nil {
 		return 0, fmt.Errorf("%s must be a valid duration: %w", key, err)
 	}
@@ -227,4 +233,27 @@ func readDuration(key string, fallback time.Duration) (time.Duration, error) {
 	}
 
 	return parsed, nil
+}
+
+func validateArweaveTxID(key, txID string) error {
+	lower := strings.ToLower(txID)
+	if lower == "todo" || lower == "changeme" {
+		return fmt.Errorf("%s must be set to a real Arweave transaction ID", key)
+	}
+	if !arweaveTxIDPattern.MatchString(txID) {
+		return fmt.Errorf("%s must be a valid Arweave transaction ID", key)
+	}
+
+	return nil
+}
+
+func normalizeEnvValue(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if len(trimmed) >= 2 {
+		if (trimmed[0] == '"' && trimmed[len(trimmed)-1] == '"') || (trimmed[0] == '\'' && trimmed[len(trimmed)-1] == '\'') {
+			return strings.TrimSpace(trimmed[1 : len(trimmed)-1])
+		}
+	}
+
+	return trimmed
 }

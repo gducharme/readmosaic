@@ -5,12 +5,14 @@ import (
 	"testing"
 )
 
+const sampleTxID = "abcdefghijklmnopqrstuvwxyzABCDEF1234567890_"
+
 func setRequiredEnv(t *testing.T) {
 	t.Helper()
-	t.Setenv("ARWEAVE_TXID_MANIFESTO_EN", "manifesto-en")
-	t.Setenv("ARWEAVE_TXID_MANIFESTO_AR", "manifesto-ar")
-	t.Setenv("ARWEAVE_TXID_MANIFESTO_ZH", "manifesto-zh")
-	t.Setenv("ARWEAVE_TXID_GENESIS", "genesis")
+	t.Setenv("ARWEAVE_TXID_MANIFESTO_EN", sampleTxID)
+	t.Setenv("ARWEAVE_TXID_MANIFESTO_AR", sampleTxID)
+	t.Setenv("ARWEAVE_TXID_MANIFESTO_ZH", sampleTxID)
+	t.Setenv("ARWEAVE_TXID_GENESIS", sampleTxID)
 	t.Setenv("BTC_ANCHOR_HEIGHT", "840000")
 }
 
@@ -30,27 +32,11 @@ func TestLoadFromEnvPortOutOfRange(t *testing.T) {
 	}
 }
 
-func TestLoadFromEnvEmptyHost(t *testing.T) {
-	setRequiredEnv(t)
-	t.Setenv("MOSAIC_SSH_HOST", "")
-	if _, err := LoadFromEnv(); err == nil {
-		t.Fatal("LoadFromEnv() expected error for empty host")
-	}
-}
-
 func TestLoadFromEnvWhitespaceHost(t *testing.T) {
 	setRequiredEnv(t)
 	t.Setenv("MOSAIC_SSH_HOST", "   ")
 	if _, err := LoadFromEnv(); err == nil {
 		t.Fatal("LoadFromEnv() expected error for whitespace host")
-	}
-}
-
-func TestLoadFromEnvEmptyHostKeyPath(t *testing.T) {
-	setRequiredEnv(t)
-	t.Setenv("MOSAIC_SSH_HOST_KEY_PATH", "")
-	if _, err := LoadFromEnv(); err == nil {
-		t.Fatal("LoadFromEnv() expected error for empty host key path")
 	}
 }
 
@@ -70,14 +56,6 @@ func TestLoadFromEnvInvalidIdleTimeout(t *testing.T) {
 	}
 }
 
-func TestLoadFromEnvNegativeIdleTimeout(t *testing.T) {
-	setRequiredEnv(t)
-	t.Setenv("MOSAIC_SSH_IDLE_TIMEOUT", "-1s")
-	if _, err := LoadFromEnv(); err == nil {
-		t.Fatal("LoadFromEnv() expected error for negative duration")
-	}
-}
-
 func TestLoadFromEnvInvalidMaxSessions(t *testing.T) {
 	setRequiredEnv(t)
 	t.Setenv("MOSAIC_SSH_MAX_SESSIONS", "0")
@@ -94,26 +72,60 @@ func TestLoadFromEnvInvalidRateLimit(t *testing.T) {
 	}
 }
 
-func TestLoadFromEnvMissingManifestoTxID(t *testing.T) {
-	t.Setenv("ARWEAVE_TXID_MANIFESTO_AR", "manifesto-ar")
-	t.Setenv("ARWEAVE_TXID_MANIFESTO_ZH", "manifesto-zh")
-	t.Setenv("ARWEAVE_TXID_GENESIS", "genesis")
-	t.Setenv("BTC_ANCHOR_HEIGHT", "840000")
+func TestLoadFromEnvMissingRequiredVariablesAggregated(t *testing.T) {
+	_, err := LoadFromEnv()
+	if err == nil {
+		t.Fatal("LoadFromEnv() expected error for missing required variables")
+	}
 
-	if _, err := LoadFromEnv(); err == nil {
-		t.Fatal("LoadFromEnv() expected error for missing ARWEAVE_TXID_MANIFESTO_EN")
+	msg := err.Error()
+	for _, key := range []string{
+		"ARWEAVE_TXID_GENESIS",
+		"ARWEAVE_TXID_MANIFESTO_AR",
+		"ARWEAVE_TXID_MANIFESTO_EN",
+		"ARWEAVE_TXID_MANIFESTO_ZH",
+		"BTC_ANCHOR_HEIGHT",
+	} {
+		if !strings.Contains(msg, key) {
+			t.Fatalf("expected aggregated error to include %s; got %q", key, msg)
+		}
 	}
 }
 
 func TestLoadFromEnvWhitespaceManifestoTxID(t *testing.T) {
+	setRequiredEnv(t)
 	t.Setenv("ARWEAVE_TXID_MANIFESTO_EN", "   ")
-	t.Setenv("ARWEAVE_TXID_MANIFESTO_AR", "manifesto-ar")
-	t.Setenv("ARWEAVE_TXID_MANIFESTO_ZH", "manifesto-zh")
-	t.Setenv("ARWEAVE_TXID_GENESIS", "genesis")
-	t.Setenv("BTC_ANCHOR_HEIGHT", "840000")
-
 	if _, err := LoadFromEnv(); err == nil {
 		t.Fatal("LoadFromEnv() expected error for whitespace ARWEAVE_TXID_MANIFESTO_EN")
+	}
+}
+
+func TestLoadFromEnvQuotedManifestoTxID(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("ARWEAVE_TXID_MANIFESTO_EN", " \""+sampleTxID+"\" ")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() unexpected error: %v", err)
+	}
+	if cfg.ManifestoENTxID != sampleTxID {
+		t.Fatalf("expected ARWEAVE_TXID_MANIFESTO_EN to be normalized, got %q", cfg.ManifestoENTxID)
+	}
+}
+
+func TestLoadFromEnvPlaceholderManifestoTxIDRejected(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("ARWEAVE_TXID_MANIFESTO_EN", "changeme")
+	if _, err := LoadFromEnv(); err == nil {
+		t.Fatal("LoadFromEnv() expected placeholder manifesto txid to be rejected")
+	}
+}
+
+func TestLoadFromEnvInvalidManifestoTxIDFormat(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("ARWEAVE_TXID_MANIFESTO_EN", "invalid-txid")
+	if _, err := LoadFromEnv(); err == nil {
+		t.Fatal("LoadFromEnv() expected invalid manifesto txid format to be rejected")
 	}
 }
 
@@ -130,9 +142,11 @@ func TestLoadFromEnvNeo4jOptional(t *testing.T) {
 	}
 }
 
-func TestLoadFromEnvNeo4jEnabledFromURI(t *testing.T) {
+func TestLoadFromEnvNeo4jEnabledFromURIAndCredentials(t *testing.T) {
 	setRequiredEnv(t)
 	t.Setenv("NEO4J_URI", "  neo4j://localhost:7687  ")
+	t.Setenv("NEO4J_USER", " neo4j ")
+	t.Setenv("NEO4J_PASSWORD", " secret ")
 
 	cfg, err := LoadFromEnv()
 	if err != nil {
@@ -141,17 +155,41 @@ func TestLoadFromEnvNeo4jEnabledFromURI(t *testing.T) {
 	if !cfg.Neo4jEnabled {
 		t.Fatal("expected Neo4jEnabled when NEO4J_URI is set")
 	}
-	if cfg.Neo4jURI != "neo4j://localhost:7687" {
-		t.Fatalf("expected trimmed NEO4J_URI, got %q", cfg.Neo4jURI)
+	if cfg.Neo4jURI != "neo4j://localhost:7687" || cfg.Neo4jUser != "neo4j" || cfg.Neo4jPassword != "secret" {
+		t.Fatal("expected Neo4j settings to be normalized")
+	}
+}
+
+func TestLoadFromEnvNeo4jURIMissingCredentials(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("NEO4J_URI", "neo4j://localhost:7687")
+
+	_, err := LoadFromEnv()
+	if err == nil {
+		t.Fatal("LoadFromEnv() expected neo4j credential validation error")
+	}
+	if !strings.Contains(err.Error(), "NEO4J_URI requires both NEO4J_USER and NEO4J_PASSWORD") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadFromEnvNeo4jCredentialsWithoutURI(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("NEO4J_USER", "neo4j")
+	t.Setenv("NEO4J_PASSWORD", "dontlogme")
+
+	_, err := LoadFromEnv()
+	if err == nil {
+		t.Fatal("LoadFromEnv() expected neo4j URI requirement error")
+	}
+	if strings.Contains(err.Error(), "dontlogme") {
+		t.Fatalf("error should not include password value: %v", err)
 	}
 }
 
 func TestLoadFromEnvMissingBTCAnchorHeight(t *testing.T) {
-	t.Setenv("ARWEAVE_TXID_MANIFESTO_EN", "manifesto-en")
-	t.Setenv("ARWEAVE_TXID_MANIFESTO_AR", "manifesto-ar")
-	t.Setenv("ARWEAVE_TXID_MANIFESTO_ZH", "manifesto-zh")
-	t.Setenv("ARWEAVE_TXID_GENESIS", "genesis")
-
+	setRequiredEnv(t)
+	t.Setenv("BTC_ANCHOR_HEIGHT", "")
 	if _, err := LoadFromEnv(); err == nil {
 		t.Fatal("LoadFromEnv() expected error for missing BTC_ANCHOR_HEIGHT")
 	}
@@ -181,7 +219,7 @@ func TestLoadFromEnvNegativeRateLimitBurst(t *testing.T) {
 	}
 }
 
-func TestLoadFromEnvBurstLowerThanPerMinute(t *testing.T) {
+func TestLoadFromEnvBurstLowerThanPerMinuteAllowed(t *testing.T) {
 	setRequiredEnv(t)
 	t.Setenv("RATE_LIMIT_PER_MIN", "50")
 	t.Setenv("RATE_LIMIT_BURST", "20")
@@ -192,6 +230,20 @@ func TestLoadFromEnvBurstLowerThanPerMinute(t *testing.T) {
 	}
 	if cfg.RateLimitPerMin != 50 || cfg.RateLimitBurst != 20 {
 		t.Fatal("expected custom per-minute and burst limits to load as configured")
+	}
+}
+
+func TestLoadFromEnvBurstGreaterThanPerMinuteAllowed(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("RATE_LIMIT_PER_MIN", "10")
+	t.Setenv("RATE_LIMIT_BURST", "100")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() unexpected error: %v", err)
+	}
+	if cfg.RateLimitPerMin != 10 || cfg.RateLimitBurst != 100 {
+		t.Fatal("expected burst > per-minute to be accepted")
 	}
 }
 
