@@ -11,20 +11,48 @@ import (
 type fakeSession struct {
 	user   string
 	ctx    context.Context
-	values map[string]any
+	values map[any]any
 	writes []string
 }
 
 func newFakeSession(user string) *fakeSession {
-	return &fakeSession{user: user, ctx: context.Background(), values: map[string]any{}}
+	return &fakeSession{user: user, ctx: context.Background(), values: map[any]any{}}
 }
 
-func (f *fakeSession) User() string                   { return f.user }
-func (f *fakeSession) Context() context.Context       { return f.ctx }
-func (f *fakeSession) SetValue(key string, value any) { f.values[key] = value }
+func (f *fakeSession) User() string                { return f.user }
+func (f *fakeSession) Context() context.Context    { return f.ctx }
+func (f *fakeSession) SetValue(key any, value any) { f.values[key] = value }
 func (f *fakeSession) Write(p []byte) (int, error) {
 	f.writes = append(f.writes, string(p))
 	return len(p), nil
+}
+
+func TestDefaultChainKeepsIdentityBeforeSessionMetadata(t *testing.T) {
+	chain := DefaultChain(10)
+	want := []string{"rate-limit", "username-routing", "session-metadata"}
+	if len(chain) != len(want) {
+		t.Fatalf("chain length = %d, want %d", len(chain), len(want))
+	}
+	for i := range want {
+		if chain[i].Name != want[i] {
+			t.Fatalf("chain[%d] = %q, want %q", i, chain[i].Name, want[i])
+		}
+	}
+
+	s := newFakeSession("west")
+	middleware := MiddlewareFromDescriptors(chain)
+	h := ssh.Handler(func(sess ssh.Session) {
+		if _, ok := s.values[sessionIdentityKey]; !ok {
+			t.Fatalf("expected identity metadata before handler execution")
+		}
+		if _, ok := s.values[sessionMetadataKey]; !ok {
+			t.Fatalf("expected session metadata before handler execution")
+		}
+	})
+	for i := len(middleware) - 1; i >= 0; i-- {
+		h = middleware[i](h)
+	}
+	h(s)
 }
 
 func TestUsernameRoutingKnownVectorUsers(t *testing.T) {
@@ -44,7 +72,7 @@ func TestUsernameRoutingKnownVectorUsers(t *testing.T) {
 
 			identityValue, ok := s.values[sessionIdentityKey]
 			if !ok {
-				t.Fatalf("expected %q to be set", sessionIdentityKey)
+				t.Fatalf("expected %v to be set", sessionIdentityKey)
 			}
 
 			identity, ok := identityValue.(Identity)
@@ -52,7 +80,7 @@ func TestUsernameRoutingKnownVectorUsers(t *testing.T) {
 				t.Fatalf("identity type = %T, want Identity", identityValue)
 			}
 
-			if identity.Route != "vector" || identity.Vector != user {
+			if identity.Route != routeVector || identity.Vector != user {
 				t.Fatalf("identity = %+v, expected vector route for user %q", identity, user)
 			}
 		})
@@ -75,7 +103,7 @@ func TestUsernameRoutingTriageUsers(t *testing.T) {
 			}
 
 			identity := s.values[sessionIdentityKey].(Identity)
-			if identity.Route != "triage" || identity.Vector != "triage" {
+			if identity.Route != routeTriage || identity.Vector != routeTriage {
 				t.Fatalf("identity = %+v, want triage metadata", identity)
 			}
 		})
@@ -115,7 +143,7 @@ func TestSessionMetadataStoresIdentity(t *testing.T) {
 
 	infoValue, ok := s.values[sessionMetadataKey]
 	if !ok {
-		t.Fatalf("expected %q to be set", sessionMetadataKey)
+		t.Fatalf("expected %v to be set", sessionMetadataKey)
 	}
 
 	info, ok := infoValue.(SessionInfo)
@@ -123,8 +151,19 @@ func TestSessionMetadataStoresIdentity(t *testing.T) {
 		t.Fatalf("session info type = %T, want SessionInfo", infoValue)
 	}
 
-	if info.Identity.Username != "fitra" || info.Identity.Route != "vector" || info.Identity.Vector != "fitra" {
+	if info.Identity.Username != "fitra" || info.Identity.Route != routeVector || info.Identity.Vector != "fitra" {
 		t.Fatalf("info.Identity = %+v", info.Identity)
+	}
+}
+
+func TestIdentityPolicyCoverage(t *testing.T) {
+	if len(identityPolicy) != 5 {
+		t.Fatalf("identityPolicy size = %d, want 5", len(identityPolicy))
+	}
+	for _, user := range []string{"west", "fitra", "root", "read", "archive"} {
+		if _, ok := identityPolicy[user]; !ok {
+			t.Fatalf("identityPolicy missing user %q", user)
+		}
 	}
 }
 

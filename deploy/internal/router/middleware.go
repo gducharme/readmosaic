@@ -1,6 +1,7 @@
 package router
 
 import (
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -9,9 +10,14 @@ import (
 	"github.com/charmbracelet/wish"
 )
 
+type sessionKey string
+
 const (
-	sessionMetadataKey = "mosaic.session"
-	sessionIdentityKey = "mosaic.identity"
+	sessionMetadataKey sessionKey = "mosaic.session"
+	sessionIdentityKey sessionKey = "mosaic.identity"
+
+	routeVector = "vector"
+	routeTriage = "triage"
 )
 
 // SessionInfo stores stable metadata for downstream consumers.
@@ -26,6 +32,14 @@ type Identity struct {
 	Username string
 	Route    string
 	Vector   string
+}
+
+var identityPolicy = map[string]Identity{
+	"west":    {Username: "west", Route: routeVector, Vector: "west"},
+	"fitra":   {Username: "fitra", Route: routeVector, Vector: "fitra"},
+	"root":    {Username: "root", Route: routeVector, Vector: "root"},
+	"read":    {Username: "read", Route: routeTriage, Vector: routeTriage},
+	"archive": {Username: "archive", Route: routeTriage, Vector: routeTriage},
 }
 
 // Descriptor keeps middleware metadata for deterministic startup wiring.
@@ -87,13 +101,13 @@ func usernameRouting() wish.Middleware {
 		return func(s ssh.Session) {
 			identity, ok := resolveIdentity(s.User())
 			if !ok {
-				log.Printf("level=warn event=username_rejected user=%s", s.User())
+				log.Printf("level=warn event=username_rejected user=%q reason=unknown_identity session=%s", s.User(), sessionTraceID(s))
 				_, _ = s.Write([]byte("SIGNAL UNRECOGNIZED. RETURN TO AGGREGATE.\n"))
 				return
 			}
 
 			s.SetValue(sessionIdentityKey, identity)
-			log.Printf("level=info event=username_route user=%s route=%s vector=%s", identity.Username, identity.Route, identity.Vector)
+			log.Printf("level=info event=username_route user=%s route=%s vector=%s session=%s", identity.Username, identity.Route, identity.Vector, sessionTraceID(s))
 			next(s)
 		}
 	}
@@ -105,24 +119,19 @@ func sessionMetadata() wish.Middleware {
 			identity, _ := resolveIdentity(s.User())
 			info := SessionInfo{User: s.User(), Identity: identity, StartedAt: time.Now().UTC()}
 			s.SetValue(sessionMetadataKey, info)
-			if identity.Username != "" {
-				s.SetValue(sessionIdentityKey, identity)
-			}
 
-			log.Printf("level=info event=session_start user=%s route=%s vector=%s", s.User(), identity.Route, identity.Vector)
+			log.Printf("level=info event=session_start user=%s route=%s vector=%s session=%s", s.User(), identity.Route, identity.Vector, sessionTraceID(s))
 			next(s)
-			log.Printf("level=info event=session_end user=%s duration_ms=%d", s.User(), time.Since(info.StartedAt).Milliseconds())
+			log.Printf("level=info event=session_end user=%s duration_ms=%d session=%s", s.User(), time.Since(info.StartedAt).Milliseconds(), sessionTraceID(s))
 		}
 	}
 }
 
 func resolveIdentity(username string) (Identity, bool) {
-	switch username {
-	case "west", "fitra", "root":
-		return Identity{Username: username, Route: "vector", Vector: username}, true
-	case "read", "archive":
-		return Identity{Username: username, Route: "triage", Vector: "triage"}, true
-	default:
-		return Identity{}, false
-	}
+	identity, ok := identityPolicy[username]
+	return identity, ok
+}
+
+func sessionTraceID(s ssh.Session) string {
+	return fmt.Sprintf("%p", s)
 }
