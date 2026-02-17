@@ -18,8 +18,8 @@ func newFakeSession(user string) *fakeSession {
 	return &fakeSession{user: user, ctx: context.Background(), values: map[string]any{}}
 }
 
-func (f *fakeSession) User() string { return f.user }
-func (f *fakeSession) Context() context.Context { return f.ctx }
+func (f *fakeSession) User() string                   { return f.user }
+func (f *fakeSession) Context() context.Context       { return f.ctx }
 func (f *fakeSession) SetValue(key string, value any) { f.values[key] = value }
 func (f *fakeSession) Write(p []byte) (int, error) {
 	f.writes = append(f.writes, string(p))

@@ -126,4 +126,3 @@ func resolveIdentity(username string) (Identity, bool) {
 		return Identity{}, false
 	}
 }
-
