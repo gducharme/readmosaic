@@ -34,6 +34,21 @@ type Identity struct {
 	Vector   string
 }
 
+// IsVector reports whether this identity should route to vector-specific content/theme.
+func (i Identity) IsVector() bool {
+	return i.Route == routeVector
+}
+
+// IsTriage reports whether this identity should route to the shared triage flow.
+func (i Identity) IsTriage() bool {
+	return i.Route == routeTriage
+}
+
+// IsPrivileged reports whether this identity has privileged operator permissions.
+func (i Identity) IsPrivileged() bool {
+	return i.Username == "root"
+}
+
 var identityPolicy = map[string]Identity{
 	"west":    {Username: "west", Route: routeVector, Vector: "west"},
 	"fitra":   {Username: "fitra", Route: routeVector, Vector: "fitra"},
@@ -65,6 +80,20 @@ func MiddlewareFromDescriptors(chain []Descriptor) []wish.Middleware {
 	}
 
 	return result
+}
+
+// SessionIdentity returns the resolved identity attached to this session.
+func SessionIdentity(s ssh.Session) (Identity, bool) {
+	identityValue := s.Value(sessionIdentityKey)
+	identity, ok := identityValue.(Identity)
+	return identity, ok
+}
+
+// SessionMetadata returns immutable per-session metadata attached by middleware.
+func SessionMetadata(s ssh.Session) (SessionInfo, bool) {
+	infoValue := s.Value(sessionMetadataKey)
+	info, ok := infoValue.(SessionInfo)
+	return info, ok
 }
 
 func rateLimitMiddleware(limitPerSecond int) wish.Middleware {
@@ -116,7 +145,10 @@ func usernameRouting() wish.Middleware {
 func sessionMetadata() wish.Middleware {
 	return func(next ssh.Handler) ssh.Handler {
 		return func(s ssh.Session) {
-			identity, _ := resolveIdentity(s.User())
+			identity, ok := SessionIdentity(s)
+			if !ok {
+				identity, _ = resolveIdentity(s.User())
+			}
 			info := SessionInfo{User: s.User(), Identity: identity, StartedAt: time.Now().UTC()}
 			s.SetValue(sessionMetadataKey, info)
 

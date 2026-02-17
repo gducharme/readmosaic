@@ -22,6 +22,7 @@ func newFakeSession(user string) *fakeSession {
 func (f *fakeSession) User() string                { return f.user }
 func (f *fakeSession) Context() context.Context    { return f.ctx }
 func (f *fakeSession) SetValue(key any, value any) { f.values[key] = value }
+func (f *fakeSession) Value(key any) any           { return f.values[key] }
 func (f *fakeSession) Write(p []byte) (int, error) {
 	f.writes = append(f.writes, string(p))
 	return len(p), nil
@@ -231,5 +232,35 @@ func TestUsernameRoutingRepeatedRejectionDoesNotBypass(t *testing.T) {
 		if write != "SIGNAL UNRECOGNIZED. RETURN TO AGGREGATE.\n" {
 			t.Fatalf("unexpected write %q", write)
 		}
+	}
+}
+
+func TestIdentityHelpers(t *testing.T) {
+	root := Identity{Username: "root", Route: routeVector, Vector: "root"}
+	if !root.IsVector() || root.IsTriage() || !root.IsPrivileged() {
+		t.Fatalf("unexpected helper classification for root identity: %+v", root)
+	}
+
+	triage := Identity{Username: "archive", Route: routeTriage, Vector: routeTriage}
+	if triage.IsVector() || !triage.IsTriage() || triage.IsPrivileged() {
+		t.Fatalf("unexpected helper classification for triage identity: %+v", triage)
+	}
+}
+
+func TestSessionAccessors(t *testing.T) {
+	s := newFakeSession("west")
+	identity := Identity{Username: "west", Route: routeVector, Vector: "west"}
+	info := SessionInfo{User: "west", Identity: identity}
+	s.SetValue(sessionIdentityKey, identity)
+	s.SetValue(sessionMetadataKey, info)
+
+	gotIdentity, ok := SessionIdentity(s)
+	if !ok || gotIdentity != identity {
+		t.Fatalf("SessionIdentity() = (%+v,%v), want (%+v,true)", gotIdentity, ok, identity)
+	}
+
+	gotInfo, ok := SessionMetadata(s)
+	if !ok || gotInfo != info {
+		t.Fatalf("SessionMetadata() = (%+v,%v), want (%+v,true)", gotInfo, ok, info)
 	}
 }

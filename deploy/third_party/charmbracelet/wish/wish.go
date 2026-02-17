@@ -190,6 +190,10 @@ func (s *session) SetValue(key any, value any) {
 	s.values[key] = value
 }
 
+func (s *session) Value(key any) any {
+	return s.values[key]
+}
+
 func (s *session) Write(p []byte) (n int, err error) {
 	return s.conn.Write(p)
 }
