@@ -14,9 +14,9 @@ This directory contains the deploy-oriented Go module for the Mosaic terminal ru
 1. Load configuration from environment.
 2. Build Wish SSH server runtime.
 3. Attach middleware chain in strict order:
-   - `rate-limiting`
+   - `concurrency-limit`
    - `username-routing`
-   - `session-context`
+   - `session-metadata`
 4. Listen on internal port `2222` by default.
 
 This flow is protected by integration tests in `internal/server/runtime_test.go`.
@@ -28,11 +28,11 @@ This flow is protected by integration tests in `internal/server/runtime_test.go`
 - `MOSAIC_SSH_HOST_KEY_PATH` (default `.data/host_ed25519`)
 - `MOSAIC_SSH_IDLE_TIMEOUT` (default `120s`)
 - `MOSAIC_SSH_MAX_SESSIONS` (default `32`)
-- `MOSAIC_SSH_RATE_LIMIT_PER_SEC` (default `20`)
+- `MOSAIC_SSH_CONCURRENCY_LIMIT` (default `20`, must be <= `MOSAIC_SSH_MAX_SESSIONS`)
 
 ## Host key strategy
 
-Current default behavior uses a file path (`MOSAIC_SSH_HOST_KEY_PATH`); if missing, a placeholder key file is created automatically in this scaffold.
+Current default behavior uses a file path (`MOSAIC_SSH_HOST_KEY_PATH`); the value must not be empty. If missing on disk, a placeholder key file is created automatically in this scaffold.
 
 ## Layout
 
@@ -77,6 +77,8 @@ SSH transport has no HTTP health endpoint in this scaffold. Use a TCP healthchec
 ## Using real upstream dependencies
 
 This scaffold currently uses local shim replacements in `go.mod` for restricted/offline environments.
+
+Offline commands should prefer `-mod=vendor` (see `make ci-offline`) to keep dependency resolution deterministic.
 
 To switch to upstream modules:
 

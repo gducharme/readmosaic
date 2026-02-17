@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -134,7 +135,7 @@ func (s *Server) ListenAndServe() error {
 			sess := &session{ctx: context.Background(), conn: c, values: map[string]any{}, user: "guest"}
 			reader := bufio.NewReader(c)
 			if line, lineErr := reader.ReadString('\n'); lineErr == nil && line != "" {
-				sess.user = line
+				sess.user = strings.TrimSpace(line)
 			}
 			handler(sess)
 		}(conn)
@@ -165,6 +166,10 @@ func (s *session) User() string {
 
 func (s *session) Context() context.Context {
 	return s.ctx
+}
+
+func (s *session) SetContext(ctx context.Context) {
+	s.ctx = ctx
 }
 
 func (s *session) SetValue(key string, value any) {

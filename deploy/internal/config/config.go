@@ -9,22 +9,24 @@ import (
 )
 
 const (
-	defaultHost            = "0.0.0.0"
-	defaultPort            = 2222
-	defaultHostKeyPath     = ".data/host_ed25519"
-	defaultIdleTimeout     = 120 * time.Second
-	defaultMaxSessions     = 32
-	defaultRateLimitPerSec = 20
+	defaultHost               = "0.0.0.0"
+	defaultPort               = 2222
+	defaultHostKeyPath        = ".data/host_ed25519"
+	defaultIdleTimeout        = 120 * time.Second
+	defaultMaxSessions        = 32
+	defaultConcurrencyLimit   = 20
+	minimumConcurrencyLimit   = 1
+	maximumConfiguredSessions = 1024
 )
 
 // Config captures startup settings for the deploy entrypoint.
 type Config struct {
-	Host            string
-	Port            int
-	HostKeyPath     string
-	IdleTimeout     time.Duration
-	MaxSessions     int
-	RateLimitPerSec int
+	Host             string
+	Port             int
+	HostKeyPath      string
+	IdleTimeout      time.Duration
+	MaxSessions      int
+	ConcurrencyLimit int
 }
 
 // LoadFromEnv loads runtime configuration from environment variables.
@@ -39,39 +41,34 @@ func LoadFromEnv() (Config, error) {
 		return Config{}, err
 	}
 
+	hostKeyPath, err := readRequiredOrDefault("MOSAIC_SSH_HOST_KEY_PATH", defaultHostKeyPath)
+	if err != nil {
+		return Config{}, err
+	}
+
 	idleTimeout, err := readDuration("MOSAIC_SSH_IDLE_TIMEOUT", defaultIdleTimeout)
 	if err != nil {
 		return Config{}, err
 	}
 
-	maxSessions, err := readInt("MOSAIC_SSH_MAX_SESSIONS", defaultMaxSessions, 1, 1024)
+	maxSessions, err := readInt("MOSAIC_SSH_MAX_SESSIONS", defaultMaxSessions, 1, maximumConfiguredSessions)
 	if err != nil {
 		return Config{}, err
 	}
 
-	rateLimit, err := readInt("MOSAIC_SSH_RATE_LIMIT_PER_SEC", defaultRateLimitPerSec, 1, 1000)
+	concurrencyLimit, err := readInt("MOSAIC_SSH_CONCURRENCY_LIMIT", defaultConcurrencyLimit, minimumConcurrencyLimit, maxSessions)
 	if err != nil {
 		return Config{}, err
 	}
-
-	hostKeyPath := readString("MOSAIC_SSH_HOST_KEY_PATH", defaultHostKeyPath)
 
 	return Config{
-		Host:            host,
-		Port:            port,
-		HostKeyPath:     filepath.Clean(hostKeyPath),
-		IdleTimeout:     idleTimeout,
-		MaxSessions:     maxSessions,
-		RateLimitPerSec: rateLimit,
+		Host:             host,
+		Port:             port,
+		HostKeyPath:      filepath.Clean(hostKeyPath),
+		IdleTimeout:      idleTimeout,
+		MaxSessions:      maxSessions,
+		ConcurrencyLimit: concurrencyLimit,
 	}, nil
-}
-
-func readString(key, fallback string) string {
-	if raw, ok := os.LookupEnv(key); ok {
-		return raw
-	}
-
-	return fallback
 }
 
 func readRequiredOrDefault(key, fallback string) (string, error) {
@@ -112,6 +109,9 @@ func readDuration(key string, fallback time.Duration) (time.Duration, error) {
 	parsed, err := time.ParseDuration(raw)
 	if err != nil {
 		return 0, fmt.Errorf("%s must be a valid duration: %w", key, err)
+	}
+	if parsed <= 0 {
+		return 0, fmt.Errorf("%s must be greater than 0", key)
 	}
 
 	return parsed, nil

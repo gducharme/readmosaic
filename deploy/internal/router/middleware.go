@@ -12,7 +12,7 @@ import (
 
 type contextKey string
 
-const sessionContextKey contextKey = "session"
+const sessionContextKey contextKey = "mosaic.session"
 
 // Descriptor keeps middleware metadata for deterministic startup wiring.
 type Descriptor struct {
@@ -20,12 +20,12 @@ type Descriptor struct {
 	Middleware wish.Middleware
 }
 
-// DefaultChain wires middleware in order: rate limiting, username routing, session context.
-func DefaultChain(rateLimitPerSec int) []Descriptor {
+// DefaultChain wires middleware in order: concurrency limiting, username routing, session metadata.
+func DefaultChain(concurrencyLimit int) []Descriptor {
 	return []Descriptor{
-		{Name: "rate-limiting", Middleware: rateLimiting(rateLimitPerSec)},
+		{Name: "concurrency-limit", Middleware: concurrencyLimitMiddleware(concurrencyLimit)},
 		{Name: "username-routing", Middleware: usernameRouting()},
-		{Name: "session-context", Middleware: sessionContext()},
+		{Name: "session-metadata", Middleware: sessionMetadata()},
 	}
 }
 
@@ -39,16 +39,16 @@ func MiddlewareFromDescriptors(chain []Descriptor) []wish.Middleware {
 	return result
 }
 
-func rateLimiting(limitPerSec int) wish.Middleware {
+func concurrencyLimitMiddleware(limit int) wish.Middleware {
 	var active int32
 	return func(next ssh.Handler) ssh.Handler {
 		return func(s ssh.Session) {
 			current := atomic.AddInt32(&active, 1)
 			defer atomic.AddInt32(&active, -1)
 
-			if int(current) > limitPerSec {
-				log.Printf("level=warn event=rate_limit user=%s active=%d", s.User(), current)
-				_, _ = s.Write([]byte("rate limit exceeded\n"))
+			if int(current) > limit {
+				log.Printf("level=warn event=concurrency_limit user=%s active=%d", s.User(), current)
+				_, _ = s.Write([]byte("concurrency limit exceeded\n"))
 				return
 			}
 
@@ -66,11 +66,14 @@ func usernameRouting() wish.Middleware {
 	}
 }
 
-func sessionContext() wish.Middleware {
+func sessionMetadata() wish.Middleware {
 	return func(next ssh.Handler) ssh.Handler {
 		return func(s ssh.Session) {
 			ctx := context.WithValue(s.Context(), sessionContextKey, s)
-			s.SetValue(string(sessionContextKey), ctx)
+			s.SetContext(ctx)
+			s.SetValue(string(sessionContextKey), map[string]any{
+				"user": s.User(),
+			})
 			started := time.Now()
 			log.Printf("level=info event=session_start user=%s", s.User())
 			next(s)

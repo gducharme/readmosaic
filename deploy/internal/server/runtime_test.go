@@ -2,6 +2,7 @@ package server
 
 import (
 	"testing"
+	"time"
 
 	"mosaic-terminal/internal/config"
 	"mosaic-terminal/internal/router"
@@ -9,14 +10,15 @@ import (
 
 func TestNewRuntimeStartupPipeline(t *testing.T) {
 	cfg := config.Config{
-		Host:            "127.0.0.1",
-		Port:            2222,
-		HostKeyPath:     ".data/host_ed25519",
-		RateLimitPerSec: 10,
-		MaxSessions:     4,
+		Host:             "127.0.0.1",
+		Port:             2222,
+		HostKeyPath:      ".data/host_ed25519",
+		IdleTimeout:      30 * time.Second,
+		ConcurrencyLimit: 4,
+		MaxSessions:      4,
 	}
 
-	chain := router.DefaultChain(cfg.RateLimitPerSec)
+	chain := router.DefaultChain(cfg.ConcurrencyLimit)
 	runtime, err := New(cfg, chain)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -26,7 +28,7 @@ func TestNewRuntimeStartupPipeline(t *testing.T) {
 		t.Fatalf("Address() = %q, want %q", got, "127.0.0.1:2222")
 	}
 
-	want := []string{"rate-limiting", "username-routing", "session-context"}
+	want := []string{"concurrency-limit", "username-routing", "session-metadata"}
 	got := runtime.MiddlewareIDs()
 	if len(got) != len(want) {
 		t.Fatalf("middleware length = %d, want %d", len(got), len(want))

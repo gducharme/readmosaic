@@ -11,6 +11,6 @@ Future feature packages (`internal/tui`, `internal/theme`, `internal/content`, `
 - `internal/tui` MUST NOT import `internal/server` or `internal/config`.
 - `internal/router` should depend only on transport/session abstractions and model/session structures.
 - `internal/server` owns transport lifecycle and MUST NOT import TUI internals.
-- `cmd/server` is the composition root (env -> config -> middleware chain -> server run).
+- `cmd/server` is the composition root (env -> config -> middleware descriptor chain -> server run).
 
 These constraints keep Wish transport concerns from leaking into UI/content modules.
