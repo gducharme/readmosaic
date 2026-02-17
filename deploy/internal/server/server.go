@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/charmbracelet/ssh"
 	"github.com/charmbracelet/wish"
@@ -16,7 +17,11 @@ import (
 	"mosaic-terminal/internal/router"
 )
 
-const version = "dev"
+const (
+	version         = "dev"
+	shutdownTimeout = 5 * time.Second
+	serverMode      = "shim"
+)
 
 // Runtime wires config + middleware + Wish server as a testable unit.
 type Runtime struct {
@@ -25,6 +30,7 @@ type Runtime struct {
 	server        *wish.Server
 }
 
+// New creates a runtime instance from config and middleware descriptors.
 func New(cfg config.Config, chain []router.Descriptor) (*Runtime, error) {
 	address := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
 	middleware := router.MiddlewareFromDescriptors(chain)
@@ -49,31 +55,40 @@ func New(cfg config.Config, chain []router.Descriptor) (*Runtime, error) {
 	return &Runtime{cfg: cfg, middlewareIDs: ids, server: wishServer}, nil
 }
 
+// MiddlewareIDs returns middleware names in configured execution order.
 func (r *Runtime) MiddlewareIDs() []string {
 	out := make([]string, len(r.middlewareIDs))
 	copy(out, r.middlewareIDs)
 	return out
 }
 
+// Address returns the configured (and once running, resolved) listener address.
 func (r *Runtime) Address() string {
 	return r.server.Addr
 }
 
+// Run starts the server and exits after shutdown or fatal listen errors.
 func (r *Runtime) Run(ctx context.Context) error {
 	ctx, stopSignals := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
 
+	shutdownDone := make(chan struct{})
 	go func() {
+		defer close(shutdownDone)
 		<-ctx.Done()
-		_ = r.server.Shutdown(context.Background())
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		_ = r.server.Shutdown(shutdownCtx)
 	}()
 
-	log.Printf("level=info event=startup version=%s host=%s port=%d middleware=%v host_key_path=%s idle_timeout=%s max_sessions=%d", version, r.cfg.Host, r.cfg.Port, r.middlewareIDs, r.cfg.HostKeyPath, r.cfg.IdleTimeout, r.cfg.MaxSessions)
+	log.Printf("level=info event=startup version=%s mode=%s listen=%s middleware=%v", version, serverMode, r.server.Addr, r.middlewareIDs)
 	err := r.server.ListenAndServe()
 	if errors.Is(err, wish.ErrServerClosed) || err == nil {
+		<-shutdownDone
 		return nil
 	}
 
+	<-shutdownDone
 	return err
 }
 

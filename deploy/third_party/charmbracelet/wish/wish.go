@@ -1,3 +1,14 @@
+// Package wish provides a local shim for offline integration testing.
+//
+// Intentionally fake behavior:
+//   - no SSH handshake/authentication
+//   - host key file contains placeholder bytes, not a real private key
+//   - sessions are plain TCP wrappers
+//
+// Contract we keep stable with upstream expectations:
+//   - option-driven server construction
+//   - middleware wrapping order
+//   - ListenAndServe / Shutdown lifecycle and server-closed signaling
 package wish
 
 import (
@@ -104,6 +115,7 @@ func (s *Server) ListenAndServe() error {
 	s.mu.Lock()
 	s.listener = ln
 	s.closed = false
+	s.Addr = ln.Addr().String()
 	s.mu.Unlock()
 
 	handler := s.handler
@@ -166,10 +178,6 @@ func (s *session) User() string {
 
 func (s *session) Context() context.Context {
 	return s.ctx
-}
-
-func (s *session) SetContext(ctx context.Context) {
-	s.ctx = ctx
 }
 
 func (s *session) SetValue(key string, value any) {

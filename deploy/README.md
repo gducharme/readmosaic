@@ -14,25 +14,41 @@ This directory contains the deploy-oriented Go module for the Mosaic terminal ru
 1. Load configuration from environment.
 2. Build Wish SSH server runtime.
 3. Attach middleware chain in strict order:
-   - `concurrency-limit`
+   - `rate-limit` (per-second connection rate window)
    - `username-routing`
    - `session-metadata`
 4. Listen on internal port `2222` by default.
 
-This flow is protected by integration tests in `internal/server/runtime_test.go`.
+This flow is protected by runtime and boot tests in `internal/server/runtime_test.go`.
 
 ## Configuration
 
 - `MOSAIC_SSH_HOST` (default `0.0.0.0`, must not be empty)
-- `MOSAIC_SSH_PORT` (default `2222`, integer)
-- `MOSAIC_SSH_HOST_KEY_PATH` (default `.data/host_ed25519`)
-- `MOSAIC_SSH_IDLE_TIMEOUT` (default `120s`)
-- `MOSAIC_SSH_MAX_SESSIONS` (default `32`)
-- `MOSAIC_SSH_CONCURRENCY_LIMIT` (default `20`, must be <= `MOSAIC_SSH_MAX_SESSIONS`)
+- `MOSAIC_SSH_PORT` (default `2222`, integer in `[1,65535]`)
+- `MOSAIC_SSH_HOST_KEY_PATH` (default `.data/host_ed25519`, must not be empty or resolve to `.`)
+- `MOSAIC_SSH_IDLE_TIMEOUT` (default `120s`, must be `> 0`)
+- `MOSAIC_SSH_MAX_SESSIONS` (default `32`, must be `> 0`)
+- `MOSAIC_SSH_RATE_LIMIT_PER_SECOND` (default `20`, must be `> 0`)
 
-## Host key strategy
+## Shim contract (explicit)
 
-Current default behavior uses a file path (`MOSAIC_SSH_HOST_KEY_PATH`); the value must not be empty. If missing on disk, a placeholder key file is created automatically in this scaffold.
+This scaffold currently uses local `replace` directives in `go.mod` to point at `third_party/charmbracelet/*` shims.
+
+Intentionally fake behaviors in shim mode:
+- no SSH handshake or auth
+- placeholder host-key file contents
+- TCP-backed pseudo sessions
+
+Behavior expected to remain compatible with upstream integration points:
+- option-based server construction
+- middleware wrapping order
+- `ListenAndServe`/`Shutdown` lifecycle with server-closed signaling
+
+Startup logs include mode (`shim`) and enabled middleware.
+
+## Offline strategy
+
+This module uses **replace-only** offline strategy (no vendored dependencies). Use `make ci-offline` to validate builds with `GOPROXY=off` and `GOSUMDB=off`.
 
 ## Layout
 
@@ -75,10 +91,6 @@ docker run --rm -p 2222:2222 \
 SSH transport has no HTTP health endpoint in this scaffold. Use a TCP healthcheck on `${MOSAIC_SSH_HOST}:${MOSAIC_SSH_PORT}` and watch startup/session lifecycle logs.
 
 ## Using real upstream dependencies
-
-This scaffold currently uses local shim replacements in `go.mod` for restricted/offline environments.
-
-Offline commands should prefer `-mod=vendor` (see `make ci-offline`) to keep dependency resolution deterministic.
 
 To switch to upstream modules:
 

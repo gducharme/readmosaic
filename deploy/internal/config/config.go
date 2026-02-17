@@ -14,19 +14,19 @@ const (
 	defaultHostKeyPath        = ".data/host_ed25519"
 	defaultIdleTimeout        = 120 * time.Second
 	defaultMaxSessions        = 32
-	defaultConcurrencyLimit   = 20
-	minimumConcurrencyLimit   = 1
+	defaultRateLimitPerSecond = 20
+	minimumRateLimit          = 1
 	maximumConfiguredSessions = 1024
 )
 
 // Config captures startup settings for the deploy entrypoint.
 type Config struct {
-	Host             string
-	Port             int
-	HostKeyPath      string
-	IdleTimeout      time.Duration
-	MaxSessions      int
-	ConcurrencyLimit int
+	Host               string
+	Port               int
+	HostKeyPath        string
+	IdleTimeout        time.Duration
+	MaxSessions        int
+	RateLimitPerSecond int
 }
 
 // LoadFromEnv loads runtime configuration from environment variables.
@@ -45,6 +45,10 @@ func LoadFromEnv() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	cleanHostKeyPath := filepath.Clean(hostKeyPath)
+	if cleanHostKeyPath == "." {
+		return Config{}, fmt.Errorf("MOSAIC_SSH_HOST_KEY_PATH must not resolve to current directory")
+	}
 
 	idleTimeout, err := readDuration("MOSAIC_SSH_IDLE_TIMEOUT", defaultIdleTimeout)
 	if err != nil {
@@ -56,18 +60,18 @@ func LoadFromEnv() (Config, error) {
 		return Config{}, err
 	}
 
-	concurrencyLimit, err := readInt("MOSAIC_SSH_CONCURRENCY_LIMIT", defaultConcurrencyLimit, minimumConcurrencyLimit, maxSessions)
+	rateLimitPerSecond, err := readInt("MOSAIC_SSH_RATE_LIMIT_PER_SECOND", defaultRateLimitPerSecond, minimumRateLimit, 10000)
 	if err != nil {
 		return Config{}, err
 	}
 
 	return Config{
-		Host:             host,
-		Port:             port,
-		HostKeyPath:      filepath.Clean(hostKeyPath),
-		IdleTimeout:      idleTimeout,
-		MaxSessions:      maxSessions,
-		ConcurrencyLimit: concurrencyLimit,
+		Host:               host,
+		Port:               port,
+		HostKeyPath:        cleanHostKeyPath,
+		IdleTimeout:        idleTimeout,
+		MaxSessions:        maxSessions,
+		RateLimitPerSecond: rateLimitPerSecond,
 	}, nil
 }
 

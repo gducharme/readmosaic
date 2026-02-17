@@ -1,18 +1,21 @@
 package router
 
 import (
-	"context"
 	"log"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/ssh"
 	"github.com/charmbracelet/wish"
 )
 
-type contextKey string
+const sessionMetadataKey = "mosaic.session"
 
-const sessionContextKey contextKey = "mosaic.session"
+// SessionInfo stores stable metadata for downstream consumers.
+type SessionInfo struct {
+	User      string
+	StartedAt time.Time
+}
 
 // Descriptor keeps middleware metadata for deterministic startup wiring.
 type Descriptor struct {
@@ -20,10 +23,10 @@ type Descriptor struct {
 	Middleware wish.Middleware
 }
 
-// DefaultChain wires middleware in order: concurrency limiting, username routing, session metadata.
-func DefaultChain(concurrencyLimit int) []Descriptor {
+// DefaultChain wires middleware in order: rate limiting, username routing, session metadata.
+func DefaultChain(rateLimitPerSecond int) []Descriptor {
 	return []Descriptor{
-		{Name: "concurrency-limit", Middleware: concurrencyLimitMiddleware(concurrencyLimit)},
+		{Name: "rate-limit", Middleware: rateLimitMiddleware(rateLimitPerSecond)},
 		{Name: "username-routing", Middleware: usernameRouting()},
 		{Name: "session-metadata", Middleware: sessionMetadata()},
 	}
@@ -39,16 +42,27 @@ func MiddlewareFromDescriptors(chain []Descriptor) []wish.Middleware {
 	return result
 }
 
-func concurrencyLimitMiddleware(limit int) wish.Middleware {
-	var active int32
+func rateLimitMiddleware(limitPerSecond int) wish.Middleware {
+	var mu sync.Mutex
+	windowStart := time.Now()
+	count := 0
+
 	return func(next ssh.Handler) ssh.Handler {
 		return func(s ssh.Session) {
-			current := atomic.AddInt32(&active, 1)
-			defer atomic.AddInt32(&active, -1)
+			now := time.Now()
 
-			if int(current) > limit {
-				log.Printf("level=warn event=concurrency_limit user=%s active=%d", s.User(), current)
-				_, _ = s.Write([]byte("concurrency limit exceeded\n"))
+			mu.Lock()
+			if now.Sub(windowStart) >= time.Second {
+				windowStart = now
+				count = 0
+			}
+			count++
+			current := count
+			mu.Unlock()
+
+			if current > limitPerSecond {
+				log.Printf("level=warn event=rate_limit user=%s count=%d window=1s", s.User(), current)
+				_, _ = s.Write([]byte("rate limit exceeded\n"))
 				return
 			}
 
@@ -69,15 +83,11 @@ func usernameRouting() wish.Middleware {
 func sessionMetadata() wish.Middleware {
 	return func(next ssh.Handler) ssh.Handler {
 		return func(s ssh.Session) {
-			ctx := context.WithValue(s.Context(), sessionContextKey, s)
-			s.SetContext(ctx)
-			s.SetValue(string(sessionContextKey), map[string]any{
-				"user": s.User(),
-			})
-			started := time.Now()
+			info := SessionInfo{User: s.User(), StartedAt: time.Now().UTC()}
+			s.SetValue(sessionMetadataKey, info)
 			log.Printf("level=info event=session_start user=%s", s.User())
 			next(s)
-			log.Printf("level=info event=session_end user=%s duration_ms=%d", s.User(), time.Since(started).Milliseconds())
+			log.Printf("level=info event=session_end user=%s duration_ms=%d", s.User(), time.Since(info.StartedAt).Milliseconds())
 		}
 	}
 }

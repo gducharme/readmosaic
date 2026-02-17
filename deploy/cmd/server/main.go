@@ -15,7 +15,7 @@ func main() {
 		log.Fatalf("load config: %v", err)
 	}
 
-	runtime, err := server.New(cfg, router.DefaultChain(cfg.ConcurrencyLimit))
+	runtime, err := server.New(cfg, router.DefaultChain(cfg.RateLimitPerSecond))
 	if err != nil {
 		log.Fatalf("build ssh server: %v", err)
 	}
