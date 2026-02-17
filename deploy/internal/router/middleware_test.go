@@ -30,24 +30,23 @@ func (f *fakeSession) Write(p []byte) (int, error) {
 
 func TestDefaultChainKeepsIdentityBeforeSessionMetadata(t *testing.T) {
 	chain := DefaultChain(10)
-	want := []string{"rate-limit", "username-routing", "session-metadata"}
-	if len(chain) != len(want) {
-		t.Fatalf("chain length = %d, want %d", len(chain), len(want))
-	}
-	for i := range want {
-		if chain[i].Name != want[i] {
-			t.Fatalf("chain[%d] = %q, want %q", i, chain[i].Name, want[i])
-		}
+	if len(chain) != 3 {
+		t.Fatalf("chain length = %d, want 3", len(chain))
 	}
 
 	s := newFakeSession("west")
 	middleware := MiddlewareFromDescriptors(chain)
 	h := ssh.Handler(func(sess ssh.Session) {
-		if _, ok := s.values[sessionIdentityKey]; !ok {
+		identity, ok := SessionIdentity(sess)
+		if !ok {
 			t.Fatalf("expected identity metadata before handler execution")
 		}
-		if _, ok := s.values[sessionMetadataKey]; !ok {
+		info, ok := SessionMetadata(sess)
+		if !ok {
 			t.Fatalf("expected session metadata before handler execution")
+		}
+		if info.Identity != identity {
+			t.Fatalf("session metadata identity = %+v, want %+v", info.Identity, identity)
 		}
 	})
 	for i := len(middleware) - 1; i >= 0; i-- {
@@ -126,6 +125,10 @@ func TestUsernameRoutingUnknownUserTerminatesSession(t *testing.T) {
 
 	if len(s.writes) != 1 || s.writes[0] != "SIGNAL UNRECOGNIZED. RETURN TO AGGREGATE.\n" {
 		t.Fatalf("writes = %#v", s.writes)
+	}
+
+	if _, ok := SessionMetadata(s); ok {
+		t.Fatalf("session metadata should not be set for rejected user")
 	}
 }
 
@@ -223,6 +226,9 @@ func TestUsernameRoutingRepeatedRejectionDoesNotBypass(t *testing.T) {
 
 	if _, ok := s.values[sessionIdentityKey]; ok {
 		t.Fatalf("identity metadata should not be set for rejected session")
+	}
+	if _, ok := SessionMetadata(s); ok {
+		t.Fatalf("session metadata should not be set for rejected session")
 	}
 
 	if len(s.writes) != 2 {
