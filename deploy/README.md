@@ -80,7 +80,6 @@ Set all 3 together or leave unset:
 ### Optional Neo4j compose service auth
 
 - `NEO4J_AUTH` (default `neo4j/localdevpassword`)
-- `NEO4J_PASSWORD` (default `localdevpassword`)
 
 ## Ports and defaults
 
@@ -142,7 +141,7 @@ make docker-test  # deterministic image smoke check with required key/env
 
 ## CI workflow intent
 
-`.github/workflows/deploy-go.yml` does two test styles intentionally:
+`.github/workflows/deploy-go.yml` keeps two test styles intentionally:
 
 1. `go test ./...` on runner toolchain (fast host validation).
 2. `go test ./...` inside pinned Go container (toolchain parity with image build environment).
@@ -161,6 +160,11 @@ On PRs, image build uses tag:
 - `${IMAGE_NAME}:pr-${GITHUB_SHA}`
 
 The Trivy image scan references the same tag, so scan/build tags stay aligned.
+
+
+## Compose compatibility note
+
+`depends_on` is limited to `condition: service_healthy` (no `required: false`) for broader compatibility with older Compose implementations. The app should tolerate Neo4j being absent unless Neo4j env vars are explicitly configured.
 
 ## How to test (copy/paste)
 

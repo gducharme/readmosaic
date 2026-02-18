@@ -22,7 +22,6 @@ services:
     depends_on:
       neo4j:
         condition: service_healthy
-        required: false
     healthcheck:
       test:
         - CMD-SHELL
@@ -47,7 +46,6 @@ services:
     restart: unless-stopped
     environment:
       NEO4J_AUTH: ${NEO4J_AUTH:-neo4j/localdevpassword}
-      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-localdevpassword}
     ports:
       - "7474:7474"
       - "7687:7687"
@@ -58,9 +56,8 @@ services:
       test:
         - CMD-SHELL
         - >-
-          cypher-shell -u neo4j
-          -p ${NEO4J_PASSWORD:-localdevpassword}
-          'RETURN 1;' >/dev/null 2>&1
+          PASS="${NEO4J_AUTH#neo4j/}";
+          cypher-shell -u neo4j -p "$PASS" 'RETURN 1;' >/dev/null 2>&1
       interval: 20s
       timeout: 10s
       retries: 5
