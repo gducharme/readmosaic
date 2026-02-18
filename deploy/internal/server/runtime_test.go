@@ -12,14 +12,19 @@ import (
 
 func TestNewRuntimeStartupPipeline(t *testing.T) {
 	cfg := config.Config{
-		Host:               "127.0.0.1",
-		Port:               2222,
-		HostKeyPath:        ".data/host_ed25519",
-		IdleTimeout:        30 * time.Second,
-		RateLimitPerSecond: 4,
-		RateLimitPerMin:    30,
-		RateLimitBurst:     10,
-		MaxSessions:        4,
+		Host:                   "127.0.0.1",
+		Port:                   2222,
+		HostKeyPath:            ".data/host_ed25519",
+		IdleTimeout:            30 * time.Second,
+		RateLimitPerSecond:     4,
+		RateLimitPerMin:        30,
+		RateLimitBurst:         10,
+		RateLimitMaxAttempts:   30,
+		RateLimitWindow:        time.Minute,
+		RateLimitBanDuration:   0,
+		RateLimitEnabled:       true,
+		RateLimitMaxTrackedIPs: 10000,
+		MaxSessions:            4,
 	}
 
 	chain := router.DefaultChain()
@@ -47,14 +52,19 @@ func TestNewRuntimeStartupPipeline(t *testing.T) {
 
 func TestRuntimeRunAcceptsTCPConnection(t *testing.T) {
 	cfg := config.Config{
-		Host:               "127.0.0.1",
-		Port:               0,
-		HostKeyPath:        ".data/host_ed25519",
-		IdleTimeout:        30 * time.Second,
-		RateLimitPerSecond: 100,
-		RateLimitPerMin:    30,
-		RateLimitBurst:     10,
-		MaxSessions:        4,
+		Host:                   "127.0.0.1",
+		Port:                   0,
+		HostKeyPath:            ".data/host_ed25519",
+		IdleTimeout:            30 * time.Second,
+		RateLimitPerSecond:     100,
+		RateLimitPerMin:        30,
+		RateLimitBurst:         10,
+		RateLimitMaxAttempts:   30,
+		RateLimitWindow:        time.Minute,
+		RateLimitBanDuration:   0,
+		RateLimitEnabled:       true,
+		RateLimitMaxTrackedIPs: 10000,
+		MaxSessions:            4,
 	}
 
 	runtime, err := New(cfg, router.DefaultChain())

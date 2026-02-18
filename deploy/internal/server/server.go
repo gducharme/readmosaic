@@ -34,7 +34,7 @@ type Runtime struct {
 func New(cfg config.Config, chain []router.Descriptor) (*Runtime, error) {
 	address := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
 	middleware := router.MiddlewareFromDescriptors(chain)
-	middleware = append([]wish.Middleware{RateLimitMiddleware(cfg.RateLimitPerMin, cfg.RateLimitBurst)}, middleware...)
+	middleware = append([]wish.Middleware{RateLimitMiddleware(cfg.RateLimitMaxAttempts, cfg.RateLimitWindow, cfg.RateLimitBurst, cfg.RateLimitBanDuration, cfg.RateLimitMaxTrackedIPs, cfg.RateLimitTrustProxyHeaders, cfg.RateLimitEnabled)}, middleware...)
 
 	wishServer, err := wish.NewServer(
 		wish.WithAddress(address),

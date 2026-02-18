@@ -13,17 +13,22 @@ import (
 )
 
 const (
-	defaultHost               = "0.0.0.0"
-	defaultPort               = 2222
-	defaultHostKeyPath        = ".data/host_ed25519"
-	defaultIdleTimeout        = 120 * time.Second
-	defaultMaxSessions        = 32
-	defaultRateLimitPerSecond = 20
-	defaultListenAddr         = ":2222"
-	defaultRateLimitPerMin    = 30
-	defaultRateLimitBurst     = 10
-	minimumRateLimit          = 1
-	maximumConfiguredSessions = 1024
+	defaultHost                   = "0.0.0.0"
+	defaultPort                   = 2222
+	defaultHostKeyPath            = ".data/host_ed25519"
+	defaultIdleTimeout            = 120 * time.Second
+	defaultMaxSessions            = 32
+	defaultRateLimitPerSecond     = 20
+	defaultListenAddr             = ":2222"
+	defaultRateLimitMaxAttempts   = 30
+	defaultRateLimitBurst         = 10
+	defaultRateLimitWindow        = time.Minute
+	defaultRateLimitBanDuration   = 0 * time.Second
+	defaultRateLimitEnabled       = true
+	defaultRateLimitTrustProxy    = false
+	defaultRateLimitMaxTrackedIPs = 10000
+	minimumRateLimit              = 1
+	maximumConfiguredSessions     = 1024
 )
 
 var arweaveTxIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
@@ -49,8 +54,15 @@ type Config struct {
 	Neo4jPassword string
 	Neo4jEnabled  bool
 
-	RateLimitPerMin int
+	RateLimitPerMin int // legacy alias retained for compatibility
 	RateLimitBurst  int
+
+	RateLimitMaxAttempts       int
+	RateLimitWindow            time.Duration
+	RateLimitBanDuration       time.Duration
+	RateLimitEnabled           bool
+	RateLimitTrustProxyHeaders bool
+	RateLimitMaxTrackedIPs     int
 }
 
 // LoadFromEnv loads runtime configuration from environment variables.
@@ -128,12 +140,43 @@ func LoadFromEnv() (Config, error) {
 	cfg.Neo4jPassword = readOptional("NEO4J_PASSWORD")
 	cfg.Neo4jEnabled = cfg.Neo4jURI != ""
 
-	cfg.RateLimitPerMin, err = readInt("RATE_LIMIT_PER_MIN", defaultRateLimitPerMin, minimumRateLimit, 1_000_000)
+	legacyPerMin, err := readInt("RATE_LIMIT_PER_MIN", defaultRateLimitMaxAttempts, minimumRateLimit, 1_000_000)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.RateLimitPerMin = legacyPerMin
+
+	cfg.RateLimitMaxAttempts, err = readInt("RATE_LIMIT_MAX_ATTEMPTS", legacyPerMin, minimumRateLimit, 1_000_000)
 	if err != nil {
 		return Config{}, err
 	}
 
 	cfg.RateLimitBurst, err = readInt("RATE_LIMIT_BURST", defaultRateLimitBurst, minimumRateLimit, 1_000_000)
+	if err != nil {
+		return Config{}, err
+	}
+
+	cfg.RateLimitWindow, err = readDuration("RATE_LIMIT_WINDOW", defaultRateLimitWindow)
+	if err != nil {
+		return Config{}, err
+	}
+
+	cfg.RateLimitBanDuration, err = readNonNegativeDuration("RATE_LIMIT_BAN_DURATION", defaultRateLimitBanDuration)
+	if err != nil {
+		return Config{}, err
+	}
+
+	cfg.RateLimitEnabled, err = readBool("RATE_LIMIT_ENABLED", defaultRateLimitEnabled)
+	if err != nil {
+		return Config{}, err
+	}
+
+	cfg.RateLimitTrustProxyHeaders, err = readBool("RATE_LIMIT_TRUST_PROXY_HEADERS", defaultRateLimitTrustProxy)
+	if err != nil {
+		return Config{}, err
+	}
+
+	cfg.RateLimitMaxTrackedIPs, err = readInt("RATE_LIMIT_MAX_TRACKED_IPS", defaultRateLimitMaxTrackedIPs, 1, 10_000_000)
 	if err != nil {
 		return Config{}, err
 	}
@@ -233,6 +276,39 @@ func readDuration(key string, fallback time.Duration) (time.Duration, error) {
 	}
 
 	return parsed, nil
+}
+
+func readNonNegativeDuration(key string, fallback time.Duration) (time.Duration, error) {
+	raw, ok := os.LookupEnv(key)
+	if !ok {
+		return fallback, nil
+	}
+
+	parsed, err := time.ParseDuration(normalizeEnvValue(raw))
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a valid duration: %w", key, err)
+	}
+	if parsed < 0 {
+		return 0, fmt.Errorf("%s must be greater than or equal to 0", key)
+	}
+
+	return parsed, nil
+}
+
+func readBool(key string, fallback bool) (bool, error) {
+	raw, ok := os.LookupEnv(key)
+	if !ok {
+		return fallback, nil
+	}
+	value := strings.ToLower(normalizeEnvValue(raw))
+	switch value {
+	case "1", "true", "yes", "on":
+		return true, nil
+	case "0", "false", "no", "off":
+		return false, nil
+	default:
+		return false, fmt.Errorf("%s must be a boolean", key)
+	}
 }
 
 func validateArweaveTxID(key, txID string) error {
