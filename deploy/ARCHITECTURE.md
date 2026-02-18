@@ -2,7 +2,7 @@
 
 ## Layer diagram
 
-`cmd/server` -> `internal/config` + `internal/router` + `internal/server` -> `third_party/charmbracelet/*`
+`cmd/server` -> `internal/config` + `internal/router` + `internal/server` -> upstream `github.com/charmbracelet/wish` + `github.com/charmbracelet/ssh`
 
 Future feature packages (`internal/tui`, `internal/theme`, `internal/content`, `internal/commands`, `internal/store`, `internal/rtl`, `internal/model`) hang off routing/session concerns, not transport wiring.
 

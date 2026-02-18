@@ -53,8 +53,8 @@ services:
       test:
         - CMD-SHELL
         - >-
-          PASS="${NEO4J_AUTH#neo4j/}";
-          cypher-shell -u neo4j -p "$PASS" 'RETURN 1;' >/dev/null 2>&1
+          PASS="$${NEO4J_AUTH#neo4j/}";
+          cypher-shell -u neo4j -p "$$PASS" 'RETURN 1;' >/dev/null 2>&1
       interval: 20s
       timeout: 10s
       retries: 5

@@ -87,14 +87,14 @@ func MiddlewareFromDescriptors(chain []Descriptor) []wish.Middleware {
 
 // SessionIdentity returns the resolved identity attached to this session.
 func SessionIdentity(s ssh.Session) (Identity, bool) {
-	identityValue := s.Value(sessionIdentityKey)
+	identityValue := s.Context().Value(sessionIdentityKey)
 	identity, ok := identityValue.(Identity)
 	return identity, ok
 }
 
 // SessionMetadata returns immutable per-session metadata attached by middleware.
 func SessionMetadata(s ssh.Session) (SessionInfo, bool) {
-	infoValue := s.Value(sessionMetadataKey)
+	infoValue := s.Context().Value(sessionMetadataKey)
 	info, ok := infoValue.(SessionInfo)
 	return info, ok
 }
@@ -109,7 +109,7 @@ func usernameRouting() wish.Middleware {
 				return
 			}
 
-			s.SetValue(sessionIdentityKey, identity)
+			s.Context().SetValue(sessionIdentityKey, identity)
 			log.Printf("level=info event=username_route user=%s route=%s vector=%s session=%s", identity.Username, identity.Route, identity.Vector, sessionTraceID(s))
 			next(s)
 		}
@@ -126,7 +126,7 @@ func sessionMetadata() wish.Middleware {
 				}
 			}
 			info := SessionInfo{User: s.User(), Identity: identity, StartedAt: time.Now()}
-			s.SetValue(sessionMetadataKey, info)
+			s.Context().SetValue(sessionMetadataKey, info)
 
 			route := identity.Route
 			vector := identity.Vector

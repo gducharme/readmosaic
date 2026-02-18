@@ -175,7 +175,7 @@ func (r *rateLimiter) cleanup(now time.Time) {
 
 func extractRemoteIP(s ssh.Session, trustProxyHeaders bool) string {
 	if trustProxyHeaders {
-		if proxyValue, ok := s.Value(proxyIPSessionKey).(string); ok {
+		if proxyValue, ok := s.Context().Value(proxyIPSessionKey).(string); ok {
 			if normalized := normalizeIP(proxyValue); normalized != "" {
 				return normalized
 			}

@@ -6,14 +6,10 @@ WORKDIR /src
 RUN apk add --no-cache ca-certificates
 
 # Copy module metadata for dependency resolution first.
-COPY go.mod ./
-# No root go.sum exists in this module (replace-only local deps), so copy nested module metadata.
-COPY third_party/charmbracelet/ssh/go.mod ./third_party/charmbracelet/ssh/go.mod
-COPY third_party/charmbracelet/wish/go.mod ./third_party/charmbracelet/wish/go.mod
+COPY go.mod go.sum ./
 RUN go mod download
 
 # Copy source after deps to preserve layer cache efficiency.
-COPY third_party ./third_party
 COPY cmd ./cmd
 COPY internal ./internal
 
