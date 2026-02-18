@@ -1,13 +1,16 @@
 package server
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -17,6 +20,7 @@ import (
 
 	"mosaic-terminal/internal/config"
 	"mosaic-terminal/internal/router"
+	"mosaic-terminal/internal/tui"
 )
 
 const (
@@ -147,5 +151,156 @@ func MaxSessionsMiddleware(maxSessions int) wish.Middleware {
 }
 
 func defaultHandler(s ssh.Session) {
-	_, _ = s.Write([]byte("Mosaic terminal session ready\n"))
+	pty, windowChanges, hasPTY := s.Pty()
+	if !hasPTY {
+		_, _ = s.Write([]byte("interactive terminal requires an attached PTY\n"))
+		_ = s.Exit(1)
+		return
+	}
+
+	identity, ok := router.SessionIdentity(s)
+	if !ok {
+		_, _ = s.Write([]byte("session identity unavailable; routing middleware is required\n"))
+		_ = s.Exit(1)
+		return
+	}
+
+	flow, err := resolveFlow(identity)
+	if err != nil {
+		_, _ = s.Write([]byte(err.Error() + "\n"))
+		_ = s.Exit(1)
+		return
+	}
+
+	width := pty.Window.Width
+	height := pty.Window.Height
+	if width <= 0 {
+		width = 80
+	}
+	if height <= 0 {
+		height = 24
+	}
+
+	model := tui.NewModelWithOptions(s.RemoteAddr().String(), tui.Options{
+		Width:  width,
+		Height: height,
+		IsTTY:  true,
+	})
+
+	switch flow {
+	case "vector":
+		model = model.Update(tui.AppendLineMsg{Line: fmt.Sprintf("VECTOR FLOW ACTIVE [%s]", identity.Username)})
+	case "triage":
+		model = model.Update(tui.AppendLineMsg{Line: fmt.Sprintf("TRIAGE FLOW ACTIVE [%s]", identity.Username)})
+	}
+
+	render := func() {
+		_, _ = s.Write([]byte("\x1b[2J\x1b[H" + model.View() + "\n"))
+	}
+	render()
+
+	keys := make(chan string, 8)
+	eof := make(chan struct{}, 1)
+	go streamKeys(s.Context(), s, keys, eof)
+
+	statusTicker := time.NewTicker(safeTickerDuration(model.NextStatusTick(), 450*time.Millisecond))
+	cursorTicker := time.NewTicker(safeTickerDuration(model.NextCursorTick(), 530*time.Millisecond))
+	defer statusTicker.Stop()
+	defer cursorTicker.Stop()
+
+	for {
+		select {
+		case <-s.Context().Done():
+			_ = s.CloseWrite()
+			return
+		case <-eof:
+			_ = s.Exit(0)
+			return
+		case key := <-keys:
+			model = model.Update(tui.KeyMsg{Key: key})
+			render()
+			if key == "ctrl+d" {
+				_ = s.Exit(0)
+				return
+			}
+		case win := <-windowChanges:
+			model = model.Update(tui.ResizeMsg{Width: win.Width, Height: win.Height})
+			render()
+		case <-statusTicker.C:
+			model = model.Update(tui.TickMsg{})
+			render()
+		case <-cursorTicker.C:
+			model = model.Update(tui.CursorTickMsg{})
+			render()
+		}
+	}
+}
+
+func resolveFlow(identity router.Identity) (string, error) {
+	switch strings.ToLower(identity.Username) {
+	case "west", "fitra", "root":
+		return "vector", nil
+	case "read", "archive":
+		return "triage", nil
+	default:
+		return "", fmt.Errorf("unsupported identity %q", identity.Username)
+	}
+}
+
+// safeTickerDuration defends ticker creation from non-positive model cadence values.
+func safeTickerDuration(candidate, fallback time.Duration) time.Duration {
+	if candidate > 0 {
+		return candidate
+	}
+	return fallback
+}
+
+func streamKeys(ctx context.Context, r io.Reader, keys chan<- string, eof chan<- struct{}) {
+	reader := bufio.NewReader(r)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		b, err := reader.ReadByte()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				select {
+				case eof <- struct{}{}:
+				default:
+				}
+			}
+			return
+		}
+
+		var key string
+		switch b {
+		case '\r', '\n':
+			key = "enter"
+		case 0x04:
+			key = "ctrl+d"
+		case 0x7f, 0x08:
+			key = "backspace"
+		case 0x1b:
+			// NOTE: ANSI escape sequences (e.g. arrow keys) are treated as plain ESC in this MVP decoder.
+			key = "esc"
+		default:
+			if b >= 0x20 {
+				key = string([]byte{b})
+			}
+		}
+
+		if key == "" {
+			continue
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case keys <- key:
+		default:
+		}
+	}
 }
