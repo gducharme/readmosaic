@@ -251,7 +251,6 @@ func TestViewportBufferCapAndAppendContract(t *testing.T) {
 	}
 }
 
-
 func TestThemeBundleAppliesANSIStyles(t *testing.T) {
 	bundle := theme.Bundle{StyleSet: theme.StyleSet{
 		Header:   theme.Style{Foreground: "#FFFFFF", Background: "#000000", Bold: true},
