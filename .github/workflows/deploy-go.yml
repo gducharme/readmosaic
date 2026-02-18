@@ -30,6 +30,7 @@ jobs:
         with:
           go-version-file: deploy/go.mod
           cache: true
+          cache-dependency-path: deploy/go.sum
 
       - name: format check
         run: test -z "$(gofmt -l ./cmd ./internal ./third_party)"
