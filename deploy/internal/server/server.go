@@ -258,6 +258,12 @@ func safeTickerDuration(candidate, fallback time.Duration) time.Duration {
 func streamKeys(ctx context.Context, r io.Reader, keys chan<- string, eof chan<- struct{}) {
 	reader := bufio.NewReader(r)
 	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
 		b, err := reader.ReadByte()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
