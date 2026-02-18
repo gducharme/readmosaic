@@ -232,21 +232,20 @@ func defaultHandler(s ssh.Session) {
 	}
 
 	variant := theme.Variant(identity.Username)
-	_, bundle, err := theme.ResolveFromEnv(variant, pty.Term)
+	resolvedVariant, bundle, err := theme.ResolveFromEnv(variant, pty.Term)
+	var themeBundle *theme.Bundle
 	if err != nil {
-		exitCode = 1
-		status = "rejected"
-		log.Printf("level=error event=session_rejected user=%s class=resolve_theme error=%v route=%s vector=%s session=%s", user, err, route, vector, traceID)
-		_, _ = s.Write([]byte(err.Error() + "\n"))
-		_ = s.Exit(1)
-		return
+		log.Printf("level=warn event=theme_resolve_failed user=%s route=%s vector=%s requested_variant=%s term=%q error=%v session=%s", user, route, vector, variant, pty.Term, err, traceID)
+	} else {
+		themeBundle = &bundle
+		log.Printf("level=info event=theme_resolved user=%s route=%s vector=%s requested_variant=%s resolved_variant=%s term=%q session=%s", user, route, vector, variant, resolvedVariant, pty.Term, traceID)
 	}
 
 	model := tui.NewModelWithOptions(s.RemoteAddr().String(), tui.Options{
 		Width:       width,
 		Height:      height,
 		IsTTY:       true,
-		ThemeBundle: &bundle,
+		ThemeBundle: themeBundle,
 	})
 
 	switch flow {

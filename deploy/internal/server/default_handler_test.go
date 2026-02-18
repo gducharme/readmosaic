@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -238,6 +239,25 @@ func TestDefaultHandlerRejectsMissingPTYWithExitCode(t *testing.T) {
 	code, ok := sess.recordedExitCode()
 	if !ok || code != 1 {
 		t.Fatalf("expected exit code 1, got (%d, %v)", code, ok)
+	}
+}
+
+func TestDefaultHandlerThemeResolveFailureDoesNotRejectSession(t *testing.T) {
+	t.Setenv("THEME_VARIANT", "mystery")
+
+	sess := newFakeDefaultHandlerSession(context.Background(), "west", true, "")
+	routedHandler()(sess)
+
+	out := sess.output()
+	if !strings.Contains(out, "MOSAIC PROTOCOL") {
+		t.Fatalf("expected session output despite theme resolve failure")
+	}
+	if strings.Contains(out, "unknown theme variant") {
+		t.Fatalf("raw theme resolution error should not be echoed to session")
+	}
+	code, ok := sess.recordedExitCode()
+	if !ok || code != 0 {
+		t.Fatalf("expected normal exit code 0, got (%d, %v)", code, ok)
 	}
 }
 

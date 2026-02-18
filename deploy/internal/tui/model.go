@@ -130,7 +130,8 @@ type Model struct {
 	promptInput       string
 	selectedVector    string
 	ticks             TickSource
-	themeBundle       *theme.Bundle
+	themeBundle       theme.Bundle
+	hasThemeBundle    bool
 }
 
 // NewModel constructs the interactive TUI model from caller/session metadata.
@@ -160,8 +161,11 @@ func NewModelWithOptions(remoteAddr string, opts Options) Model {
 		observerHash:  deriveObserverHash(remoteAddr),
 		maxBuffer:     maxBuffer,
 		ticks:         ticks,
-		themeBundle:   opts.ThemeBundle,
 		viewportLines: strings.Split(renderMOTD(), "\n"),
+	}
+	if opts.ThemeBundle != nil {
+		m.themeBundle = cloneThemeBundle(*opts.ThemeBundle)
+		m.hasThemeBundle = true
 	}
 	if !m.isTTY {
 		m.statusBlink = true
@@ -295,7 +299,7 @@ func renderHeader(m Model) string {
 		fmt.Sprintf("OBSERVER: [%s]", m.observerHash),
 		fmt.Sprintf("VECTOR: [%s]", vector),
 	}, "\n")
-	if m.themeBundle == nil {
+	if !m.isTTY || !m.hasThemeBundle {
 		return head
 	}
 	return applyStyle(head, m.themeBundle.Header)
@@ -311,7 +315,7 @@ func renderViewport(m Model) string {
 		return ""
 	}
 	content := strings.Join(m.viewportLines[from:to], "\n")
-	if m.themeBundle == nil {
+	if !m.isTTY || !m.hasThemeBundle {
 		return content
 	}
 	return applyStyle(content, m.themeBundle.Viewport)
@@ -336,10 +340,23 @@ func renderPrompt(m Model) string {
 		prompt = promptPrefix
 	}
 
-	if m.themeBundle == nil {
+	if !m.isTTY || !m.hasThemeBundle {
 		return prompt
 	}
 	return applyStyle(prompt, m.themeBundle.Prompt)
+}
+
+func cloneThemeBundle(src theme.Bundle) theme.Bundle {
+	return theme.Bundle{
+		StyleSet: theme.StyleSet{
+			Header:      src.Header,
+			Viewport:    src.Viewport,
+			Prompt:      src.Prompt,
+			Warning:     src.Warning,
+			DossierCard: src.DossierCard,
+		},
+		Roles: src.Roles,
+	}
 }
 
 func applyStyle(content string, style theme.Style) string {

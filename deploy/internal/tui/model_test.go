@@ -251,6 +251,74 @@ func TestViewportBufferCapAndAppendContract(t *testing.T) {
 	}
 }
 
+func TestThemeBundleIgnoredWhenNonTTY(t *testing.T) {
+	bundle := theme.Bundle{StyleSet: theme.StyleSet{
+		Header:   theme.Style{Foreground: "#FFFFFF", Background: "#000000", Bold: true},
+		Viewport: theme.Style{Foreground: "#112233", Background: "#445566"},
+		Prompt:   theme.Style{Foreground: "#778899", Background: "#AABBCC", Bold: true},
+	}}
+	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: false, ThemeBundle: &bundle})
+	if strings.Contains(m.View(), "[") {
+		t.Fatalf("non-tty output must not contain ANSI escapes")
+	}
+}
+
+func TestNilThemeBundleMatchesDefaultRendering(t *testing.T) {
+	m1 := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true})
+	m2 := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, ThemeBundle: nil})
+	if got, want := m2.View(), m1.View(); got != want {
+		t.Fatalf("nil ThemeBundle should match default rendering")
+	}
+}
+
+func TestApplyStyleInvalidAndEmptyStylesNoOp(t *testing.T) {
+	content := "alpha\nbeta"
+	cases := []theme.Style{
+		{},
+		{Foreground: "#FFF"},
+		{Background: "#12345"},
+		{Foreground: "#GGGGGG"},
+		{Background: "not-a-color"},
+	}
+	for _, style := range cases {
+		if got := applyStyle(content, style); got != content {
+			t.Fatalf("expected no-op for style=%+v", style)
+		}
+	}
+}
+
+func TestApplyStyleMultilineResetsEachLine(t *testing.T) {
+	content := "first\nsecond"
+	styled := applyStyle(content, theme.Style{Foreground: "#010203", Bold: true})
+	lines := strings.Split(styled, "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines, got %d", len(lines))
+	}
+	for i, line := range lines {
+		if !strings.HasPrefix(line, "\x1b[38;2;1;2;3;1m") {
+			t.Fatalf("line %d missing style prefix: %q", i, line)
+		}
+		if !strings.HasSuffix(line, "\x1b[0m") {
+			t.Fatalf("line %d missing reset suffix: %q", i, line)
+		}
+	}
+}
+
+func TestThemeBundleIsCopiedAtConstruction(t *testing.T) {
+	bundle := theme.Bundle{StyleSet: theme.StyleSet{
+		Header: theme.Style{Foreground: "#FFFFFF", Background: "#000000", Bold: true},
+	}}
+	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, ThemeBundle: &bundle})
+	bundle.Header.Foreground = "#FF00FF"
+	view := m.View()
+	if strings.Contains(view, "255;0;255") {
+		t.Fatalf("model should not reflect post-construction theme mutations")
+	}
+	if !strings.Contains(view, "255;255;255") {
+		t.Fatalf("expected original copied style to be used")
+	}
+}
+
 func TestThemeBundleAppliesANSIStyles(t *testing.T) {
 	bundle := theme.Bundle{StyleSet: theme.StyleSet{
 		Header:   theme.Style{Foreground: "#FFFFFF", Background: "#000000", Bold: true},
