@@ -52,7 +52,7 @@ func New(cfg config.Config, chain []router.Descriptor) (*Runtime, error) {
 	wishServer.Handle(defaultHandler)
 
 	ids := make([]string, 0, len(chain)+2)
-	ids = append(ids, "max-sessions", "rate-limit")
+	ids = append(ids, "rate-limit", "max-sessions")
 	for _, descriptor := range chain {
 		ids = append(ids, descriptor.Name)
 	}
@@ -114,11 +114,17 @@ func MaxSessionsMiddleware(maxSessions int) wish.Middleware {
 		return func(s ssh.Session) {
 			select {
 			case sem <- struct{}{}:
-				defer func() { <-sem }()
+				defer func() {
+					if recovered := recover(); recovered != nil {
+						log.Printf("level=error event=max_sessions_handler_panic recovered=%v", recovered)
+					}
+					<-sem
+				}()
 				next(s)
 			default:
 				_, _ = s.Write([]byte("max sessions exceeded\n"))
 				_ = s.Exit(1)
+				_ = s.Close()
 			}
 		}
 	}

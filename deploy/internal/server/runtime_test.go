@@ -37,7 +37,7 @@ func TestNewRuntimeStartupPipeline(t *testing.T) {
 		t.Fatalf("Address() = %q, want %q", got, "127.0.0.1:2222")
 	}
 
-	want := []string{"max-sessions", "rate-limit", "username-routing", "session-metadata"}
+	want := []string{"rate-limit", "max-sessions", "username-routing", "session-metadata"}
 	got := runtime.MiddlewareIDs()
 	if len(got) != len(want) {
 		t.Fatalf("middleware length = %d, want %d", len(got), len(want))

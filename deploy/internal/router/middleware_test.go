@@ -159,7 +159,11 @@ func TestUsernameRoutingTriageUsers(t *testing.T) {
 				t.Fatalf("expected next handler to be called")
 			}
 
-			identity := s.Context().Value(sessionIdentityKey).(Identity)
+			identityValue := s.Context().Value(sessionIdentityKey)
+			identity, ok := identityValue.(Identity)
+			if !ok {
+				t.Fatalf("identity type = %T, want Identity", identityValue)
+			}
 			if identity.Route != routeTriage || identity.Vector != routeTriage {
 				t.Fatalf("identity = %+v, want triage metadata", identity)
 			}

@@ -86,6 +86,9 @@ func MiddlewareFromDescriptors(chain []Descriptor) []wish.Middleware {
 }
 
 // SessionIdentity returns the resolved identity attached to this session.
+//
+// Contract: this value is populated by usernameRouting middleware. Callers should
+// treat a false return value as "middleware has not run yet" (or rejected session).
 func SessionIdentity(s ssh.Session) (Identity, bool) {
 	identityValue := s.Context().Value(sessionIdentityKey)
 	identity, ok := identityValue.(Identity)
@@ -93,6 +96,9 @@ func SessionIdentity(s ssh.Session) (Identity, bool) {
 }
 
 // SessionMetadata returns immutable per-session metadata attached by middleware.
+//
+// Contract: this value is populated by sessionMetadata middleware. Callers should
+// treat a false return value as "middleware has not run yet".
 func SessionMetadata(s ssh.Session) (SessionInfo, bool) {
 	infoValue := s.Context().Value(sessionMetadataKey)
 	info, ok := infoValue.(SessionInfo)
