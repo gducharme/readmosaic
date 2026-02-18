@@ -8,11 +8,40 @@ import (
 	"time"
 )
 
+// Architecture:
+//   - Pane 1: fixed header (protocol/node, live status, observer hash, active vector).
+//   - Pane 2: bounded viewport buffer with append/replace streaming contract.
+//   - Pane 3: interactive prompt with blink cursor in command mode.
+//
+// State machine:
+//
+//	MOTD -> TRIAGE -> COMMAND -> EXIT
+//	- MOTD supports Enter or direct A/B/C hotkeys.
+//	- TRIAGE supports A/B/C and optional Esc back to MOTD only before command mode is entered.
+//	- COMMAND never re-enters MOTD.
+//
+// Tick system:
+//   - status ticks toggle STATUS: [LIVE] visibility in TTY mode.
+//   - cursor ticks toggle prompt cursor visibility in TTY mode.
 const (
 	statusLiveOn  = "STATUS: [LIVE]"
 	statusLiveOff = "STATUS: [    ]"
 	promptPrefix  = "MSC-USER ~ $ "
+
+	defaultStatusTick = 450 * time.Millisecond
+	defaultCursorTick = 530 * time.Millisecond
+	defaultMaxBuffer  = 512
 )
+
+// Keybindings (source of truth for tests and operators):
+//
+//	+---------+-------------------------------+
+//	| Mode    | Keys                          |
+//	+---------+-------------------------------+
+//	| MOTD    | enter, a, b, c                |
+//	| TRIAGE  | a, b, c, esc (pre-command)    |
+//	| COMMAND | text, backspace, enter, ctrl+d|
+//	+---------+-------------------------------+
 
 // Screen identifies the active top-level TUI view.
 type Screen int
@@ -21,7 +50,19 @@ const (
 	ScreenMOTD Screen = iota
 	ScreenTriage
 	ScreenCommand
+	ScreenExit
 )
+
+// TickSource exposes blink cadence for deterministic tests.
+type TickSource interface {
+	StatusTick() time.Duration
+	CursorTick() time.Duration
+}
+
+type defaultTickSource struct{}
+
+func (defaultTickSource) StatusTick() time.Duration { return defaultStatusTick }
+func (defaultTickSource) CursorTick() time.Duration { return defaultCursorTick }
 
 // Message types consumed by Update.
 type (
@@ -31,131 +72,225 @@ type (
 	ResizeMsg     struct{ Width, Height int }
 )
 
+// ExternalEvent is a minimal interface for runtime-fed events (logs/status updates).
+type ExternalEvent interface {
+	Apply(*Model)
+}
+
+// AppendLineMsg appends a line to pane-2 viewport stream.
+type AppendLineMsg struct{ Line string }
+
+// Apply implements ExternalEvent.
+func (m AppendLineMsg) Apply(model *Model) { model.appendViewportLine(m.Line) }
+
+// ReplaceViewportMsg replaces pane-2 viewport content.
+type ReplaceViewportMsg struct{ Content string }
+
+// Apply implements ExternalEvent.
+func (m ReplaceViewportMsg) Apply(model *Model) { model.setViewportContent(m.Content) }
+
+// StatusUpdateMsg injects status content into the viewport stream.
+type StatusUpdateMsg struct{ Status string }
+
+// Apply implements ExternalEvent.
+func (m StatusUpdateMsg) Apply(model *Model) { model.appendViewportLine("STATUS UPDATE: " + m.Status) }
+
+// Options controls model defaults and environment behavior.
+type Options struct {
+	Width          int
+	Height         int
+	IsTTY          bool
+	MaxBufferLines int
+	Ticks          TickSource
+}
+
 // Model represents the terminal UI state with three panes.
 type Model struct {
 	width  int
 	height int
+	isTTY  bool
 
 	viewportLines []string
 	viewportTop   int
 	viewportH     int
+	maxBuffer     int
 
 	statusBlink bool
 	cursorBlink bool
 
-	screen Screen
-
-	observerHash   string
-	promptInput    string
-	selectedVector string
+	screen             Screen
+	hasEnteredCommand  bool
+	observerHash       string
+	promptInput        string
+	selectedVector     string
+	selectedVectorMode string
+	ticks              TickSource
 }
 
 // NewModel constructs the interactive TUI model from caller/session metadata.
 func NewModel(remoteAddr string, width, height int) Model {
+	return NewModelWithOptions(remoteAddr, Options{Width: width, Height: height, IsTTY: true})
+}
+
+// NewModelWithOptions builds a model with explicit runtime options.
+func NewModelWithOptions(remoteAddr string, opts Options) Model {
+	maxBuffer := opts.MaxBufferLines
+	if maxBuffer <= 0 {
+		maxBuffer = defaultMaxBuffer
+	}
+	ticks := opts.Ticks
+	if ticks == nil {
+		ticks = defaultTickSource{}
+	}
 	m := Model{
-		width:         width,
-		height:        height,
-		viewportH:     max(height-6, 1),
+		width:         max(opts.Width, 1),
+		height:        max(opts.Height, 1),
+		viewportH:     max(opts.Height-6, 1),
+		isTTY:         opts.IsTTY,
 		statusBlink:   true,
 		cursorBlink:   true,
 		screen:        ScreenMOTD,
 		observerHash:  deriveObserverHash(remoteAddr),
+		maxBuffer:     maxBuffer,
+		ticks:         ticks,
 		viewportLines: strings.Split(renderMOTD(), "\n"),
 	}
+	if !m.isTTY {
+		m.statusBlink = true
+		m.cursorBlink = false
+	}
+	m.enforceBufferLimit()
 	return m
 }
 
-// NextStatusTick returns a helper duration for callers that schedule blink updates.
-func NextStatusTick() time.Duration { return 450 * time.Millisecond }
+// NextStatusTick returns blink cadence.
+func (m Model) NextStatusTick() time.Duration { return m.ticks.StatusTick() }
 
-// NextCursorTick returns a helper duration for callers that schedule prompt cursor blinking.
-func NextCursorTick() time.Duration { return 530 * time.Millisecond }
+// NextCursorTick returns prompt cursor blink cadence.
+func (m Model) NextCursorTick() time.Duration { return m.ticks.CursorTick() }
 
 // Update advances model state in response to events.
 func (m Model) Update(msg any) Model {
 	switch msg := msg.(type) {
 	case ResizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
+		m.width = max(msg.Width, 1)
+		m.height = max(msg.Height, 1)
 		m.viewportH = max(m.height-6, 1)
+		m.viewportTop = clamp(m.viewportTop, 0, max(len(m.viewportLines)-1, 0))
 	case TickMsg:
-		m.statusBlink = !m.statusBlink
-	case CursorTickMsg:
-		m.cursorBlink = !m.cursorBlink
-	case KeyMsg:
-		switch m.screen {
-		case ScreenMOTD:
-			if msg.Key == "enter" {
-				m.screen = ScreenTriage
-				m.setViewportContent(renderTriageMenu())
-			}
-		case ScreenTriage:
-			switch strings.ToLower(msg.Key) {
-			case "a":
-				m.activateVector("VECTOR_A", "READ")
-			case "b":
-				m.activateVector("VECTOR_B", "ARCHIVE")
-			case "c":
-				m.activateVector("VECTOR_C", "RETURN")
-			}
-		case ScreenCommand:
-			switch msg.Key {
-			case "enter":
-				line := strings.TrimSpace(m.promptInput)
-				m.promptInput = ""
-				if line != "" {
-					m.viewportLines = append(m.viewportLines, promptPrefix+line)
-					m.viewportTop = max(len(m.viewportLines)-m.viewportH, 0)
-				}
-			case "backspace":
-				if len(m.promptInput) > 0 {
-					m.promptInput = m.promptInput[:len(m.promptInput)-1]
-				}
-			default:
-				if len(msg.Key) == 1 {
-					m.promptInput += msg.Key
-				}
-			}
+		if m.isTTY {
+			m.statusBlink = !m.statusBlink
 		}
+	case CursorTickMsg:
+		if m.isTTY {
+			m.cursorBlink = !m.cursorBlink
+		}
+	case KeyMsg:
+		m.handleKey(msg.Key)
+	case ExternalEvent:
+		msg.Apply(&m)
 	}
 
 	return m
 }
 
-func (m *Model) activateVector(vector, mode string) {
-	m.selectedVector = vector
-	m.screen = ScreenCommand
-	m.setViewportContent(fmt.Sprintf("TRIAGE SELECTION: %s => %s\n\nAwaiting command input.", mode, vector))
+func (m *Model) handleKey(key string) {
+	lower := strings.ToLower(key)
+	switch m.screen {
+	case ScreenMOTD:
+		if lower == "enter" {
+			m.screen = ScreenTriage
+			m.setViewportContent(renderTriageMenu())
+			return
+		}
+		m.selectVectorByKey(lower)
+	case ScreenTriage:
+		if lower == "esc" && !m.hasEnteredCommand {
+			m.screen = ScreenMOTD
+			m.setViewportContent(renderMOTD())
+			return
+		}
+		m.selectVectorByKey(lower)
+	case ScreenCommand:
+		switch lower {
+		case "ctrl+d":
+			m.screen = ScreenExit
+			m.appendViewportLine("SESSION EXIT REQUESTED")
+		case "enter":
+			line := strings.TrimSpace(m.promptInput)
+			m.promptInput = ""
+			if line != "" {
+				m.appendViewportLine(promptPrefix + line)
+			}
+		case "backspace":
+			if len(m.promptInput) > 0 {
+				m.promptInput = m.promptInput[:len(m.promptInput)-1]
+			}
+		default:
+			if len(key) == 1 {
+				m.promptInput += key
+			}
+		}
+	case ScreenExit:
+		// no-op
+	}
 }
 
-// View renders three-pane display with fixed header, dynamic viewport, and prompt.
-func (m Model) View() string {
+func (m *Model) selectVectorByKey(key string) {
+	switch key {
+	case "a":
+		m.activateVector("VECTOR_A", "READ")
+	case "b":
+		m.activateVector("VECTOR_B", "ARCHIVE")
+	case "c":
+		m.activateVector("VECTOR_C", "RETURN")
+	}
+}
+
+func (m *Model) activateVector(vector, mode string) {
+	m.selectedVector = vector
+	m.selectedVectorMode = mode
+	m.screen = ScreenCommand
+	m.hasEnteredCommand = true
+	m.setViewportContent(fmt.Sprintf("TRIAGE SELECTION: %s => %s", mode, vector))
+	m.appendViewportLine("CONFIRMED VECTOR: " + vector)
+	m.appendViewportLine("Awaiting command input.")
+}
+
+// Render returns a pure string representation of the current model.
+func Render(m Model) string {
 	return strings.Join([]string{
-		m.renderHeader(),
-		m.renderViewport(),
-		m.renderPrompt(),
+		renderHeader(m),
+		renderViewport(m),
+		renderPrompt(m),
 	}, "\n")
 }
 
-func (m Model) renderHeader() string {
+// View method delegates to pure Render.
+func (m Model) View() string { return Render(m) }
+
+func renderHeader(m Model) string {
 	status := statusLiveOff
 	if m.statusBlink {
 		status = statusLiveOn
 	}
-
+	vector := "NONE"
+	if m.selectedVector != "" {
+		vector = m.selectedVector
+	}
 	return strings.Join([]string{
 		"MOSAIC PROTOCOL v.1.0 // NODE: GENESIS_BLOCK",
 		status,
 		fmt.Sprintf("OBSERVER: [%s]", m.observerHash),
+		fmt.Sprintf("VECTOR: [%s]", vector),
 	}, "\n")
 }
 
-func (m Model) renderViewport() string {
+func renderViewport(m Model) string {
 	if len(m.viewportLines) == 0 {
 		return ""
 	}
-
-	from := min(max(m.viewportTop, 0), len(m.viewportLines)-1)
+	from := clamp(m.viewportTop, 0, max(len(m.viewportLines)-1, 0))
 	to := min(from+m.viewportH, len(m.viewportLines))
 	if from >= to {
 		return ""
@@ -163,22 +298,39 @@ func (m Model) renderViewport() string {
 	return strings.Join(m.viewportLines[from:to], "\n")
 }
 
-func (m Model) renderPrompt() string {
-	if m.screen != ScreenCommand {
-		return promptPrefix + "[PRESS ENTER TO CONTINUE]"
+func renderPrompt(m Model) string {
+	if m.screen == ScreenExit {
+		return promptPrefix + "[SESSION CLOSED]"
 	}
-
+	if m.screen != ScreenCommand {
+		return promptPrefix + "[PRESS ENTER TO CONTINUE / A/B/C TO SELECT VECTOR]"
+	}
 	cursor := " "
 	if m.cursorBlink {
 		cursor = "█"
 	}
-
 	return promptPrefix + m.promptInput + cursor
 }
 
 func (m *Model) setViewportContent(content string) {
 	m.viewportLines = strings.Split(content, "\n")
 	m.viewportTop = 0
+	m.enforceBufferLimit()
+}
+
+func (m *Model) appendViewportLine(line string) {
+	m.viewportLines = append(m.viewportLines, line)
+	m.enforceBufferLimit()
+	m.viewportTop = max(len(m.viewportLines)-m.viewportH, 0)
+}
+
+func (m *Model) enforceBufferLimit() {
+	if m.maxBuffer <= 0 || len(m.viewportLines) <= m.maxBuffer {
+		return
+	}
+	over := len(m.viewportLines) - m.maxBuffer
+	m.viewportLines = append([]string(nil), m.viewportLines[over:]...)
+	m.viewportTop = max(m.viewportTop-over, 0)
 }
 
 func deriveObserverHash(remoteAddr string) string {
@@ -195,7 +347,7 @@ func renderMOTD() string {
 		"- Genesis telemetry online.",
 		"- Triage vectors available after acknowledgement.",
 		"",
-		"Press ENTER to open triage menu.",
+		"Press Enter to continue / A/B/C to select vector.",
 	}, "\n")
 }
 
@@ -222,4 +374,14 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func clamp(v, low, high int) int {
+	if v < low {
+		return low
+	}
+	if v > high {
+		return high
+	}
+	return v
 }
