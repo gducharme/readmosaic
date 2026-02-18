@@ -36,6 +36,7 @@ const (
 
 	defaultStatusTick       = 450 * time.Millisecond
 	defaultCursorTick       = 530 * time.Millisecond
+	defaultTypewriterTick   = 32 * time.Millisecond
 	maxViewportLines        = 512
 	defaultReadFragmentPath = "internal/content/vector_a_read_fragment.txt"
 	readFragmentPathEnvVar  = "MOSAIC_VECTOR_A_FRAGMENT_PATH"
@@ -66,19 +67,22 @@ const (
 type TickSource interface {
 	StatusTick() time.Duration
 	CursorTick() time.Duration
+	TypewriterTick() time.Duration
 }
 
 type defaultTickSource struct{}
 
-func (defaultTickSource) StatusTick() time.Duration { return defaultStatusTick }
-func (defaultTickSource) CursorTick() time.Duration { return defaultCursorTick }
+func (defaultTickSource) StatusTick() time.Duration     { return defaultStatusTick }
+func (defaultTickSource) CursorTick() time.Duration     { return defaultCursorTick }
+func (defaultTickSource) TypewriterTick() time.Duration { return defaultTypewriterTick }
 
 // Message types consumed by Update.
 type (
-	TickMsg       struct{}
-	CursorTickMsg struct{}
-	KeyMsg        struct{ Key string }
-	ResizeMsg     struct{ Width, Height int }
+	TickMsg           struct{}
+	CursorTickMsg     struct{}
+	TypewriterTickMsg struct{}
+	KeyMsg            struct{ Key string }
+	ResizeMsg         struct{ Width, Height int }
 )
 
 // ExternalEvent is a minimal interface for runtime-fed events (logs/status updates).
@@ -136,6 +140,11 @@ type Model struct {
 	ticks             TickSource
 	themeBundle       theme.Bundle
 	hasThemeBundle    bool
+	typewriterQueue   []string
+	typewriterActive  bool
+	typewriterTarget  []rune
+	typewriterCursor  int
+	typewriterLineIdx int
 }
 
 // NewModel constructs the interactive TUI model from caller/session metadata.
@@ -186,6 +195,9 @@ func (m Model) NextStatusTick() time.Duration { return m.ticks.StatusTick() }
 // NextCursorTick returns prompt cursor blink cadence.
 func (m Model) NextCursorTick() time.Duration { return m.ticks.CursorTick() }
 
+// NextTypewriterTick returns readout animation cadence.
+func (m Model) NextTypewriterTick() time.Duration { return m.ticks.TypewriterTick() }
+
 // Observer identity rule: hash host only (no port) to reduce churn across ephemeral source ports.
 
 // Update advances model state in response to events.
@@ -204,6 +216,8 @@ func (m Model) Update(msg any) Model {
 		if m.isTTY {
 			m.cursorBlink = !m.cursorBlink
 		}
+	case TypewriterTickMsg:
+		m.advanceTypewriter()
 	case KeyMsg:
 		m.handleKey(msg.Key)
 	case ExternalEvent:
@@ -272,14 +286,66 @@ func (m *Model) activateVector(vector, mode string) {
 	m.screen = ScreenCommand
 	m.hasEnteredCommand = true
 	m.setViewportContent(fmt.Sprintf("TRIAGE SELECTION: %s => %s", mode, vector))
-	m.appendViewportLine("CONFIRMED VECTOR: " + vector)
+	lines := []string{"CONFIRMED VECTOR: " + vector}
 	if vector == "VECTOR_A" {
-		m.appendViewportLine("READ PAYLOAD:")
-		for _, line := range loadReadFragmentLines() {
-			m.appendViewportLine(line)
-		}
+		lines = append(lines, "READ PAYLOAD:")
+		lines = append(lines, loadReadFragmentLines()...)
 	}
-	m.appendViewportLine("Awaiting command input.")
+	lines = append(lines, "Awaiting command input.")
+	m.enqueueTypewriter(lines...)
+}
+
+func (m *Model) enqueueTypewriter(lines ...string) {
+	if len(lines) == 0 {
+		return
+	}
+	m.typewriterQueue = append(m.typewriterQueue, lines...)
+	if !m.typewriterActive {
+		m.beginNextTypewriterLine()
+	}
+}
+
+func (m *Model) beginNextTypewriterLine() {
+	if len(m.typewriterQueue) == 0 {
+		m.typewriterActive = false
+		m.typewriterTarget = nil
+		m.typewriterCursor = 0
+		m.typewriterLineIdx = 0
+		return
+	}
+
+	line := m.typewriterQueue[0]
+	m.typewriterQueue = m.typewriterQueue[1:]
+	m.appendViewportLine("")
+	m.typewriterActive = true
+	m.typewriterTarget = []rune(line)
+	m.typewriterCursor = 0
+	m.typewriterLineIdx = len(m.viewportLines) - 1
+}
+
+func (m *Model) advanceTypewriter() {
+	if !m.typewriterActive {
+		if len(m.typewriterQueue) == 0 {
+			return
+		}
+		m.beginNextTypewriterLine()
+	}
+
+	if !m.typewriterActive || m.typewriterLineIdx < 0 || m.typewriterLineIdx >= len(m.viewportLines) {
+		return
+	}
+
+	if m.typewriterCursor < len(m.typewriterTarget) {
+		m.typewriterCursor++
+		m.viewportLines[m.typewriterLineIdx] = string(m.typewriterTarget[:m.typewriterCursor])
+	}
+
+	if m.typewriterCursor >= len(m.typewriterTarget) {
+		m.typewriterActive = false
+		m.typewriterTarget = nil
+		m.typewriterCursor = 0
+		m.typewriterLineIdx = -1
+	}
 }
 
 func loadReadFragmentLines() []string {

@@ -12,8 +12,21 @@ import (
 
 type fixedTicks struct{}
 
-func (fixedTicks) StatusTick() time.Duration { return 10 * time.Millisecond }
-func (fixedTicks) CursorTick() time.Duration { return 20 * time.Millisecond }
+func (fixedTicks) StatusTick() time.Duration     { return 10 * time.Millisecond }
+func (fixedTicks) CursorTick() time.Duration     { return 20 * time.Millisecond }
+func (fixedTicks) TypewriterTick() time.Duration { return 30 * time.Millisecond }
+
+func pumpTypewriter(m Model) Model {
+	for i := 0; i < 4096; i++ {
+		before := strings.Join(m.viewportLines, "\n")
+		m = m.Update(TypewriterTickMsg{})
+		after := strings.Join(m.viewportLines, "\n")
+		if after == before && !m.typewriterActive && len(m.typewriterQueue) == 0 {
+			break
+		}
+	}
+	return m
+}
 
 func TestNewModelStartsOnMOTD(t *testing.T) {
 	m := NewModelWithOptions("192.0.2.7:2222", Options{Width: 80, Height: 24, IsTTY: true, Ticks: fixedTicks{}})
@@ -23,7 +36,7 @@ func TestNewModelStartsOnMOTD(t *testing.T) {
 	if !strings.Contains(m.View(), "Message of the Day") {
 		t.Fatalf("expected MOTD content in viewport")
 	}
-	if m.NextStatusTick() != 10*time.Millisecond || m.NextCursorTick() != 20*time.Millisecond {
+	if m.NextStatusTick() != 10*time.Millisecond || m.NextCursorTick() != 20*time.Millisecond || m.NextTypewriterTick() != 30*time.Millisecond {
 		t.Fatalf("unexpected tick durations")
 	}
 }
@@ -223,6 +236,7 @@ func TestVectorAReadLoadsFragmentFromRuntimeFile(t *testing.T) {
 	m := NewModel("127.0.0.1:1234", 80, 24)
 	m = m.Update(KeyMsg{Key: "enter"})
 	m = m.Update(KeyMsg{Key: "a"})
+	m = pumpTypewriter(m)
 
 	viewport := renderViewport(m)
 	if !strings.Contains(viewport, "READ PAYLOAD:") {
@@ -239,9 +253,40 @@ func TestVectorAReadFallsBackWhenFragmentMissing(t *testing.T) {
 	m := NewModel("127.0.0.1:1234", 80, 24)
 	m = m.Update(KeyMsg{Key: "enter"})
 	m = m.Update(KeyMsg{Key: "a"})
+	m = pumpTypewriter(m)
 
 	if !strings.Contains(renderViewport(m), readFallbackLine) {
 		t.Fatalf("expected fallback line when fragment file is unavailable")
+	}
+}
+
+func TestVectorSelectionUsesTypewriterAcrossOptions(t *testing.T) {
+	cases := []struct {
+		name   string
+		key    string
+		vector string
+	}{
+		{name: "read-a", key: "a", vector: "VECTOR_A"},
+		{name: "archive-b", key: "b", vector: "VECTOR_B"},
+		{name: "return-c", key: "c", vector: "VECTOR_C"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := NewModel("127.0.0.1:1234", 80, 24)
+			m = m.Update(KeyMsg{Key: "enter"})
+			m = m.Update(KeyMsg{Key: tc.key})
+			if strings.Contains(renderViewport(m), "Awaiting command input.") {
+				t.Fatalf("line should not be fully rendered before typewriter ticks")
+			}
+			m = pumpTypewriter(m)
+			if !strings.Contains(renderViewport(m), "CONFIRMED VECTOR: "+tc.vector) {
+				t.Fatalf("missing confirmed vector line after typewriter")
+			}
+			if !strings.Contains(renderViewport(m), "Awaiting command input.") {
+				t.Fatalf("missing awaited prompt line after typewriter")
+			}
+		})
 	}
 }
 
@@ -387,6 +432,7 @@ func TestGoldenRenders(t *testing.T) {
 	}
 
 	m = m.Update(KeyMsg{Key: "b"})
+	m = pumpTypewriter(m)
 	cmdView := m.View()
 	if !strings.Contains(cmdView, "VECTOR: [VECTOR_B]") || !strings.Contains(cmdView, "CONFIRMED VECTOR: VECTOR_B") {
 		t.Fatalf("command golden mismatch")
