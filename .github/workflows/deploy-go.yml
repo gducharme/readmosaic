@@ -6,9 +6,14 @@ on:
       - 'deploy/**'
       - '.github/workflows/deploy-go.yml'
   push:
+    branches:
+      - main
     paths:
       - 'deploy/**'
       - '.github/workflows/deploy-go.yml'
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository }}/mosaic-terminal
 
 jobs:
   checks:
@@ -18,13 +23,82 @@ jobs:
         working-directory: deploy
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-go@v5
         with:
           go-version-file: deploy/go.mod
+          cache: true
+
       - name: format check
-        run: |
-          test -z "$(gofmt -l ./cmd ./internal ./third_party)"
+        run: test -z "$(gofmt -l ./cmd ./internal ./third_party)"
+
       - name: go test
         run: go test ./...
+
       - name: go vet
         run: go vet ./...
+
+      - name: setup docker buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: login ghcr
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: build image (pull requests)
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./deploy
+          file: ./deploy/Dockerfile
+          platforms: linux/amd64
+          tags: ${{ env.IMAGE_NAME }}:pr-${{ github.sha }}
+          labels: ${{ steps.meta.outputs.labels }}
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: build and push multi-arch image (main)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./deploy
+          file: ./deploy/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          push: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: tests inside container (toolchain container)
+        run: docker run --rm -v "${PWD}:/src" -w /src golang:1.22.8-alpine3.20 sh -lc "go test ./..."
+
+      - name: trivy fs scan
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: fs
+          scan-ref: deploy
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+
+      - name: trivy image scan
+        if: github.event_name == 'pull_request'
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:pr-${{ github.sha }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true

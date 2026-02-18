@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"log"
+	"os/signal"
+	"syscall"
 
 	"mosaic-terminal/internal/config"
 	"mosaic-terminal/internal/router"
@@ -20,7 +22,10 @@ func main() {
 		log.Fatalf("build ssh server: %v", err)
 	}
 
-	if err := runtime.Run(context.Background()); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	if err := runtime.Run(ctx); err != nil {
 		log.Fatalf("run ssh server: %v", err)
 	}
 }

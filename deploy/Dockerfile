@@ -1,31 +1,35 @@
 # syntax=docker/dockerfile:1.7
 
-FROM golang:1.22-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.22.8-alpine3.20 AS builder
 WORKDIR /src
 
 RUN apk add --no-cache ca-certificates
 
 COPY go.mod ./
+RUN go mod download
+
 COPY third_party ./third_party
 COPY cmd ./cmd
 COPY internal ./internal
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-    go build -trimpath -ldflags='-s -w -extldflags "-static"' \
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' \
     -o /out/mosaic-server ./cmd/server
 
-# Provide minimal identity metadata for non-root execution in scratch.
-RUN printf 'mosaic:x:65532:65532:Mosaic:/nonexistent:/sbin/nologin\n' > /out/passwd \
-    && printf 'mosaic:x:65532:\n' > /out/group
+FROM alpine:3.20.6 AS runtime
+WORKDIR /app
 
-FROM scratch
+RUN addgroup -S -g 65532 mosaic && adduser -S -D -H -u 65532 -G mosaic mosaic \
+    && apk add --no-cache ca-certificates netcat-openbsd \
+    && mkdir -p /run/keys \
+    && chown -R mosaic:mosaic /run/keys /app
 
-COPY --from=builder /out/mosaic-server /mosaic-server
-COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
-COPY --from=builder /out/passwd /etc/passwd
-COPY --from=builder /out/group /etc/group
+COPY --from=builder /out/mosaic-server /usr/local/bin/mosaic-server
 
 USER 65532:65532
 EXPOSE 2222
 
-ENTRYPOINT ["/mosaic-server"]
+ENTRYPOINT ["/usr/local/bin/mosaic-server"]
+CMD []

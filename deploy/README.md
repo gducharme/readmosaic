@@ -8,6 +8,9 @@ This directory contains the deploy-oriented Go module for the Mosaic terminal ru
 - **Build binary**: `make build`
 - **Run tests**: `make test`
 - **Offline CI checks**: `make ci-offline`
+- **Build image**: `make build-image`
+- **Start stack**: `make up`
+- **Stop stack**: `make down`
 
 ## Startup flow contract
 
@@ -37,108 +40,132 @@ This flow is protected by runtime and boot tests in `internal/server/runtime_tes
 - `RATE_LIMIT_ENABLED` (default `true`; set `false` to disable in dev/test)
 - `RATE_LIMIT_TRUST_PROXY_HEADERS` (default `false`; only trusts a proxy IP injected via trusted middleware value `mosaic.proxy_ip`)
 
-## Shim contract (explicit)
-
-This scaffold currently uses local `replace` directives in `go.mod` to point at `third_party/charmbracelet/*` shims.
-
-Intentionally fake behaviors in shim mode:
-- no SSH handshake or auth
-- placeholder host-key file contents
-- TCP-backed pseudo sessions
-
-Behavior expected to remain compatible with upstream integration points:
-- option-based server construction
-- middleware wrapping order
-- `ListenAndServe`/`Shutdown` lifecycle with server-closed signaling
-
-Startup logs include mode (`shim`) and enabled middleware.
-
-## Offline strategy
-
-This module uses **replace-only** offline strategy (no vendored dependencies). Use `make ci-offline` to validate builds with `GOPROXY=off` and `GOSUMDB=off`.
-
-## Layout
-
-- `cmd/server/main.go` — composition root + process lifecycle.
-- `internal/config` — env parsing/validation.
-- `internal/server` — runtime assembly and `Run(ctx)`.
-- `internal/router` — middleware descriptors + middleware logic.
-- `internal/{tui,theme,content,commands,store,rtl,model}` — feature package placeholders.
-
-## Operational snippets
-
-### systemd (example)
-
-```ini
-[Unit]
-Description=Mosaic SSH Terminal
-After=network.target
-
-[Service]
-WorkingDirectory=/opt/mosaic/deploy
-Environment=MOSAIC_SSH_PORT=2222
-ExecStart=/opt/mosaic/deploy/bin/mosaic-server
-Restart=on-failure
-
-[Install]
-WantedBy=multi-user.target
-```
-
-### Container run (example)
-
-```bash
-docker run --rm -p 2222:2222 \
-  -e MOSAIC_SSH_HOST=0.0.0.0 \
-  -e MOSAIC_SSH_PORT=2222 \
-  mosaic-terminal:latest
-```
-
 ## Docker deployment assets
 
-- `Dockerfile` provides a **multi-stage build** that compiles a static Linux binary in a Go builder image, then copies only the binary, CA bundle, and minimal passwd/group metadata into a `scratch` runtime.
+- `Dockerfile` is a multi-stage build:
+  - builder: `golang:1.22.8-alpine3.20`
+  - runtime: pinned minimal `alpine:3.20.6`
+  - static Go build (`CGO_ENABLED=0`) with reproducible flags (`-trimpath -buildvcs=false -ldflags='-s -w -buildid='`)
+  - non-root runtime user (`uid/gid 65532`)
 - `docker-compose.yml` provides:
-  - `app` service for the SSH runtime.
-  - Optional `neo4j` service (enable with `--profile neo4j`) for local integration.
-  - Host key bind mount:
-    - `./data/ssh/host_ed25519:/run/keys/ssh_host_ed25519:ro`
-  - Persistent named volume: `neo4j-data:/data`.
-  - Port publication via `MOSAIC_SSH_PUBLISH_PORT`:
-    - Default: `22:2222`
-    - Fallback when host 22 is unavailable: `2222:2222` (set `MOSAIC_SSH_PUBLISH_PORT=2222`).
+  - `app` (SSH runtime)
+  - optional `neo4j` (`--profile neo4j`)
+  - host key bind mount `./data/ssh/host_ed25519:/run/keys/ssh_host_ed25519:ro`
+  - named persistence volumes (`neo4j-data`, `neo4j-logs`)
+  - explicit `mosaic-app` network
+  - healthchecks for app (TCP via `nc`) and Neo4j (`cypher-shell RETURN 1`)
+  - restart policy + log rotation
+- `docker-compose.override.yml` is the default dev override:
+  - host port defaults to `2222:2222`
+  - sets `RATE_LIMIT_ENABLED=false`
 
-### Compose quick start
+## Required env vars / secrets
+
+1. Copy `.env.example` to `.env`.
+2. Required secret material:
+   - SSH host key at `./data/ssh/host_ed25519` (private key, mode `600`)
+3. Optional Neo4j credentials:
+   - `NEO4J_AUTH` and `NEO4J_PASSWORD` (used only when neo4j profile is enabled)
+
+## Local development flow
 
 ```bash
 cd deploy
+cp .env.example .env
 mkdir -p data/ssh
-# Provide an existing ed25519 private host key at ./data/ssh/host_ed25519
-# chmod 600 ./data/ssh/host_ed25519
+# provide an existing ed25519 private key file
+chmod 600 data/ssh/host_ed25519
 
-# default publish strategy (host 22 -> container 2222)
+# dev defaults from docker-compose.override.yml (2222:2222)
 docker compose up --build -d
+```
 
-# fallback publish strategy (host 2222 -> container 2222)
-MOSAIC_SSH_PUBLISH_PORT=2222 docker compose up --build -d
+## Production deploy flow
 
-# enable optional Neo4j integration service
-MOSAIC_SSH_PUBLISH_PORT=2222 docker compose --profile neo4j up --build -d
+```bash
+cd deploy
+cp .env.example .env
+# set MOSAIC_SSH_PUBLISH_PORT=22 in .env for host port 22 mapping
+# provide production SSH host key at data/ssh/host_ed25519
+
+docker compose -f docker-compose.yml up --build -d
+# optional with graph integration
+docker compose -f docker-compose.yml --profile neo4j up --build -d
 ```
 
 ## Healthcheck strategy
 
-- **App service (`scratch`)**: there is no shell in the container, so define health from the outside using a TCP probe against the published SSH port.
-  - Example host probe: `nc -zv 127.0.0.1 ${MOSAIC_SSH_PUBLISH_PORT:-22}`
-  - In orchestrators, use TCP socket probes against container port `2222`.
-- **Neo4j service**: compose includes an in-container `cypher-shell` healthcheck (`RETURN 1;`).
-- Inspect status with `docker compose ps` and only treat the stack as healthy when app TCP and (if enabled) Neo4j healthcheck both pass.
+- App health uses a TCP probe (`nc -z 127.0.0.1 2222`) inside the runtime image.
+- Neo4j health uses `cypher-shell`.
+- Validate status with `docker compose ps`.
 
 ## Logging guidance
 
-- Both services default to Docker `json-file` logging with rotation (`max-size=10m`, `max-file=3`) in `docker-compose.yml`.
-- Follow runtime logs with:
+- Both services use Docker `json-file` driver with rotation (`10m`, `3 files`).
+- Stream logs:
   - `docker compose logs -f app`
   - `docker compose --profile neo4j logs -f neo4j`
-- The app emits startup metadata (runtime mode + middleware chain) and rate-limit events (`remote_ip`, counters, reason). Route these logs to your collector in production.
+
+## How to build and run in CI
+
+- Workflow `.github/workflows/deploy-go.yml` now:
+  - runs Go format/tests/vet
+  - builds multi-arch container image via buildx (`linux/amd64,linux/arm64`)
+  - runs containerized smoke test (`go test ./...` in container)
+  - runs Trivy filesystem and image scans
+  - can push images on `main`
+
+## Image size comparison
+
+- `docker` CLI is not available in this execution environment, so an actual local image size diff could not be produced here.
+- Run this locally to compare before/after image sizes:
+
+```bash
+cd deploy
+# previous image tag (replace with your baseline build/tag)
+docker image inspect mosaic-terminal:previous --format='{{.Size}}'
+# current image tag
+docker build -t mosaic-terminal:local .
+docker image inspect mosaic-terminal:local --format='{{.Size}}'
+```
+
+## Troubleshooting
+
+- **Port 22 unavailable**: set `MOSAIC_SSH_PUBLISH_PORT=2222` in `.env`.
+- **Host key permission error**: ensure `chmod 600 data/ssh/host_ed25519`.
+- **Neo4j not starting**: verify `NEO4J_AUTH`, inspect `docker compose logs neo4j`.
+- **Healthcheck unhealthy**: verify container port 2222 binds and that SSH server started (`docker compose logs app`).
+
+## How to test
+
+```bash
+cd deploy
+cp .env.example .env
+mkdir -p data/ssh
+# add a valid key before starting stack
+
+# Go checks
+make test
+make vet
+
+# compose syntax
+MOSAIC_SSH_PUBLISH_PORT=2222 docker compose config
+
+# build and run app only
+MOSAIC_SSH_PUBLISH_PORT=2222 docker compose up --build -d app
+docker compose ps
+docker compose logs --no-color app | tail -n 50
+
+# app health probe from host
+nc -zv 127.0.0.1 2222
+
+# optional: neo4j profile
+MOSAIC_SSH_PUBLISH_PORT=2222 docker compose --profile neo4j up --build -d
+docker compose --profile neo4j ps
+
+# cleanup
+docker compose --profile neo4j down -v
+```
 
 ## Using real upstream dependencies
 
@@ -148,37 +175,3 @@ To switch to upstream modules:
 2. Set real versions for `github.com/charmbracelet/wish` and `github.com/charmbracelet/ssh`.
 3. Run `go mod tidy` (with internet access).
 4. Delete `third_party/charmbracelet` if no longer needed.
-
-
-## Rate-limiting behavior contract
-
-### Client experience
-
-- A limited client receives: `rate limit exceeded\n` and the session is ended before TUI middleware runs.
-- Rate limiting is applied per normalized remote IP (IPv4 and IPv6-mapped IPv4 normalize to the same key).
-- Clients behind the same NAT share a bucket by design.
-
-### Operational safety
-
-- Limiter state is **in-memory only**; process restarts clear buckets and counters.
-- A hard cap (`RATE_LIMIT_MAX_TRACKED_IPS`) prevents unbounded map growth.
-- Stale IP entries are evicted with TTL cleanup to reduce long-lived memory pressure.
-- When capacity is full, unseen IPs are throttled (protects memory at the cost of possible false positives under attack).
-- In clustered deployments, each node enforces limits independently (no cross-node coordination in this scaffold).
-
-### Tuning guidance
-
-- Raise `RATE_LIMIT_MAX_ATTEMPTS` and/or `RATE_LIMIT_BURST` for trusted private networks.
-- Increase `RATE_LIMIT_BAN_DURATION` if abusive clients reconnect aggressively.
-- Keep `RATE_LIMIT_TRUST_PROXY_HEADERS=false` unless a trusted SSH gateway middleware sets `mosaic.proxy_ip`.
-
-### Observability
-
-Throttled attempts emit structured logs with:
-
-- `remote_ip`
-- `timestamp`
-- `reason`
-- `rate_limit_hits`
-- `total_blocked_connections`
-- `active_tracked_ips`
