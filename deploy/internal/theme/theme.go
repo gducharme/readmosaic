@@ -41,14 +41,19 @@ type Style struct {
 	Bold       bool
 }
 
-// Bundle contains all display styles needed by the runtime UI surface.
-type Bundle struct {
+// StyleSet provides strongly-typed styles for the primary runtime UI surfaces.
+type StyleSet struct {
 	Header      Style
 	Viewport    Style
 	Prompt      Style
 	Warning     Style
 	DossierCard Style
-	Roles       SemanticRoles
+}
+
+// Bundle contains all display styles needed by the runtime UI surface.
+type Bundle struct {
+	StyleSet
+	Roles SemanticRoles
 }
 
 // TermProfile describes terminal rendering capabilities derived from TERM.
@@ -82,28 +87,34 @@ var (
 
 var palettes = map[Variant]Bundle{
 	VariantWest: {
-		Header:      Style{Foreground: "#FFFFFF", Background: "#0B1F3A", Bold: true},
-		Viewport:    Style{Foreground: "#D7E3F4", Background: "#122A4A"},
-		Prompt:      Style{Foreground: "#FFFFFF", Background: "#0F345E", Bold: true},
-		Warning:     Style{Foreground: "#FFDDE0", Background: "#5B1F2A", Bold: true},
-		DossierCard: Style{Foreground: "#EAF1FB", Background: "#163A63"},
-		Roles:       SemanticRoles{Primary: "#0B1F3A", Accent: "#0F345E", Muted: "#122A4A", Danger: "#5B1F2A", Success: "#1F6B4A", Border: "#2A4C74"},
+		StyleSet: StyleSet{
+			Header:      Style{Foreground: "#FFFFFF", Background: "#0B1F3A", Bold: true},
+			Viewport:    Style{Foreground: "#D7E3F4", Background: "#122A4A"},
+			Prompt:      Style{Foreground: "#FFFFFF", Background: "#0F345E", Bold: true},
+			Warning:     Style{Foreground: "#FFDDE0", Background: "#5B1F2A", Bold: true},
+			DossierCard: Style{Foreground: "#EAF1FB", Background: "#163A63"},
+		},
+		Roles: SemanticRoles{Primary: "#0B1F3A", Accent: "#0F345E", Muted: "#122A4A", Danger: "#5B1F2A", Success: "#1F6B4A", Border: "#2A4C74"},
 	},
 	VariantFitra: {
-		Header:      Style{Foreground: "#1A1A1A", Background: "#D4AF37", Bold: true},
-		Viewport:    Style{Foreground: "#D2FFE8", Background: "#0B6B49"},
-		Prompt:      Style{Foreground: "#103926", Background: "#D8B94A", Bold: true},
-		Warning:     Style{Foreground: "#3A1800", Background: "#F4B183", Bold: true},
-		DossierCard: Style{Foreground: "#DFF9EC", Background: "#0E7A53"},
-		Roles:       SemanticRoles{Primary: "#0B6B49", Accent: "#D4AF37", Muted: "#0E7A53", Danger: "#C65E36", Success: "#1E9E68", Border: "#65A989"},
+		StyleSet: StyleSet{
+			Header:      Style{Foreground: "#1A1A1A", Background: "#D4AF37", Bold: true},
+			Viewport:    Style{Foreground: "#D2FFE8", Background: "#0B6B49"},
+			Prompt:      Style{Foreground: "#103926", Background: "#D8B94A", Bold: true},
+			Warning:     Style{Foreground: "#3A1800", Background: "#F4B183", Bold: true},
+			DossierCard: Style{Foreground: "#DFF9EC", Background: "#0E7A53"},
+		},
+		Roles: SemanticRoles{Primary: "#0B6B49", Accent: "#D4AF37", Muted: "#0E7A53", Danger: "#C65E36", Success: "#1E9E68", Border: "#65A989"},
 	},
 	VariantRoot: {
-		Header:      Style{Foreground: "#FFFFFF", Background: "#7A1421", Bold: true},
-		Viewport:    Style{Foreground: "#FCECEE", Background: "#941C2A"},
-		Prompt:      Style{Foreground: "#FFFFFF", Background: "#A11E2D", Bold: true},
-		Warning:     Style{Foreground: "#2D050A", Background: "#F28A94", Bold: true},
-		DossierCard: Style{Foreground: "#FFECEE", Background: "#8A1A27"},
-		Roles:       SemanticRoles{Primary: "#7A1421", Accent: "#A11E2D", Muted: "#8A1A27", Danger: "#C92035", Success: "#5B9B68", Border: "#B95765"},
+		StyleSet: StyleSet{
+			Header:      Style{Foreground: "#FFFFFF", Background: "#7A1421", Bold: true},
+			Viewport:    Style{Foreground: "#FCECEE", Background: "#941C2A"},
+			Prompt:      Style{Foreground: "#FFFFFF", Background: "#A11E2D", Bold: true},
+			Warning:     Style{Foreground: "#2D050A", Background: "#F28A94", Bold: true},
+			DossierCard: Style{Foreground: "#FFECEE", Background: "#8A1A27"},
+		},
+		Roles: SemanticRoles{Primary: "#7A1421", Accent: "#A11E2D", Muted: "#8A1A27", Danger: "#C92035", Success: "#5B9B68", Border: "#B95765"},
 	},
 	VariantRead:    grayscaleBundle(),
 	VariantArchive: grayscaleBundle(),
@@ -196,7 +207,12 @@ func resolveWithProfile(variant Variant, opts ResolveOptions, detector TermProfi
 		return Bundle{}, TermProfile{}, fmt.Errorf("%w: %s", ErrUnknownVariant, variant)
 	}
 
-	profile := detector(opts.Term)
+	term := strings.TrimSpace(opts.Term)
+	if term == "" {
+		term = os.Getenv("TERM")
+	}
+
+	profile := detector(term)
 	if shouldUseMonochrome(profile, opts) {
 		return cloneBundle(grayscaleBundle()), profile, nil
 	}
@@ -273,12 +289,14 @@ func detectTermProfileUncached(norm string) TermProfile {
 
 func grayscaleBundle() Bundle {
 	return Bundle{
-		Header:      Style{Foreground: "#FFFFFF", Background: "#111111", Bold: true},
-		Viewport:    Style{Foreground: "#F2F2F2", Background: "#1A1A1A"},
-		Prompt:      Style{Foreground: "#FFFFFF", Background: "#000000", Bold: true},
-		Warning:     Style{Foreground: "#000000", Background: "#E6E6E6", Bold: true},
-		DossierCard: Style{Foreground: "#FFFFFF", Background: "#222222"},
-		Roles:       SemanticRoles{Primary: "#111111", Accent: "#FFFFFF", Muted: "#1A1A1A", Danger: "#E6E6E6", Success: "#CFCFCF", Border: "#8F8F8F"},
+		StyleSet: StyleSet{
+			Header:      Style{Foreground: "#FFFFFF", Background: "#111111", Bold: true},
+			Viewport:    Style{Foreground: "#F2F2F2", Background: "#1A1A1A"},
+			Prompt:      Style{Foreground: "#FFFFFF", Background: "#000000", Bold: true},
+			Warning:     Style{Foreground: "#000000", Background: "#E6E6E6", Bold: true},
+			DossierCard: Style{Foreground: "#FFFFFF", Background: "#222222"},
+		},
+		Roles: SemanticRoles{Primary: "#111111", Accent: "#FFFFFF", Muted: "#1A1A1A", Danger: "#E6E6E6", Success: "#CFCFCF", Border: "#8F8F8F"},
 	}
 }
 
