@@ -4,13 +4,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"mosaic-terminal/internal/theme"
 	"net"
-	"strconv"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
-	"mosaic-terminal/internal/theme"
 )
 
 // Architecture:
