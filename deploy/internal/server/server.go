@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -117,16 +118,19 @@ func MaxSessionsMiddleware(maxSessions int) wish.Middleware {
 		return func(s ssh.Session) {
 			select {
 			case sem <- struct{}{}:
-				release := make(chan struct{})
+				var releaseOnce sync.Once
+				releaseSlot := func() {
+					releaseOnce.Do(func() {
+						<-sem
+					})
+				}
+
 				go func() {
-					select {
-					case <-s.Context().Done():
-					case <-release:
-					}
-					<-sem
+					<-s.Context().Done()
+					releaseSlot()
 				}()
 
-				defer close(release)
+				defer releaseSlot()
 				defer func() {
 					if recovered := recover(); recovered != nil {
 						log.Printf("level=error event=max_sessions_handler_panic recovered=%v", recovered)

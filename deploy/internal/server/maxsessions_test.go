@@ -141,3 +141,42 @@ func TestMaxSessionsMiddlewareRecoversFromPanicAndReleasesSlot(t *testing.T) {
 		t.Fatal("expected slot to be released after panic")
 	}
 }
+
+func TestMaxSessionsMiddlewareContextDoneAndHandlerReturnDoNotDoubleRelease(t *testing.T) {
+	mw := MaxSessionsMiddleware(1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	first := newFakeMaxSessionsSession(ctx, &net.TCPAddr{IP: net.ParseIP("203.0.113.30"), Port: 22})
+	releaseFirst := make(chan struct{})
+	h := mw(func(ssh.Session) { <-releaseFirst })
+	doneFirst := make(chan struct{})
+	go func() {
+		h(first)
+		close(doneFirst)
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	close(releaseFirst)
+	<-doneFirst
+
+	second := newFakeMaxSessionsSession(context.Background(), &net.TCPAddr{IP: net.ParseIP("203.0.113.31"), Port: 22})
+	third := newFakeMaxSessionsSession(context.Background(), &net.TCPAddr{IP: net.ParseIP("203.0.113.32"), Port: 22})
+	releaseSecond := make(chan struct{})
+	gate := mw(func(ssh.Session) { <-releaseSecond })
+	doneSecond := make(chan struct{})
+	go func() {
+		gate(second)
+		close(doneSecond)
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+	gate(third)
+	if len(third.writes) != 1 || third.writes[0] != "max sessions exceeded\n" {
+		t.Fatalf("unexpected overflow writes: %#v", third.writes)
+	}
+
+	close(releaseSecond)
+	<-doneSecond
+}
