@@ -36,6 +36,9 @@ type Runtime struct {
 func New(cfg config.Config, chain []router.Descriptor) (*Runtime, error) {
 	address := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
 	middleware := router.MiddlewareFromDescriptors(chain)
+	// Order is security/resource critical:
+	//   rate-limit -> max-sessions -> routing/metadata.
+	// We throttle abusive clients before they can consume scarce session slots.
 	middleware = append([]wish.Middleware{RateLimitMiddleware(cfg.RateLimitMaxAttempts, cfg.RateLimitWindow, cfg.RateLimitBurst, cfg.RateLimitBanDuration, cfg.RateLimitMaxTrackedIPs, cfg.RateLimitTrustProxyHeaders, cfg.RateLimitEnabled)}, middleware...)
 	middleware = append([]wish.Middleware{MaxSessionsMiddleware(cfg.MaxSessions)}, middleware...)
 
@@ -114,11 +117,20 @@ func MaxSessionsMiddleware(maxSessions int) wish.Middleware {
 		return func(s ssh.Session) {
 			select {
 			case sem <- struct{}{}:
+				release := make(chan struct{})
+				go func() {
+					select {
+					case <-s.Context().Done():
+					case <-release:
+					}
+					<-sem
+				}()
+
+				defer close(release)
 				defer func() {
 					if recovered := recover(); recovered != nil {
 						log.Printf("level=error event=max_sessions_handler_panic recovered=%v", recovered)
 					}
-					<-sem
 				}()
 				next(s)
 			default:
