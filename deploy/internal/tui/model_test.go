@@ -71,6 +71,33 @@ func TestTypewriterCadenceIsConfigurable(t *testing.T) {
 	}
 }
 
+func TestTypewriterCadenceFromEnv(t *testing.T) {
+	t.Setenv(typewriterTickMsEnvVar, "9")
+	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true})
+	if got := m.NextTypewriterTick(); got != 9*time.Millisecond {
+		t.Fatalf("unexpected typewriter cadence from env: %v", got)
+	}
+}
+
+func TestTypewriterBatchStepConfigurable(t *testing.T) {
+	t.Setenv(typewriterBatchEnvVar, "3")
+	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true})
+	m.setViewportContent("seed")
+	m.enqueueTypewriter("abcdef")
+	m = m.Update(TypewriterTickMsg{})
+	if got := m.viewportLines[len(m.viewportLines)-1]; got != "abc" {
+		t.Fatalf("expected 3-grapheme step, got %q", got)
+	}
+
+	m2 := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, TypewriterStep: 2})
+	m2.setViewportContent("seed")
+	m2.enqueueTypewriter("abcdef")
+	m2 = m2.Update(TypewriterTickMsg{})
+	if got := m2.viewportLines[len(m2.viewportLines)-1]; got != "ab" {
+		t.Fatalf("expected option override step=2, got %q", got)
+	}
+}
+
 func TestRemoteAddrNormalizationCases(t *testing.T) {
 	cases := []struct {
 		in   string
@@ -307,7 +334,7 @@ func TestVectorSelectionUsesTypewriterAcrossOptions(t *testing.T) {
 			m = m.Update(KeyMsg{Key: "enter"})
 			m = m.Update(KeyMsg{Key: tc.key})
 			if strings.Contains(renderViewport(m), "Awaiting command input.") {
-				t.Fatalf("line should not be fully rendered before typewriter ticks")
+				t.Fatalf("line should not appear before queue drains")
 			}
 			m = pumpTypewriter(m)
 			if !strings.Contains(renderViewport(m), "CONFIRMED VECTOR: "+tc.vector) {
@@ -532,6 +559,39 @@ func TestTypewriterUsesGraphemeBoundariesAndStableWidths(t *testing.T) {
 		}
 	}
 
+}
+
+func TestTypewriterQueueLimitDropsOldest(t *testing.T) {
+	m := NewModel("127.0.0.1:1234", 80, 24)
+	lines := make([]string, 0, maxTypewriterQueueLines+20)
+	for i := 0; i < maxTypewriterQueueLines+20; i++ {
+		lines = append(lines, fmt.Sprintf("L-%03d", i))
+	}
+	m.enqueueTypewriter(lines...)
+	if len(m.typewriterQueue) > maxTypewriterQueueLines {
+		t.Fatalf("queue should be capped: %d", len(m.typewriterQueue))
+	}
+	if m.typewriterActive {
+		if strings.Join(m.typewriterTarget, "") != typewriterQueueDropLine {
+			t.Fatalf("expected drop marker as first active line")
+		}
+	} else if len(m.typewriterQueue) > 0 && m.typewriterQueue[0] != typewriterQueueDropLine {
+		t.Fatalf("expected drop marker at queue head")
+	}
+}
+
+func TestAppendLineIsEnqueuedWhenTypewriterActive(t *testing.T) {
+	m := NewModel("127.0.0.1:1234", 80, 24)
+	m.setViewportContent("seed")
+	m.enqueueTypewriter("hello")
+	beforeLines := len(m.viewportLines)
+	m.appendViewportLine("runtime")
+	if len(m.viewportLines) != beforeLines {
+		t.Fatalf("append should not write directly while typewriter is active")
+	}
+	if len(m.typewriterQueue) == 0 || m.typewriterQueue[len(m.typewriterQueue)-1] != "runtime" {
+		t.Fatalf("runtime line should be queued behind active animation")
+	}
 }
 
 func TestTypewriterFlushesWhenUserInteractsMidAnimation(t *testing.T) {

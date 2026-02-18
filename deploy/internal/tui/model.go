@@ -39,10 +39,15 @@ const (
 	defaultStatusTick       = 450 * time.Millisecond
 	defaultCursorTick       = 530 * time.Millisecond
 	defaultTypewriterTick   = 32 * time.Millisecond
+	defaultTypewriterBatch  = 1
+	maxTypewriterQueueLines = 256
 	maxViewportLines        = 512
 	defaultReadFragmentPath = "internal/content/vector_a_read_fragment.txt"
 	readFragmentPathEnvVar  = "MOSAIC_VECTOR_A_FRAGMENT_PATH"
+	typewriterTickMsEnvVar  = "MOSAIC_TUI_TYPEWRITER_TICK_MS"
+	typewriterBatchEnvVar   = "MOSAIC_TUI_TYPEWRITER_BATCH"
 	readFallbackLine        = "READ FRAGMENT UNAVAILABLE"
+	typewriterQueueDropLine = "[TYPEWRITER QUEUE TRUNCATED]"
 )
 
 // Keybindings (source of truth for tests and operators):
@@ -74,9 +79,14 @@ type TickSource interface {
 
 type defaultTickSource struct{}
 
-func (defaultTickSource) StatusTick() time.Duration     { return defaultStatusTick }
-func (defaultTickSource) CursorTick() time.Duration     { return defaultCursorTick }
-func (defaultTickSource) TypewriterTick() time.Duration { return defaultTypewriterTick }
+func (defaultTickSource) StatusTick() time.Duration { return defaultStatusTick }
+func (defaultTickSource) CursorTick() time.Duration { return defaultCursorTick }
+func (defaultTickSource) TypewriterTick() time.Duration {
+	if v, ok := readPositiveIntFromEnv(typewriterTickMsEnvVar); ok {
+		return time.Duration(v) * time.Millisecond
+	}
+	return defaultTypewriterTick
+}
 
 // Message types consumed by Update.
 type (
@@ -118,6 +128,7 @@ type Options struct {
 	MaxBufferLines int
 	Ticks          TickSource
 	ThemeBundle    *theme.Bundle
+	TypewriterStep int
 }
 
 // Model represents the terminal UI state with three panes.
@@ -147,6 +158,7 @@ type Model struct {
 	typewriterTarget  []string
 	typewriterCursor  int
 	typewriterLineIdx int
+	typewriterStep    int
 }
 
 // NewModel constructs the interactive TUI model from caller/session metadata.
@@ -166,17 +178,18 @@ func NewModelWithOptions(remoteAddr string, opts Options) Model {
 	}
 
 	m := Model{
-		width:         max(opts.Width, 1),
-		height:        max(opts.Height, 1),
-		viewportH:     max(opts.Height-7, 0),
-		isTTY:         opts.IsTTY,
-		statusBlink:   true,
-		cursorBlink:   true,
-		screen:        ScreenMOTD,
-		observerHash:  deriveObserverHash(remoteAddr),
-		maxBuffer:     maxBuffer,
-		ticks:         ticks,
-		viewportLines: strings.Split(renderMOTD(), "\n"),
+		width:          max(opts.Width, 1),
+		height:         max(opts.Height, 1),
+		viewportH:      max(opts.Height-7, 0),
+		isTTY:          opts.IsTTY,
+		statusBlink:    true,
+		cursorBlink:    true,
+		screen:         ScreenMOTD,
+		observerHash:   deriveObserverHash(remoteAddr),
+		maxBuffer:      maxBuffer,
+		ticks:          ticks,
+		viewportLines:  strings.Split(renderMOTD(), "\n"),
+		typewriterStep: resolveTypewriterStep(opts.TypewriterStep),
 	}
 	if opts.ThemeBundle != nil {
 		m.themeBundle = cloneThemeBundle(*opts.ThemeBundle)
@@ -278,23 +291,29 @@ func (m *Model) handleKey(key string) {
 func (m *Model) selectVectorByKey(key string) {
 	switch key {
 	case "a":
-		m.activateVector("VECTOR_A", "READ")
+		m.activateTriageSelection("VECTOR_A", "READ", loadReadFragmentLines())
 	case "b":
-		m.activateVector("VECTOR_B", "ARCHIVE")
+		m.activateTriageSelection("VECTOR_B", "ARCHIVE", nil)
 	case "c":
-		m.activateVector("VECTOR_C", "RETURN")
+		m.activateTriageSelection("VECTOR_C", "RETURN", nil)
 	}
 }
 
-func (m *Model) activateVector(vector, mode string) {
+// Typewriter state machine:
+//   - idle: queue empty, no active line.
+//   - queue populated: lines enqueued via enqueueTypewriter.
+//   - active: one line is progressively revealed across ticks.
+//   - draining: current line completes, next queued line becomes active.
+//   - idle: all queued lines rendered/flushed.
+func (m *Model) activateTriageSelection(vector, mode string, readPayload []string) {
 	m.selectedVector = vector
 	m.screen = ScreenCommand
 	m.hasEnteredCommand = true
 	m.setViewportContent(fmt.Sprintf("TRIAGE SELECTION: %s => %s", mode, vector))
 	lines := []string{"CONFIRMED VECTOR: " + vector}
-	if vector == "VECTOR_A" {
+	if len(readPayload) > 0 {
 		lines = append(lines, "READ PAYLOAD:")
-		lines = append(lines, loadReadFragmentLines()...)
+		lines = append(lines, readPayload...)
 	}
 	lines = append(lines, "Awaiting command input.")
 	m.enqueueTypewriter(lines...)
@@ -305,8 +324,22 @@ func (m *Model) enqueueTypewriter(lines ...string) {
 		return
 	}
 	m.typewriterQueue = append(m.typewriterQueue, lines...)
+	m.enforceTypewriterQueueLimit()
 	if !m.typewriterActive {
 		m.beginNextTypewriterLine()
+	}
+}
+
+func (m *Model) enforceTypewriterQueueLimit() {
+	if len(m.typewriterQueue) <= maxTypewriterQueueLines {
+		return
+	}
+
+	// TODO: promote this limit to a runtime setting if operators need larger buffered animations.
+	over := len(m.typewriterQueue) - maxTypewriterQueueLines
+	m.typewriterQueue = m.typewriterQueue[over:]
+	if len(m.typewriterQueue) > 0 {
+		m.typewriterQueue[0] = typewriterQueueDropLine
 	}
 }
 
@@ -327,7 +360,7 @@ func (m *Model) flushTypewriter() {
 		m.viewportLines[m.typewriterLineIdx] = strings.Join(m.typewriterTarget, "")
 	}
 	for len(m.typewriterQueue) > 0 {
-		m.appendViewportLine(m.typewriterQueue[0])
+		m.appendViewportLineNow(m.typewriterQueue[0])
 		m.typewriterQueue = m.typewriterQueue[1:]
 	}
 	m.typewriterActive = false
@@ -347,7 +380,7 @@ func (m *Model) beginNextTypewriterLine() {
 
 	line := m.typewriterQueue[0]
 	m.typewriterQueue = m.typewriterQueue[1:]
-	m.appendViewportLine("")
+	m.appendViewportLineNow("")
 	m.typewriterActive = true
 	m.typewriterTarget = toGraphemeClusters(line)
 	m.typewriterCursor = 0
@@ -367,7 +400,8 @@ func (m *Model) advanceTypewriter() {
 	}
 
 	if m.typewriterCursor < len(m.typewriterTarget) {
-		m.typewriterCursor++
+		step := max(m.typewriterStep, 1)
+		m.typewriterCursor = min(m.typewriterCursor+step, len(m.typewriterTarget))
 		m.viewportLines[m.typewriterLineIdx] = strings.Join(m.typewriterTarget[:m.typewriterCursor], "")
 	}
 
@@ -541,10 +575,40 @@ func (m *Model) setViewportContent(content string) {
 }
 
 func (m *Model) appendViewportLine(line string) {
+	if m.typewriterActive || len(m.typewriterQueue) > 0 {
+		m.enqueueTypewriter(line)
+		return
+	}
+	m.appendViewportLineNow(line)
+}
+
+func (m *Model) appendViewportLineNow(line string) {
 	m.viewportLines = append(m.viewportLines, line)
 	m.enforceBufferLimit()
 	m.viewportTop = max(len(m.viewportLines)-m.viewportH, 0)
 	m.clampViewportBounds()
+}
+
+func readPositiveIntFromEnv(name string) (int, bool) {
+	v := strings.TrimSpace(os.Getenv(name))
+	if v == "" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return 0, false
+	}
+	return n, true
+}
+
+func resolveTypewriterStep(configured int) int {
+	if configured > 0 {
+		return configured
+	}
+	if v, ok := readPositiveIntFromEnv(typewriterBatchEnvVar); ok {
+		return v
+	}
+	return defaultTypewriterBatch
 }
 
 func (m *Model) enforceBufferLimit() {
