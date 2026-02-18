@@ -32,7 +32,7 @@ const (
 
 	defaultStatusTick = 450 * time.Millisecond
 	defaultCursorTick = 530 * time.Millisecond
-	defaultMaxBuffer  = 512
+	maxViewportLines  = 512
 )
 
 // Keybindings (source of truth for tests and operators):
@@ -137,7 +137,7 @@ func NewModel(remoteAddr string, width, height int) Model {
 func NewModelWithOptions(remoteAddr string, opts Options) Model {
 	maxBuffer := opts.MaxBufferLines
 	if maxBuffer <= 0 {
-		maxBuffer = defaultMaxBuffer
+		maxBuffer = maxViewportLines
 	}
 	ticks := opts.Ticks
 	if ticks == nil {
@@ -171,6 +171,8 @@ func (m Model) NextStatusTick() time.Duration { return m.ticks.StatusTick() }
 
 // NextCursorTick returns prompt cursor blink cadence.
 func (m Model) NextCursorTick() time.Duration { return m.ticks.CursorTick() }
+
+// Observer identity rule: hash host only (no port) to reduce churn across ephemeral source ports.
 
 // Update advances model state in response to events.
 func (m Model) Update(msg any) Model {
@@ -355,13 +357,10 @@ func normalizeRemoteAddr(remoteAddr string) string {
 		return ""
 	}
 
-	if host, port, err := net.SplitHostPort(v); err == nil {
+	if host, _, err := net.SplitHostPort(v); err == nil {
 		host = strings.Trim(strings.TrimSpace(host), "[]")
 		if ip := net.ParseIP(host); ip != nil {
 			host = ip.String()
-		}
-		if port != "" {
-			return host + ":" + port
 		}
 		return host
 	}

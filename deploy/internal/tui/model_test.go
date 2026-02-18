@@ -30,9 +30,9 @@ func TestRemoteAddrNormalizationCases(t *testing.T) {
 		in   string
 		want string
 	}{
-		{in: "127.0.0.1:1234", want: "127.0.0.1:1234"},
+		{in: "127.0.0.1:1234", want: "127.0.0.1"},
 		{in: "127.0.0.1", want: "127.0.0.1"},
-		{in: " [::1]:1234 ", want: "::1:1234"},
+		{in: " [::1]:1234 ", want: "::1"},
 		{in: "::1", want: "::1"},
 	}
 	for _, tc := range cases {
@@ -49,7 +49,7 @@ func TestObserverHashDerivationCases(t *testing.T) {
 		want string
 	}{
 		{name: "ipv4", in: "198.51.100.14:2048", want: deriveObserverHash("198.51.100.14:2048")},
-		{name: "ipv6_equivalent_1", in: "[::1]:1234", want: deriveObserverHash("::1:1234")},
+		{name: "ipv6_equivalent_1", in: "[::1]:1234", want: deriveObserverHash("::1")},
 		{name: "empty", in: "", want: "E3B0C44298FC"},
 		{name: "malformed", in: "not-an-addr", want: deriveObserverHash("not-an-addr")},
 	}
@@ -171,6 +171,37 @@ func TestNonTTYDegradesGracefully(t *testing.T) {
 	}
 	if !strings.Contains(m.View(), "[PRESS ENTER TO CONTINUE]") {
 		t.Fatalf("expected non-tty prompt hint")
+	}
+}
+
+func TestPromptEnterSubmitsAndClearsInput(t *testing.T) {
+	m := NewModel("127.0.0.1:1234", 80, 24)
+	m = m.Update(KeyMsg{Key: "enter"})
+	m = m.Update(KeyMsg{Key: "a"})
+	m = m.Update(KeyMsg{Key: "h"})
+	m = m.Update(KeyMsg{Key: "i"})
+	m = m.Update(KeyMsg{Key: "enter"})
+	if m.promptInput != "" {
+		t.Fatalf("enter should clear prompt input")
+	}
+	if !strings.Contains(renderViewport(m), "MSC-USER ~ $ hi") {
+		t.Fatalf("enter should append submitted command to viewport")
+	}
+}
+
+func TestManyTicksDoNotGrowViewportOrChangeMode(t *testing.T) {
+	m := NewModel("127.0.0.1:1234", 80, 24)
+	mode := m.screen
+	lines := len(m.viewportLines)
+	for i := 0; i < 5000; i++ {
+		m = m.Update(TickMsg{})
+		m = m.Update(CursorTickMsg{})
+	}
+	if m.screen != mode {
+		t.Fatalf("ticks must not alter screen mode")
+	}
+	if len(m.viewportLines) != lines {
+		t.Fatalf("ticks must not append viewport lines")
 	}
 }
 
