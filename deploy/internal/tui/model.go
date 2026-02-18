@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/rivo/uniseg"
 )
 
 // Architecture:
@@ -142,7 +144,7 @@ type Model struct {
 	hasThemeBundle    bool
 	typewriterQueue   []string
 	typewriterActive  bool
-	typewriterTarget  []rune
+	typewriterTarget  []string
 	typewriterCursor  int
 	typewriterLineIdx int
 }
@@ -244,6 +246,9 @@ func (m *Model) handleKey(key string) {
 		}
 		m.selectVectorByKey(lower)
 	case ScreenCommand:
+		if m.typewriterActive || len(m.typewriterQueue) > 0 {
+			m.flushTypewriter()
+		}
 		switch lower {
 		case "ctrl+d":
 			m.screen = ScreenExit
@@ -305,6 +310,32 @@ func (m *Model) enqueueTypewriter(lines ...string) {
 	}
 }
 
+func toGraphemeClusters(line string) []string {
+	gr := uniseg.NewGraphemes(line)
+	clusters := make([]string, 0, len(line))
+	for gr.Next() {
+		clusters = append(clusters, gr.Str())
+	}
+	if len(clusters) == 0 {
+		return []string{""}
+	}
+	return clusters
+}
+
+func (m *Model) flushTypewriter() {
+	if m.typewriterActive && m.typewriterLineIdx >= 0 && m.typewriterLineIdx < len(m.viewportLines) {
+		m.viewportLines[m.typewriterLineIdx] = strings.Join(m.typewriterTarget, "")
+	}
+	for len(m.typewriterQueue) > 0 {
+		m.appendViewportLine(m.typewriterQueue[0])
+		m.typewriterQueue = m.typewriterQueue[1:]
+	}
+	m.typewriterActive = false
+	m.typewriterTarget = nil
+	m.typewriterCursor = 0
+	m.typewriterLineIdx = -1
+}
+
 func (m *Model) beginNextTypewriterLine() {
 	if len(m.typewriterQueue) == 0 {
 		m.typewriterActive = false
@@ -318,7 +349,7 @@ func (m *Model) beginNextTypewriterLine() {
 	m.typewriterQueue = m.typewriterQueue[1:]
 	m.appendViewportLine("")
 	m.typewriterActive = true
-	m.typewriterTarget = []rune(line)
+	m.typewriterTarget = toGraphemeClusters(line)
 	m.typewriterCursor = 0
 	m.typewriterLineIdx = len(m.viewportLines) - 1
 }
@@ -337,7 +368,7 @@ func (m *Model) advanceTypewriter() {
 
 	if m.typewriterCursor < len(m.typewriterTarget) {
 		m.typewriterCursor++
-		m.viewportLines[m.typewriterLineIdx] = string(m.typewriterTarget[:m.typewriterCursor])
+		m.viewportLines[m.typewriterLineIdx] = strings.Join(m.typewriterTarget[:m.typewriterCursor], "")
 	}
 
 	if m.typewriterCursor >= len(m.typewriterTarget) {
