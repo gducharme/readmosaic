@@ -3,7 +3,6 @@ package router
 import (
 	"fmt"
 	"log"
-	"sync"
 	"time"
 
 	"github.com/charmbracelet/ssh"
@@ -68,10 +67,9 @@ type Descriptor struct {
 	Middleware wish.Middleware
 }
 
-// DefaultChain wires middleware in order: rate limiting, username routing, session metadata.
-func DefaultChain(rateLimitPerSecond int) []Descriptor {
+// DefaultChain wires middleware in order: username routing, session metadata.
+func DefaultChain() []Descriptor {
 	return []Descriptor{
-		{Name: "rate-limit", Middleware: rateLimitMiddleware(rateLimitPerSecond)},
 		{Name: "username-routing", Middleware: usernameRouting()},
 		{Name: "session-metadata", Middleware: sessionMetadata()},
 	}
@@ -99,35 +97,6 @@ func SessionMetadata(s ssh.Session) (SessionInfo, bool) {
 	infoValue := s.Value(sessionMetadataKey)
 	info, ok := infoValue.(SessionInfo)
 	return info, ok
-}
-
-func rateLimitMiddleware(limitPerSecond int) wish.Middleware {
-	var mu sync.Mutex
-	windowStart := time.Now()
-	count := 0
-
-	return func(next ssh.Handler) ssh.Handler {
-		return func(s ssh.Session) {
-			now := time.Now()
-
-			mu.Lock()
-			if now.Sub(windowStart) >= time.Second {
-				windowStart = now
-				count = 0
-			}
-			count++
-			current := count
-			mu.Unlock()
-
-			if current > limitPerSecond {
-				log.Printf("level=warn event=rate_limit user=%s count=%d window=1s", s.User(), current)
-				_, _ = s.Write([]byte("rate limit exceeded\n"))
-				return
-			}
-
-			next(s)
-		}
-	}
 }
 
 func usernameRouting() wish.Middleware {

@@ -3,6 +3,7 @@ package config
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 const sampleTxID = "abcdefghijklmnopqrstuvwxyzABCDEF1234567890_"
@@ -257,5 +258,43 @@ func TestLoadFromEnvVeryLargeIntError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "RATE_LIMIT_PER_MIN") {
 		t.Fatalf("expected RATE_LIMIT_PER_MIN error context, got: %v", err)
+	}
+}
+
+func TestLoadFromEnvRateLimitExtendedConfig(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("RATE_LIMIT_MAX_ATTEMPTS", "45")
+	t.Setenv("RATE_LIMIT_WINDOW", "2m")
+	t.Setenv("RATE_LIMIT_BAN_DURATION", "30s")
+	t.Setenv("RATE_LIMIT_MAX_TRACKED_IPS", "1234")
+	t.Setenv("RATE_LIMIT_TRUST_PROXY_HEADERS", "true")
+	t.Setenv("RATE_LIMIT_ENABLED", "false")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() unexpected error: %v", err)
+	}
+
+	if cfg.RateLimitMaxAttempts != 45 || cfg.RateLimitWindow != 2*time.Minute || cfg.RateLimitBanDuration != 30*time.Second {
+		t.Fatalf("unexpected extended rate limit values: %+v", cfg)
+	}
+	if cfg.RateLimitMaxTrackedIPs != 1234 || !cfg.RateLimitTrustProxyHeaders || cfg.RateLimitEnabled {
+		t.Fatalf("unexpected flags/capacity values: %+v", cfg)
+	}
+}
+
+func TestLoadFromEnvRateLimitInvalidBoolean(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("RATE_LIMIT_ENABLED", "definitely")
+	if _, err := LoadFromEnv(); err == nil {
+		t.Fatal("LoadFromEnv() expected error for invalid RATE_LIMIT_ENABLED")
+	}
+}
+
+func TestLoadFromEnvRateLimitNegativeBanDuration(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("RATE_LIMIT_BAN_DURATION", "-1s")
+	if _, err := LoadFromEnv(); err == nil {
+		t.Fatal("LoadFromEnv() expected error for negative RATE_LIMIT_BAN_DURATION")
 	}
 }

@@ -197,3 +197,7 @@ func (s *session) Value(key any) any {
 func (s *session) Write(p []byte) (n int, err error) {
 	return s.conn.Write(p)
 }
+
+func (s *session) RemoteAddr() net.Addr {
+	return s.conn.RemoteAddr()
+}

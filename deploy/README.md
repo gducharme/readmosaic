@@ -14,7 +14,7 @@ This directory contains the deploy-oriented Go module for the Mosaic terminal ru
 1. Load configuration from environment.
 2. Build Wish SSH server runtime.
 3. Attach middleware chain in strict order:
-   - `rate-limit` (per-second connection rate window)
+   - `rate-limit` (per-IP token bucket; defaults: 30 attempts per 1m, burst 10)
    - `username-routing`
    - `session-metadata`
 4. Listen on internal port `2222` by default.
@@ -29,6 +29,13 @@ This flow is protected by runtime and boot tests in `internal/server/runtime_tes
 - `MOSAIC_SSH_IDLE_TIMEOUT` (default `120s`, must be `> 0`)
 - `MOSAIC_SSH_MAX_SESSIONS` (default `32`, must be `> 0`)
 - `MOSAIC_SSH_RATE_LIMIT_PER_SECOND` (default `20`, must be `> 0`)
+- `RATE_LIMIT_MAX_ATTEMPTS` (default `30`, attempts replenished across `RATE_LIMIT_WINDOW`)
+- `RATE_LIMIT_WINDOW` (default `1m`, must be `> 0`)
+- `RATE_LIMIT_BURST` (default `10`, must be `> 0`)
+- `RATE_LIMIT_BAN_DURATION` (default `0s`, temporary ban after exhaustion, `>= 0`)
+- `RATE_LIMIT_MAX_TRACKED_IPS` (default `10000`, caps memory use)
+- `RATE_LIMIT_ENABLED` (default `true`; set `false` to disable in dev/test)
+- `RATE_LIMIT_TRUST_PROXY_HEADERS` (default `false`; only trusts a proxy IP injected via trusted middleware value `mosaic.proxy_ip`)
 
 ## Shim contract (explicit)
 
@@ -98,3 +105,37 @@ To switch to upstream modules:
 2. Set real versions for `github.com/charmbracelet/wish` and `github.com/charmbracelet/ssh`.
 3. Run `go mod tidy` (with internet access).
 4. Delete `third_party/charmbracelet` if no longer needed.
+
+
+## Rate-limiting behavior contract
+
+### Client experience
+
+- A limited client receives: `rate limit exceeded\n` and the session is ended before TUI middleware runs.
+- Rate limiting is applied per normalized remote IP (IPv4 and IPv6-mapped IPv4 normalize to the same key).
+- Clients behind the same NAT share a bucket by design.
+
+### Operational safety
+
+- Limiter state is **in-memory only**; process restarts clear buckets and counters.
+- A hard cap (`RATE_LIMIT_MAX_TRACKED_IPS`) prevents unbounded map growth.
+- Stale IP entries are evicted with TTL cleanup to reduce long-lived memory pressure.
+- When capacity is full, unseen IPs are throttled (protects memory at the cost of possible false positives under attack).
+- In clustered deployments, each node enforces limits independently (no cross-node coordination in this scaffold).
+
+### Tuning guidance
+
+- Raise `RATE_LIMIT_MAX_ATTEMPTS` and/or `RATE_LIMIT_BURST` for trusted private networks.
+- Increase `RATE_LIMIT_BAN_DURATION` if abusive clients reconnect aggressively.
+- Keep `RATE_LIMIT_TRUST_PROXY_HEADERS=false` unless a trusted SSH gateway middleware sets `mosaic.proxy_ip`.
+
+### Observability
+
+Throttled attempts emit structured logs with:
+
+- `remote_ip`
+- `timestamp`
+- `reason`
+- `rate_limit_hits`
+- `total_blocked_connections`
+- `active_tracked_ips`
