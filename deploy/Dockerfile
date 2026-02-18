@@ -5,9 +5,13 @@ WORKDIR /src
 
 RUN apk add --no-cache ca-certificates
 
+# Copy module metadata for dependency resolution first.
 COPY go.mod ./
+COPY third_party/charmbracelet/ssh/go.mod ./third_party/charmbracelet/ssh/go.mod
+COPY third_party/charmbracelet/wish/go.mod ./third_party/charmbracelet/wish/go.mod
 RUN go mod download
 
+# Copy source after deps to preserve layer cache efficiency.
 COPY third_party ./third_party
 COPY cmd ./cmd
 COPY internal ./internal
