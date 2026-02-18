@@ -28,6 +28,7 @@ RUN addgroup -S -g 65532 mosaic && adduser -S -D -H -u 65532 -G mosaic mosaic \
     && chown -R mosaic:mosaic /run/keys /app
 
 COPY --from=builder /out/mosaic-server /usr/local/bin/mosaic-server
+COPY internal/content/vector_a_read_fragment.txt /app/internal/content/vector_a_read_fragment.txt
 
 USER 65532:65532
 EXPOSE 2222

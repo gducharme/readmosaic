@@ -2,6 +2,8 @@ package tui
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -205,6 +207,40 @@ func TestPromptEnterSubmitsAndClearsInput(t *testing.T) {
 	}
 	if !strings.Contains(renderViewport(m), "MSC-USER ~ $ hi") {
 		t.Fatalf("enter should append submitted command to viewport")
+	}
+}
+
+func TestVectorAReadLoadsFragmentFromRuntimeFile(t *testing.T) {
+	tmp := t.TempDir()
+	fragmentPath := filepath.Join(tmp, "vector_a.txt")
+	if err := os.WriteFile(fragmentPath, []byte("Lorem ipsum runtime line\nSecond line"), 0o600); err != nil {
+		t.Fatalf("write fragment: %v", err)
+	}
+
+	t.Setenv(readFragmentPathEnvVar, fragmentPath)
+
+	m := NewModel("127.0.0.1:1234", 80, 24)
+	m = m.Update(KeyMsg{Key: "enter"})
+	m = m.Update(KeyMsg{Key: "a"})
+
+	viewport := renderViewport(m)
+	if !strings.Contains(viewport, "READ PAYLOAD:") {
+		t.Fatalf("expected read payload heading")
+	}
+	if !strings.Contains(viewport, "Lorem ipsum runtime line") || !strings.Contains(viewport, "Second line") {
+		t.Fatalf("expected runtime fragment content, got: %q", viewport)
+	}
+}
+
+func TestVectorAReadFallsBackWhenFragmentMissing(t *testing.T) {
+	t.Setenv(readFragmentPathEnvVar, filepath.Join(t.TempDir(), "missing.txt"))
+
+	m := NewModel("127.0.0.1:1234", 80, 24)
+	m = m.Update(KeyMsg{Key: "enter"})
+	m = m.Update(KeyMsg{Key: "a"})
+
+	if !strings.Contains(renderViewport(m), readFallbackLine) {
+		t.Fatalf("expected fallback line when fragment file is unavailable")
 	}
 }
 
