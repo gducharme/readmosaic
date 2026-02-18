@@ -129,7 +129,6 @@ func TestVariantCoverage(t *testing.T) {
 	}
 }
 
-
 func TestResolve256ColorKeepsVariantPalette(t *testing.T) {
 	t.Parallel()
 
