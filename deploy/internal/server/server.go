@@ -51,13 +51,16 @@ func New(cfg config.Config, chain []router.Descriptor) (*Runtime, error) {
 		wish.WithAddress(address),
 		wish.WithHostKeyPath(cfg.HostKeyPath),
 		wish.WithIdleTimeout(cfg.IdleTimeout),
-		wish.WithMiddleware(middleware...),
 	)
 	if err != nil {
 		return nil, err
 	}
 
-	wishServer.Handle(defaultHandler)
+	handler := ssh.Handler(defaultHandler)
+	for i := len(middleware) - 1; i >= 0; i-- {
+		handler = middleware[i](handler)
+	}
+	wishServer.Handler = handler
 
 	ids := make([]string, 0, len(chain)+2)
 	ids = append(ids, "rate-limit", "max-sessions")
