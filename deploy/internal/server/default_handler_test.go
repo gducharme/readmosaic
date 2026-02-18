@@ -93,8 +93,14 @@ func (f *fakeDefaultHandlerSession) Write(p []byte) (int, error) {
 	defer f.mu.Unlock()
 	return f.writes.Write(p)
 }
-func (f *fakeDefaultHandlerSession) Close() error      { return nil }
-func (f *fakeDefaultHandlerSession) CloseWrite() error { return nil }
+func (f *fakeDefaultHandlerSession) Close() error {
+	f.closeInput()
+	return nil
+}
+func (f *fakeDefaultHandlerSession) CloseWrite() error {
+	f.closeInput()
+	return nil
+}
 func (f *fakeDefaultHandlerSession) SendRequest(string, bool, []byte) (bool, error) {
 	return false, nil
 }
@@ -131,8 +137,13 @@ func (f *fakeDefaultHandlerSession) output() string {
 }
 
 func (f *fakeDefaultHandlerSession) closeInput() {
-	if f.closer != nil {
-		_ = f.closer.Close()
+	f.mu.Lock()
+	closer := f.closer
+	f.closer = nil
+	f.mu.Unlock()
+
+	if closer != nil {
+		_ = closer.Close()
 	}
 }
 
