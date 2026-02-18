@@ -157,7 +157,7 @@ type Model struct {
 	typewriterActive  bool
 	typewriterTarget  []string
 	typewriterCursor  int
-	typewriterLineIdx int
+	typewriterLineIdx int // -1 indicates no active animated line
 	typewriterStep    int
 }
 
@@ -374,7 +374,7 @@ func (m *Model) beginNextTypewriterLine() {
 		m.typewriterActive = false
 		m.typewriterTarget = nil
 		m.typewriterCursor = 0
-		m.typewriterLineIdx = 0
+		m.typewriterLineIdx = -1
 		return
 	}
 
