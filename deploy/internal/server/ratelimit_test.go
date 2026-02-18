@@ -29,17 +29,25 @@ func newFakeRateLimitContext(remote net.Addr) *fakeRateLimitContext {
 	}
 }
 
-func (f *fakeRateLimitContext) Lock()                             { f.mu.Lock() }
-func (f *fakeRateLimitContext) Unlock()                           { f.mu.Unlock() }
-func (f *fakeRateLimitContext) User() string                      { return "guest" }
-func (f *fakeRateLimitContext) SessionID() string                 { return "test-session" }
-func (f *fakeRateLimitContext) ClientVersion() string             { return "ssh-test-client" }
-func (f *fakeRateLimitContext) ServerVersion() string             { return "ssh-test-server" }
-func (f *fakeRateLimitContext) RemoteAddr() net.Addr              { return f.remote }
-func (f *fakeRateLimitContext) LocalAddr() net.Addr               { return f.local }
-func (f *fakeRateLimitContext) Permissions() *ssh.Permissions     { return &ssh.Permissions{} }
-func (f *fakeRateLimitContext) SetValue(key, value interface{})   { f.values[key] = value }
-func (f *fakeRateLimitContext) Value(key interface{}) interface{} { return f.values[key] }
+func (f *fakeRateLimitContext) Lock()                         { f.mu.Lock() }
+func (f *fakeRateLimitContext) Unlock()                       { f.mu.Unlock() }
+func (f *fakeRateLimitContext) User() string                  { return "guest" }
+func (f *fakeRateLimitContext) SessionID() string             { return "test-session" }
+func (f *fakeRateLimitContext) ClientVersion() string         { return "ssh-test-client" }
+func (f *fakeRateLimitContext) ServerVersion() string         { return "ssh-test-server" }
+func (f *fakeRateLimitContext) RemoteAddr() net.Addr          { return f.remote }
+func (f *fakeRateLimitContext) LocalAddr() net.Addr           { return f.local }
+func (f *fakeRateLimitContext) Permissions() *ssh.Permissions { return &ssh.Permissions{} }
+func (f *fakeRateLimitContext) SetValue(key, value interface{}) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.values[key] = value
+}
+func (f *fakeRateLimitContext) Value(key interface{}) interface{} {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.values[key]
+}
 
 type fakeRateLimitSession struct {
 	remote net.Addr

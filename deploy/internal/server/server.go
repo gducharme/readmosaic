@@ -37,12 +37,12 @@ func New(cfg config.Config, chain []router.Descriptor) (*Runtime, error) {
 	address := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
 	middleware := router.MiddlewareFromDescriptors(chain)
 	middleware = append([]wish.Middleware{RateLimitMiddleware(cfg.RateLimitMaxAttempts, cfg.RateLimitWindow, cfg.RateLimitBurst, cfg.RateLimitBanDuration, cfg.RateLimitMaxTrackedIPs, cfg.RateLimitTrustProxyHeaders, cfg.RateLimitEnabled)}, middleware...)
+	middleware = append([]wish.Middleware{MaxSessionsMiddleware(cfg.MaxSessions)}, middleware...)
 
 	wishServer, err := wish.NewServer(
 		wish.WithAddress(address),
 		wish.WithHostKeyPath(cfg.HostKeyPath),
 		wish.WithIdleTimeout(cfg.IdleTimeout),
-		wish.WithMaxTimeout(cfg.IdleTimeout),
 		wish.WithMiddleware(middleware...),
 	)
 	if err != nil {
@@ -51,8 +51,8 @@ func New(cfg config.Config, chain []router.Descriptor) (*Runtime, error) {
 
 	wishServer.Handle(defaultHandler)
 
-	ids := make([]string, 0, len(chain)+1)
-	ids = append(ids, "rate-limit")
+	ids := make([]string, 0, len(chain)+2)
+	ids = append(ids, "max-sessions", "rate-limit")
 	for _, descriptor := range chain {
 		ids = append(ids, descriptor.Name)
 	}
@@ -90,6 +90,7 @@ func (r *Runtime) Run(ctx context.Context) error {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		_ = r.server.Shutdown(shutdownCtx)
+		_ = ln.Close()
 	}()
 
 	log.Printf("level=info event=startup version=%s mode=%s listen=%s middleware=%v max_sessions=%d", version, serverMode, r.resolvedAddr, r.middlewareIDs, r.cfg.MaxSessions)
@@ -101,6 +102,26 @@ func (r *Runtime) Run(ctx context.Context) error {
 
 	<-shutdownDone
 	return err
+}
+
+func MaxSessionsMiddleware(maxSessions int) wish.Middleware {
+	if maxSessions <= 0 {
+		maxSessions = 1
+	}
+	sem := make(chan struct{}, maxSessions)
+
+	return func(next ssh.Handler) ssh.Handler {
+		return func(s ssh.Session) {
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+				next(s)
+			default:
+				_, _ = s.Write([]byte("max sessions exceeded\n"))
+				_ = s.Exit(1)
+			}
+		}
+	}
 }
 
 func defaultHandler(s ssh.Session) {

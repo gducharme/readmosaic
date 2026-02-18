@@ -31,17 +31,25 @@ func newFakeContext(user string, remote net.Addr) *fakeContext {
 	}
 }
 
-func (f *fakeContext) Lock()                             { f.mu.Lock() }
-func (f *fakeContext) Unlock()                           { f.mu.Unlock() }
-func (f *fakeContext) User() string                      { return f.user }
-func (f *fakeContext) SessionID() string                 { return "test-session" }
-func (f *fakeContext) ClientVersion() string             { return "ssh-test-client" }
-func (f *fakeContext) ServerVersion() string             { return "ssh-test-server" }
-func (f *fakeContext) RemoteAddr() net.Addr              { return f.remote }
-func (f *fakeContext) LocalAddr() net.Addr               { return f.local }
-func (f *fakeContext) Permissions() *ssh.Permissions     { return &ssh.Permissions{} }
-func (f *fakeContext) SetValue(key, value interface{})   { f.values[key] = value }
-func (f *fakeContext) Value(key interface{}) interface{} { return f.values[key] }
+func (f *fakeContext) Lock()                         { f.mu.Lock() }
+func (f *fakeContext) Unlock()                       { f.mu.Unlock() }
+func (f *fakeContext) User() string                  { return f.user }
+func (f *fakeContext) SessionID() string             { return "test-session" }
+func (f *fakeContext) ClientVersion() string         { return "ssh-test-client" }
+func (f *fakeContext) ServerVersion() string         { return "ssh-test-server" }
+func (f *fakeContext) RemoteAddr() net.Addr          { return f.remote }
+func (f *fakeContext) LocalAddr() net.Addr           { return f.local }
+func (f *fakeContext) Permissions() *ssh.Permissions { return &ssh.Permissions{} }
+func (f *fakeContext) SetValue(key, value interface{}) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.values[key] = value
+}
+func (f *fakeContext) Value(key interface{}) interface{} {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.values[key]
+}
 
 type fakeSession struct {
 	user   string
