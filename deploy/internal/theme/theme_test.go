@@ -129,6 +129,23 @@ func TestVariantCoverage(t *testing.T) {
 	}
 }
 
+
+func TestResolve256ColorKeepsVariantPalette(t *testing.T) {
+	t.Parallel()
+
+	got, err := Resolve(VariantWest, "xterm-256color")
+	if err != nil {
+		t.Fatalf("Resolve() unexpected error: %v", err)
+	}
+
+	if got == grayscaleBundle() {
+		t.Fatalf("xterm-256color should preserve variant palette")
+	}
+	if got.Header.Background != palettes[VariantWest].Header.Background {
+		t.Fatalf("header background mismatch: got %q want %q", got.Header.Background, palettes[VariantWest].Header.Background)
+	}
+}
+
 func TestResolveForceOverrides(t *testing.T) {
 	t.Parallel()
 

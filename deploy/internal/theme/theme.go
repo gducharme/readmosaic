@@ -243,7 +243,7 @@ func shouldUseMonochrome(profile TermProfile, opts ResolveOptions) bool {
 	if !profile.IsTTY {
 		return true
 	}
-	if !profile.TrueColor && profile.Colors <= 256 {
+	if profile.Colors <= 8 {
 		return true
 	}
 	return false
