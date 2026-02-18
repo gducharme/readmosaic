@@ -1,0 +1,6 @@
+services:
+  app:
+    environment:
+      RATE_LIMIT_ENABLED: "false"
+    ports:
+      - "${MOSAIC_SSH_PUBLISH_PORT:-2222}:2222"
