@@ -6,4 +6,3 @@ Makefile
 bin/
 .data/
 data/
-**/*_test.go

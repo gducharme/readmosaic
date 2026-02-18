@@ -24,7 +24,9 @@ services:
         condition: service_healthy
         required: false
     healthcheck:
-      test: ["CMD-SHELL", "nc -z 127.0.0.1 2222 || exit 1"]
+      test:
+        - CMD-SHELL
+        - nc -z 127.0.0.1 2222 || exit 1
       interval: 20s
       timeout: 5s
       retries: 5
@@ -40,7 +42,8 @@ services:
   neo4j:
     image: neo4j:5.24.2-community
     container_name: mosaic-neo4j
-    profiles: ["neo4j"]
+    profiles:
+      - neo4j
     restart: unless-stopped
     environment:
       NEO4J_AUTH: ${NEO4J_AUTH:-neo4j/localdevpassword}
@@ -52,7 +55,12 @@ services:
       - neo4j-data:/data
       - neo4j-logs:/logs
     healthcheck:
-      test: ["CMD-SHELL", "cypher-shell -u neo4j -p ${NEO4J_PASSWORD:-localdevpassword} 'RETURN 1;' >/dev/null 2>&1"]
+      test:
+        - CMD-SHELL
+        - >-
+          cypher-shell -u neo4j
+          -p ${NEO4J_PASSWORD:-localdevpassword}
+          'RETURN 1;' >/dev/null 2>&1
       interval: 20s
       timeout: 10s
       retries: 5

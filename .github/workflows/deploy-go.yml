@@ -5,12 +5,14 @@ on:
     paths:
       - 'deploy/**'
       - '.github/workflows/deploy-go.yml'
+      - '.trivyignore'
   push:
     branches:
       - main
     paths:
       - 'deploy/**'
       - '.github/workflows/deploy-go.yml'
+      - '.trivyignore'
 
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository }}/mosaic-terminal
@@ -32,7 +34,8 @@ jobs:
       - name: format check
         run: test -z "$(gofmt -l ./cmd ./internal ./third_party)"
 
-      - name: go test
+      # Host-run tests catch regressions quickly.
+      - name: go test (host toolchain)
         run: go test ./...
 
       - name: go vet
@@ -84,7 +87,8 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: tests inside container (toolchain container)
+      # Container-run tests validate parity with pinned Go image/toolchain.
+      - name: go test (containerized toolchain parity)
         run: docker run --rm -v "${PWD}:/src" -w /src golang:1.22.8-alpine3.20 go test ./...
 
       - name: trivy fs scan
@@ -94,6 +98,7 @@ jobs:
           scan-ref: deploy
           severity: HIGH,CRITICAL
           ignore-unfixed: true
+          trivyignores: .trivyignore
 
       - name: trivy image scan
         if: github.event_name == 'pull_request'
@@ -102,3 +107,4 @@ jobs:
           image-ref: ${{ env.IMAGE_NAME }}:pr-${{ github.sha }}
           severity: HIGH,CRITICAL
           ignore-unfixed: true
+          trivyignores: .trivyignore
