@@ -201,16 +201,17 @@ func defaultHandler(s ssh.Session) {
 
 	keys := make(chan string, 8)
 	eof := make(chan struct{}, 1)
-	go streamKeys(s, keys, eof)
+	go streamKeys(s.Context(), s, keys, eof)
 
-	statusTicker := time.NewTicker(model.NextStatusTick())
-	cursorTicker := time.NewTicker(model.NextCursorTick())
+	statusTicker := time.NewTicker(safeTickerDuration(model.NextStatusTick(), 450*time.Millisecond))
+	cursorTicker := time.NewTicker(safeTickerDuration(model.NextCursorTick(), 530*time.Millisecond))
 	defer statusTicker.Stop()
 	defer cursorTicker.Stop()
 
 	for {
 		select {
 		case <-s.Context().Done():
+			_ = s.Close()
 			return
 		case <-eof:
 			_ = s.Exit(0)
@@ -246,7 +247,14 @@ func resolveFlow(identity router.Identity) (string, error) {
 	}
 }
 
-func streamKeys(r io.Reader, keys chan<- string, eof chan<- struct{}) {
+func safeTickerDuration(candidate, fallback time.Duration) time.Duration {
+	if candidate > 0 {
+		return candidate
+	}
+	return fallback
+}
+
+func streamKeys(ctx context.Context, r io.Reader, keys chan<- string, eof chan<- struct{}) {
 	reader := bufio.NewReader(r)
 	for {
 		b, err := reader.ReadByte()
@@ -269,6 +277,7 @@ func streamKeys(r io.Reader, keys chan<- string, eof chan<- struct{}) {
 		case 0x7f, 0x08:
 			key = "backspace"
 		case 0x1b:
+			// NOTE: ANSI escape sequences (e.g. arrow keys) are treated as plain ESC in this MVP decoder.
 			key = "esc"
 		default:
 			if b >= 0x20 {
@@ -281,6 +290,8 @@ func streamKeys(r io.Reader, keys chan<- string, eof chan<- struct{}) {
 		}
 
 		select {
+		case <-ctx.Done():
+			return
 		case keys <- key:
 		default:
 		}

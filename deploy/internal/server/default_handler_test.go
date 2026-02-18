@@ -62,6 +62,7 @@ type fakeDefaultHandlerSession struct {
 	windows  chan ssh.Window
 	mu       sync.Mutex
 	writes   bytes.Buffer
+	stderr   bytes.Buffer
 	exitCode *int
 }
 
@@ -97,7 +98,7 @@ func (f *fakeDefaultHandlerSession) CloseWrite() error { return nil }
 func (f *fakeDefaultHandlerSession) SendRequest(string, bool, []byte) (bool, error) {
 	return false, nil
 }
-func (f *fakeDefaultHandlerSession) Stderr() io.ReadWriter { return &bytes.Buffer{} }
+func (f *fakeDefaultHandlerSession) Stderr() io.ReadWriter { return &f.stderr }
 func (f *fakeDefaultHandlerSession) User() string          { return f.user }
 func (f *fakeDefaultHandlerSession) RemoteAddr() net.Addr  { return f.remote }
 func (f *fakeDefaultHandlerSession) LocalAddr() net.Addr {
@@ -166,7 +167,7 @@ func TestDefaultHandlerDoesNotAutoExitOnSuccessfulRuntimeStart(t *testing.T) {
 		close(done)
 	}()
 
-	time.Sleep(80 * time.Millisecond)
+	waitForOutputContains(t, sess, "MOSAIC PROTOCOL", time.Second)
 	if code, ok := sess.recordedExitCode(); ok {
 		t.Fatalf("expected no immediate exit code, got %d", code)
 	}
@@ -226,5 +227,26 @@ func TestDefaultHandlerRouteSelectionByUsernamePolicy(t *testing.T) {
 				t.Fatalf("expected graceful exit code 0, got (%d, %v)", code, ok)
 			}
 		})
+	}
+}
+
+func waitForOutputContains(t *testing.T, sess *fakeDefaultHandlerSession, want string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		if bytes.Contains([]byte(sess.output()), []byte(want)) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for output containing %q; got %q", want, sess.output())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestResolveFlowRejectsUnsupportedIdentity(t *testing.T) {
+	_, err := resolveFlow(router.Identity{Username: "unknown"})
+	if err == nil {
+		t.Fatal("expected unsupported identity to return an error")
 	}
 }
