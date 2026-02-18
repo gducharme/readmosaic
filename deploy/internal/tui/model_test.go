@@ -148,6 +148,17 @@ func TestResizeClampViewportBounds(t *testing.T) {
 	_ = m.View()
 }
 
+func TestViewportHeightReservesHeaderAndPromptChrome(t *testing.T) {
+	m := NewModelWithOptions("", Options{Width: 80, Height: 24, IsTTY: true})
+	if m.viewportH != 17 {
+		t.Fatalf("expected viewportH=17 for height=24, got %d", m.viewportH)
+	}
+	m = m.Update(ResizeMsg{Width: 80, Height: 7})
+	if m.viewportH != 0 {
+		t.Fatalf("expected viewportH=0 for height=7, got %d", m.viewportH)
+	}
+}
+
 func TestTickTogglesDeterministic(t *testing.T) {
 	m := NewModel("127.0.0.1:1234", 80, 24)
 	status0, cursor0 := m.statusBlink, m.cursorBlink
@@ -171,6 +182,14 @@ func TestNonTTYDegradesGracefully(t *testing.T) {
 	}
 	if !strings.Contains(m.View(), "[PRESS ENTER TO CONTINUE]") {
 		t.Fatalf("expected non-tty prompt hint")
+	}
+}
+
+func TestTriagePromptHintIsModeSpecific(t *testing.T) {
+	m := NewModel("127.0.0.1:1234", 80, 24)
+	m = m.Update(KeyMsg{Key: "enter"})
+	if !strings.Contains(m.View(), "[PRESS A/B/C TO SELECT, ESC TO RETURN]") {
+		t.Fatalf("expected triage-specific prompt hint")
 	}
 }
 
@@ -209,11 +228,11 @@ func TestPromptBackspaceEditing(t *testing.T) {
 	m := NewModel("127.0.0.1:1234", 80, 24)
 	m = m.Update(KeyMsg{Key: "enter"})
 	m = m.Update(KeyMsg{Key: "a"})
-	m = m.Update(KeyMsg{Key: "x"})
-	m = m.Update(KeyMsg{Key: "y"})
+	m = m.Update(KeyMsg{Key: "世"})
+	m = m.Update(KeyMsg{Key: "界"})
 	m = m.Update(KeyMsg{Key: "backspace"})
-	if m.promptInput != "x" {
-		t.Fatalf("expected backspace to remove last rune, got %q", m.promptInput)
+	if m.promptInput != "世" {
+		t.Fatalf("expected backspace to remove one rune without UTF-8 corruption, got %q", m.promptInput)
 	}
 }
 

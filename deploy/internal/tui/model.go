@@ -147,7 +147,7 @@ func NewModelWithOptions(remoteAddr string, opts Options) Model {
 	m := Model{
 		width:         max(opts.Width, 1),
 		height:        max(opts.Height, 1),
-		viewportH:     max(opts.Height-6, 0),
+		viewportH:     max(opts.Height-7, 0),
 		isTTY:         opts.IsTTY,
 		statusBlink:   true,
 		cursorBlink:   true,
@@ -180,7 +180,7 @@ func (m Model) Update(msg any) Model {
 	case ResizeMsg:
 		m.width = max(msg.Width, 1)
 		m.height = max(msg.Height, 1)
-		m.viewportH = max(m.height-6, 0)
+		m.viewportH = max(m.height-7, 0)
 		m.clampViewportBounds()
 	case TickMsg:
 		if m.isTTY {
@@ -227,11 +227,13 @@ func (m *Model) handleKey(key string) {
 				m.appendViewportLine(promptPrefix + line)
 			}
 		case "backspace":
-			if len(m.promptInput) > 0 {
-				m.promptInput = m.promptInput[:len(m.promptInput)-1]
+			runes := []rune(m.promptInput)
+			if len(runes) > 0 {
+				m.promptInput = string(runes[:len(runes)-1])
 			}
 		default:
-			if len(key) == 1 {
+			runes := []rune(key)
+			if len(runes) == 1 {
 				m.promptInput += key
 			}
 		}
@@ -302,17 +304,22 @@ func renderViewport(m Model) string {
 }
 
 func renderPrompt(m Model) string {
-	if m.screen == ScreenExit {
+	switch m.screen {
+	case ScreenExit:
 		return promptPrefix + "[SESSION CLOSED]"
-	}
-	if m.screen != ScreenCommand {
+	case ScreenMOTD:
 		return promptPrefix + "[PRESS ENTER TO CONTINUE]"
+	case ScreenTriage:
+		return promptPrefix + "[PRESS A/B/C TO SELECT, ESC TO RETURN]"
+	case ScreenCommand:
+		cursor := " "
+		if m.cursorBlink {
+			cursor = "█"
+		}
+		return promptPrefix + m.promptInput + cursor
+	default:
+		return promptPrefix
 	}
-	cursor := " "
-	if m.cursorBlink {
-		cursor = "█"
-	}
-	return promptPrefix + m.promptInput + cursor
 }
 
 func (m *Model) setViewportContent(content string) {
