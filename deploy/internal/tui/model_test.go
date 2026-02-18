@@ -2,6 +2,8 @@ package tui
 
 import (
 	"fmt"
+
+	"mosaic-terminal/internal/theme"
 	"strings"
 	"testing"
 	"time"
@@ -246,6 +248,23 @@ func TestViewportBufferCapAndAppendContract(t *testing.T) {
 	}
 	if m.viewportLines[0] != "line-15" {
 		t.Fatalf("expected trimmed leading line")
+	}
+}
+
+
+func TestThemeBundleAppliesANSIStyles(t *testing.T) {
+	bundle := theme.Bundle{StyleSet: theme.StyleSet{
+		Header:   theme.Style{Foreground: "#FFFFFF", Background: "#000000", Bold: true},
+		Viewport: theme.Style{Foreground: "#112233", Background: "#445566"},
+		Prompt:   theme.Style{Foreground: "#778899", Background: "#AABBCC", Bold: true},
+	}}
+	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, ThemeBundle: &bundle})
+	view := m.View()
+	if !strings.Contains(view, "\x1b[38;2;255;255;255;48;2;0;0;0;1mMOSAIC PROTOCOL") {
+		t.Fatalf("expected ANSI-styled header")
+	}
+	if !strings.Contains(view, "\x1b[38;2;119;136;153;48;2;170;187;204;1mMSC-USER") {
+		t.Fatalf("expected ANSI-styled prompt")
 	}
 }
 

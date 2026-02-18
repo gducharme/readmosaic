@@ -20,6 +20,7 @@ import (
 
 	"mosaic-terminal/internal/config"
 	"mosaic-terminal/internal/router"
+	"mosaic-terminal/internal/theme"
 	"mosaic-terminal/internal/tui"
 )
 
@@ -230,10 +231,22 @@ func defaultHandler(s ssh.Session) {
 		height = 24
 	}
 
+	variant := theme.Variant(identity.Username)
+	_, bundle, err := theme.ResolveFromEnv(variant, pty.Term)
+	if err != nil {
+		exitCode = 1
+		status = "rejected"
+		log.Printf("level=error event=session_rejected user=%s class=resolve_theme error=%v route=%s vector=%s session=%s", user, err, route, vector, traceID)
+		_, _ = s.Write([]byte(err.Error() + "\n"))
+		_ = s.Exit(1)
+		return
+	}
+
 	model := tui.NewModelWithOptions(s.RemoteAddr().String(), tui.Options{
-		Width:  width,
-		Height: height,
-		IsTTY:  true,
+		Width:       width,
+		Height:      height,
+		IsTTY:       true,
+		ThemeBundle: &bundle,
 	})
 
 	switch flow {
