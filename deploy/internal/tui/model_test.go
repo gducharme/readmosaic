@@ -8,12 +8,37 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mattn/go-runewidth"
 )
 
 type fixedTicks struct{}
 
-func (fixedTicks) StatusTick() time.Duration { return 10 * time.Millisecond }
-func (fixedTicks) CursorTick() time.Duration { return 20 * time.Millisecond }
+func (fixedTicks) StatusTick() time.Duration     { return 10 * time.Millisecond }
+func (fixedTicks) CursorTick() time.Duration     { return 20 * time.Millisecond }
+func (fixedTicks) TypewriterTick() time.Duration { return 30 * time.Millisecond }
+
+type customTicks struct {
+	status     time.Duration
+	cursor     time.Duration
+	typewriter time.Duration
+}
+
+func (t customTicks) StatusTick() time.Duration     { return t.status }
+func (t customTicks) CursorTick() time.Duration     { return t.cursor }
+func (t customTicks) TypewriterTick() time.Duration { return t.typewriter }
+
+func pumpTypewriter(m Model) Model {
+	for i := 0; i < 4096; i++ {
+		before := strings.Join(m.viewportLines, "\n")
+		m = m.Update(TypewriterTickMsg{})
+		after := strings.Join(m.viewportLines, "\n")
+		if after == before && !m.typewriterActive && len(m.typewriterQueue) == 0 {
+			break
+		}
+	}
+	return m
+}
 
 func TestNewModelStartsOnMOTD(t *testing.T) {
 	m := NewModelWithOptions("192.0.2.7:2222", Options{Width: 80, Height: 24, IsTTY: true, Ticks: fixedTicks{}})
@@ -23,8 +48,53 @@ func TestNewModelStartsOnMOTD(t *testing.T) {
 	if !strings.Contains(m.View(), "Message of the Day") {
 		t.Fatalf("expected MOTD content in viewport")
 	}
-	if m.NextStatusTick() != 10*time.Millisecond || m.NextCursorTick() != 20*time.Millisecond {
+	if m.NextStatusTick() != 10*time.Millisecond || m.NextCursorTick() != 20*time.Millisecond || m.NextTypewriterTick() != 30*time.Millisecond {
 		t.Fatalf("unexpected tick durations")
+	}
+}
+
+func TestTypewriterCadenceIsConfigurable(t *testing.T) {
+	ticks := customTicks{
+		status:     111 * time.Millisecond,
+		cursor:     222 * time.Millisecond,
+		typewriter: 7 * time.Millisecond,
+	}
+	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Ticks: ticks})
+	if got := m.NextTypewriterTick(); got != 7*time.Millisecond {
+		t.Fatalf("unexpected typewriter cadence: %v", got)
+	}
+	if got := m.NextStatusTick(); got != 111*time.Millisecond {
+		t.Fatalf("unexpected status cadence: %v", got)
+	}
+	if got := m.NextCursorTick(); got != 222*time.Millisecond {
+		t.Fatalf("unexpected cursor cadence: %v", got)
+	}
+}
+
+func TestTypewriterCadenceFromEnv(t *testing.T) {
+	t.Setenv(typewriterTickMsEnvVar, "9")
+	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true})
+	if got := m.NextTypewriterTick(); got != 9*time.Millisecond {
+		t.Fatalf("unexpected typewriter cadence from env: %v", got)
+	}
+}
+
+func TestTypewriterBatchStepConfigurable(t *testing.T) {
+	t.Setenv(typewriterBatchEnvVar, "3")
+	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true})
+	m.setViewportContent("seed")
+	m.enqueueTypewriter("abcdef")
+	m = m.Update(TypewriterTickMsg{})
+	if got := m.viewportLines[len(m.viewportLines)-1]; got != "abc" {
+		t.Fatalf("expected 3-grapheme step, got %q", got)
+	}
+
+	m2 := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, TypewriterStep: 2})
+	m2.setViewportContent("seed")
+	m2.enqueueTypewriter("abcdef")
+	m2 = m2.Update(TypewriterTickMsg{})
+	if got := m2.viewportLines[len(m2.viewportLines)-1]; got != "ab" {
+		t.Fatalf("expected option override step=2, got %q", got)
 	}
 }
 
@@ -223,6 +293,7 @@ func TestVectorAReadLoadsFragmentFromRuntimeFile(t *testing.T) {
 	m := NewModel("127.0.0.1:1234", 80, 24)
 	m = m.Update(KeyMsg{Key: "enter"})
 	m = m.Update(KeyMsg{Key: "a"})
+	m = pumpTypewriter(m)
 
 	viewport := renderViewport(m)
 	if !strings.Contains(viewport, "READ PAYLOAD:") {
@@ -239,9 +310,40 @@ func TestVectorAReadFallsBackWhenFragmentMissing(t *testing.T) {
 	m := NewModel("127.0.0.1:1234", 80, 24)
 	m = m.Update(KeyMsg{Key: "enter"})
 	m = m.Update(KeyMsg{Key: "a"})
+	m = pumpTypewriter(m)
 
 	if !strings.Contains(renderViewport(m), readFallbackLine) {
 		t.Fatalf("expected fallback line when fragment file is unavailable")
+	}
+}
+
+func TestVectorSelectionUsesTypewriterAcrossOptions(t *testing.T) {
+	cases := []struct {
+		name   string
+		key    string
+		vector string
+	}{
+		{name: "read-a", key: "a", vector: "VECTOR_A"},
+		{name: "archive-b", key: "b", vector: "VECTOR_B"},
+		{name: "return-c", key: "c", vector: "VECTOR_C"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := NewModel("127.0.0.1:1234", 80, 24)
+			m = m.Update(KeyMsg{Key: "enter"})
+			m = m.Update(KeyMsg{Key: tc.key})
+			if strings.Contains(renderViewport(m), "Awaiting command input.") {
+				t.Fatalf("line should not appear before queue drains")
+			}
+			m = pumpTypewriter(m)
+			if !strings.Contains(renderViewport(m), "CONFIRMED VECTOR: "+tc.vector) {
+				t.Fatalf("missing confirmed vector line after typewriter")
+			}
+			if !strings.Contains(renderViewport(m), "Awaiting command input.") {
+				t.Fatalf("missing awaited prompt line after typewriter")
+			}
+		})
 	}
 }
 
@@ -387,6 +489,7 @@ func TestGoldenRenders(t *testing.T) {
 	}
 
 	m = m.Update(KeyMsg{Key: "b"})
+	m = pumpTypewriter(m)
 	cmdView := m.View()
 	if !strings.Contains(cmdView, "VECTOR: [VECTOR_B]") || !strings.Contains(cmdView, "CONFIRMED VECTOR: VECTOR_B") {
 		t.Fatalf("command golden mismatch")
@@ -402,6 +505,150 @@ func TestRuntimeEventWiringAndReplaceContract(t *testing.T) {
 	m = m.Update(StatusUpdateMsg{Status: "healthy"})
 	if !strings.Contains(renderViewport(m), "STATUS UPDATE: healthy") {
 		t.Fatalf("status update missing")
+	}
+}
+
+func TestTypewriterTickNoOpWhenQueueEmpty(t *testing.T) {
+	m := NewModel("127.0.0.1:1234", 80, 24)
+	before := strings.Join(m.viewportLines, "\n")
+	m = m.Update(TypewriterTickMsg{})
+	after := strings.Join(m.viewportLines, "\n")
+	if before != after {
+		t.Fatalf("typewriter tick should not mutate viewport when queue is empty")
+	}
+	if m.typewriterActive || len(m.typewriterQueue) != 0 {
+		t.Fatalf("typewriter state should remain idle")
+	}
+}
+
+func TestTypewriterSingleLineQueueTransitionsCleanly(t *testing.T) {
+	m := NewModel("127.0.0.1:1234", 80, 24)
+	m.setViewportContent("seed")
+	m.enqueueTypewriter("DONE")
+	if !m.typewriterActive {
+		t.Fatalf("expected active typewriter for single line")
+	}
+	for i := 0; i < 10; i++ {
+		m = m.Update(TypewriterTickMsg{})
+	}
+	if got := m.viewportLines[len(m.viewportLines)-1]; got != "DONE" {
+		t.Fatalf("unexpected rendered line: %q", got)
+	}
+	if m.typewriterActive || len(m.typewriterQueue) != 0 {
+		t.Fatalf("single line queue should be fully drained")
+	}
+}
+
+func TestTypewriterUsesGraphemeBoundariesAndStableWidths(t *testing.T) {
+	line := "👩🏽\u200d💻e\u0301界"
+	expected := []string{"👩🏽\u200d💻", "👩🏽\u200d💻e\u0301", "👩🏽\u200d💻e\u0301界"}
+	expectedWidths := []int{2, 3, 5}
+
+	m := NewModel("127.0.0.1:1234", 80, 24)
+	m.setViewportContent("seed")
+	m.enqueueTypewriter(line)
+
+	for i := range expected {
+		m = m.Update(TypewriterTickMsg{})
+		got := m.viewportLines[len(m.viewportLines)-1]
+		if got != expected[i] {
+			t.Fatalf("tick %d rendered %q, want %q", i, got, expected[i])
+		}
+		if width := runewidth.StringWidth(got); width != expectedWidths[i] {
+			t.Fatalf("tick %d width=%d want %d", i, width, expectedWidths[i])
+		}
+	}
+
+}
+
+func TestTypewriterQueueLimitDropsOldest(t *testing.T) {
+	m := NewModel("127.0.0.1:1234", 80, 24)
+	lines := make([]string, 0, maxTypewriterQueueLines+20)
+	for i := 0; i < maxTypewriterQueueLines+20; i++ {
+		lines = append(lines, fmt.Sprintf("L-%03d", i))
+	}
+	m.enqueueTypewriter(lines...)
+	if len(m.typewriterQueue) > maxTypewriterQueueLines {
+		t.Fatalf("queue should be capped: %d", len(m.typewriterQueue))
+	}
+	if m.typewriterActive {
+		if strings.Join(m.typewriterTarget, "") != typewriterQueueDropLine {
+			t.Fatalf("expected drop marker as first active line")
+		}
+	} else if len(m.typewriterQueue) > 0 && m.typewriterQueue[0] != typewriterQueueDropLine {
+		t.Fatalf("expected drop marker at queue head")
+	}
+}
+
+func TestAppendLineIsEnqueuedWhenTypewriterActive(t *testing.T) {
+	m := NewModel("127.0.0.1:1234", 80, 24)
+	m.setViewportContent("seed")
+	m.enqueueTypewriter("hello")
+	beforeLines := len(m.viewportLines)
+	m.appendViewportLine("runtime")
+	if len(m.viewportLines) != beforeLines {
+		t.Fatalf("append should not write directly while typewriter is active")
+	}
+	if len(m.typewriterQueue) == 0 || m.typewriterQueue[len(m.typewriterQueue)-1] != "runtime" {
+		t.Fatalf("runtime line should be queued behind active animation")
+	}
+}
+
+func TestTypewriterFlushesWhenUserInteractsMidAnimation(t *testing.T) {
+	tmp := t.TempDir()
+	fragmentPath := filepath.Join(tmp, "vector_a.txt")
+	if err := os.WriteFile(fragmentPath, []byte("line-1\nline-2"), 0o600); err != nil {
+		t.Fatalf("write fragment: %v", err)
+	}
+	t.Setenv(readFragmentPathEnvVar, fragmentPath)
+
+	m := NewModel("127.0.0.1:1234", 80, 24)
+	m = m.Update(KeyMsg{Key: "enter"})
+	m = m.Update(KeyMsg{Key: "a"})
+
+	if strings.Contains(renderViewport(m), "Awaiting command input.") {
+		t.Fatalf("expected animation to be in progress before user input")
+	}
+
+	m = m.Update(KeyMsg{Key: "x"})
+	viewport := renderViewport(m)
+	if !strings.Contains(viewport, "Awaiting command input.") || !strings.Contains(viewport, "line-2") {
+		t.Fatalf("expected flush to complete queued lines, got: %q", viewport)
+	}
+	if m.promptInput != "x" {
+		t.Fatalf("expected user key to remain in prompt input, got %q", m.promptInput)
+	}
+	if m.typewriterActive || len(m.typewriterQueue) != 0 {
+		t.Fatalf("typewriter should be idle after flush")
+	}
+}
+
+func TestNewModelStartsWithNoTypewriterState(t *testing.T) {
+	m := NewModel("127.0.0.1:1234", 80, 24)
+	if m.typewriterActive || len(m.typewriterQueue) != 0 || m.typewriterCursor != 0 {
+		t.Fatalf("new model should start with empty typewriter state")
+	}
+}
+
+func TestTwoModelsAdvanceTypewriterIndependently(t *testing.T) {
+	m1 := NewModel("127.0.0.1:1234", 80, 24)
+	m2 := NewModel("127.0.0.2:1234", 80, 24)
+
+	m1 = m1.Update(KeyMsg{Key: "enter"})
+	m2 = m2.Update(KeyMsg{Key: "enter"})
+	m1 = m1.Update(KeyMsg{Key: "a"})
+	m2 = m2.Update(KeyMsg{Key: "b"})
+
+	before2 := strings.Join(m2.viewportLines, "\n")
+	m1 = m1.Update(TypewriterTickMsg{})
+	after2 := strings.Join(m2.viewportLines, "\n")
+	if before2 != after2 {
+		t.Fatalf("model2 should not change when only model1 is ticked")
+	}
+
+	m2 = m2.Update(TypewriterTickMsg{})
+	if strings.Join(m2.viewportLines, "\n") == before2 {
+		t.Fatalf("model2 should change when its own typewriter tick is applied")
 	}
 }
 

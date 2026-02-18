@@ -266,8 +266,10 @@ func defaultHandler(s ssh.Session) {
 
 	statusTicker := time.NewTicker(safeTickerDuration(model.NextStatusTick(), 450*time.Millisecond))
 	cursorTicker := time.NewTicker(safeTickerDuration(model.NextCursorTick(), 530*time.Millisecond))
+	typewriterTicker := time.NewTicker(safeTickerDuration(model.NextTypewriterTick(), 32*time.Millisecond))
 	defer statusTicker.Stop()
 	defer cursorTicker.Stop()
+	defer typewriterTicker.Stop()
 
 	for {
 		select {
@@ -299,6 +301,9 @@ func defaultHandler(s ssh.Session) {
 			render()
 		case <-cursorTicker.C:
 			model = model.Update(tui.CursorTickMsg{})
+			render()
+		case <-typewriterTicker.C:
+			model = model.Update(tui.TypewriterTickMsg{})
 			render()
 		}
 	}
