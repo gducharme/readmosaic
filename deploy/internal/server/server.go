@@ -246,13 +246,16 @@ func defaultHandler(s ssh.Session) {
 		Height:      height,
 		IsTTY:       true,
 		ThemeBundle: themeBundle,
+		Username:    identity.Username,
 	})
 
 	switch flow {
 	case "vector":
 		model = model.Update(tui.AppendLineMsg{Line: fmt.Sprintf("VECTOR FLOW ACTIVE [%s]", identity.Username)})
 	case "triage":
-		model = model.Update(tui.AppendLineMsg{Line: fmt.Sprintf("TRIAGE FLOW ACTIVE [%s]", identity.Username)})
+		if strings.EqualFold(identity.Username, "read") {
+			model = model.Update(tui.AppendLineMsg{Line: fmt.Sprintf("TRIAGE FLOW ACTIVE [%s]", identity.Username)})
+		}
 	}
 
 	render := func() {

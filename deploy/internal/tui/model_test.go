@@ -693,3 +693,89 @@ func BenchmarkRenderPerTick(b *testing.B) {
 		_ = Render(m)
 	}
 }
+
+func TestArchiveUserStartsInLanguageMenu(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "en"), 0o755); err != nil {
+		t.Fatalf("mkdir en: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "ar"), 0o755); err != nil {
+		t.Fatalf("mkdir ar: %v", err)
+	}
+	t.Setenv(archiveRootEnvVar, root)
+
+	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: "archive"})
+	if m.screen != ScreenArchiveLanguage {
+		t.Fatalf("expected archive language screen, got %v", m.screen)
+	}
+	view := renderViewport(m)
+	if !strings.Contains(view, "en-EN") || !strings.Contains(view, "ar-AR") {
+		t.Fatalf("expected normalized language codes, got: %q", view)
+	}
+}
+
+func TestArchiveEditorPersistsEditsImmediately(t *testing.T) {
+	root := t.TempDir()
+	langDir := filepath.Join(root, "en")
+	if err := os.Mkdir(langDir, 0o755); err != nil {
+		t.Fatalf("mkdir en: %v", err)
+	}
+	filePath := filepath.Join(langDir, "001-Intro")
+	if err := os.WriteFile(filePath, []byte("Hello"), 0o600); err != nil {
+		t.Fatalf("write initial file: %v", err)
+	}
+	t.Setenv(archiveRootEnvVar, root)
+
+	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: "archive"})
+	m = m.Update(KeyMsg{Key: "1"})
+	m = m.Update(KeyMsg{Key: "enter"})
+	if m.screen != ScreenArchiveFile {
+		t.Fatalf("expected archive file screen, got %v", m.screen)
+	}
+	m = m.Update(KeyMsg{Key: "1"})
+	m = m.Update(KeyMsg{Key: "enter"})
+	if m.screen != ScreenArchiveEditor {
+		t.Fatalf("expected archive editor screen, got %v", m.screen)
+	}
+
+	m = m.Update(KeyMsg{Key: "!"})
+	updated, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read updated file: %v", err)
+	}
+	if string(updated) != "Hello!" {
+		t.Fatalf("expected immediate persistence, got %q", string(updated))
+	}
+
+	m = m.Update(KeyMsg{Key: "backspace"})
+	updated, err = os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read updated file after backspace: %v", err)
+	}
+	if string(updated) != "Hello" {
+		t.Fatalf("expected persisted backspace edit, got %q", string(updated))
+	}
+}
+
+func TestArchiveEditorMarksRTLDirection(t *testing.T) {
+	root := t.TempDir()
+	langDir := filepath.Join(root, "ar")
+	if err := os.Mkdir(langDir, 0o755); err != nil {
+		t.Fatalf("mkdir ar: %v", err)
+	}
+	filePath := filepath.Join(langDir, "001-Intro")
+	if err := os.WriteFile(filePath, []byte("مرحبا"), 0o600); err != nil {
+		t.Fatalf("write initial file: %v", err)
+	}
+	t.Setenv(archiveRootEnvVar, root)
+
+	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: "archive"})
+	m = m.Update(KeyMsg{Key: "1"})
+	m = m.Update(KeyMsg{Key: "enter"})
+	m = m.Update(KeyMsg{Key: "1"})
+	m = m.Update(KeyMsg{Key: "enter"})
+
+	if !strings.Contains(renderViewport(m), "[RTL]") {
+		t.Fatalf("expected RTL marker in editor header")
+	}
+}
