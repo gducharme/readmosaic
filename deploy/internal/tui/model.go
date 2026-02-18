@@ -53,6 +53,7 @@ const (
 	typewriterBatchEnvVar   = "MOSAIC_TUI_TYPEWRITER_BATCH"
 	readFallbackLine        = "READ FRAGMENT UNAVAILABLE"
 	typewriterQueueDropLine = "[TYPEWRITER QUEUE TRUNCATED]"
+	maxArchiveFileBytes     = 2 * 1024 * 1024
 )
 
 // Keybindings (source of truth for tests and operators):
@@ -532,6 +533,17 @@ func (m *Model) openArchiveFile(file archiveDocument) {
 		m.archiveStatus = "Refusing to open file outside archive root"
 		return
 	}
+	info, err := os.Stat(clean)
+	if err != nil {
+		m.archiveEditorBuffer = ""
+		m.archiveStatus = fmt.Sprintf("Unable to stat %s: %v", file.Name, err)
+		return
+	}
+	if info.Size() > maxArchiveFileBytes {
+		m.archiveEditorBuffer = ""
+		m.archiveStatus = fmt.Sprintf("Refusing to open %s: file too large (%d bytes > %d)", file.Name, info.Size(), maxArchiveFileBytes)
+		return
+	}
 	data, err := os.ReadFile(clean)
 	if err != nil {
 		m.archiveEditorBuffer = ""
@@ -550,7 +562,7 @@ func (m *Model) renderArchiveEditor() {
 	if lang.IsRTL {
 		dir = "RTL"
 	}
-	lines := []string{fmt.Sprintf("ARCHIVE EDITOR // %s", file.Name), fmt.Sprintf("Language: %s (%s) [%s]", lang.DirName, lang.DisplayCode, dir), "Edits save immediately.", "Esc returns to file list.", ""}
+	lines := []string{fmt.Sprintf("ARCHIVE EDITOR // %s", file.Name), fmt.Sprintf("Language: %s (%s) [%s]", lang.DirName, lang.DisplayCode, dir), "Append/backspace/newline editing only. No cursor navigation.", "Edits save immediately.", "Esc returns to file list.", ""}
 	if m.archiveStatus != "" {
 		lines = append(lines, "WARNING: "+m.archiveStatus, "")
 	}
@@ -583,12 +595,17 @@ func (m *Model) handleArchiveEditorKey(lower, raw string) {
 		return
 	}
 	if raw != "" {
+		filtered := strings.Builder{}
 		for _, r := range raw {
 			if unicode.IsControl(r) {
-				return
+				continue
 			}
+			filtered.WriteRune(r)
 		}
-		m.archiveEditorBuffer += raw
+		if filtered.Len() == 0 {
+			return
+		}
+		m.archiveEditorBuffer += filtered.String()
 		m.persistArchiveEdit()
 		m.renderArchiveEditor()
 	}
@@ -603,8 +620,20 @@ func (m *Model) persistArchiveEdit() {
 		m.archiveStatus = "Save failed: refusing to write outside archive root"
 		return
 	}
-	tmpPath := clean + ".tmp"
-	if err := os.WriteFile(tmpPath, []byte(m.archiveEditorBuffer), 0o600); err != nil {
+	tmpFile, err := os.CreateTemp(filepath.Dir(clean), filepath.Base(clean)+".tmp-*")
+	if err != nil {
+		m.archiveStatus = fmt.Sprintf("Save failed: %v", err)
+		return
+	}
+	tmpPath := tmpFile.Name()
+	if _, err := tmpFile.Write([]byte(m.archiveEditorBuffer)); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+		m.archiveStatus = fmt.Sprintf("Save failed: %v", err)
+		return
+	}
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmpPath)
 		m.archiveStatus = fmt.Sprintf("Save failed: %v", err)
 		return
 	}

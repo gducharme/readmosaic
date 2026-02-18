@@ -712,8 +712,9 @@ func TestArchiveUserStartsInLanguageMenu(t *testing.T) {
 	if !strings.Contains(view, "en") || !strings.Contains(view, "ar") {
 		t.Fatalf("expected normalized language codes, got: %q", view)
 	}
-	if !strings.Contains(view, filepath.Join(root, "en")) {
-		t.Fatalf("expected rendered menu path to follow configured archive root, got: %q", view)
+	expectedLine := "1) ar -> " + filepath.Join(root, "ar")
+	if !strings.Contains(view, expectedLine) {
+		t.Fatalf("expected explicit menu line %q, got: %q", expectedLine, view)
 	}
 }
 
@@ -812,5 +813,60 @@ func TestArchivePersistenceRejectsPathOutsideRoot(t *testing.T) {
 	}
 	if string(content) != "bad" {
 		t.Fatalf("outside file must stay unchanged, got %q", string(content))
+	}
+}
+
+func TestArchiveEditorFiltersControlRunesFromInputChunk(t *testing.T) {
+	root := t.TempDir()
+	langDir := filepath.Join(root, "en")
+	if err := os.Mkdir(langDir, 0o755); err != nil {
+		t.Fatalf("mkdir en: %v", err)
+	}
+	filePath := filepath.Join(langDir, "001-Intro")
+	if err := os.WriteFile(filePath, []byte("Hi"), 0o600); err != nil {
+		t.Fatalf("write initial file: %v", err)
+	}
+	t.Setenv(archiveRootEnvVar, root)
+
+	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: "archive"})
+	m = m.Update(KeyMsg{Key: "1"})
+	m = m.Update(KeyMsg{Key: "enter"})
+	m = m.Update(KeyMsg{Key: "1"})
+	m = m.Update(KeyMsg{Key: "enter"})
+
+	m = m.Update(KeyMsg{Key: "A" + string(rune(0)) + "B"})
+	updated, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read updated file: %v", err)
+	}
+	if string(updated) != "HiAB" {
+		t.Fatalf("expected control rune filtered but printable runes kept, got %q", string(updated))
+	}
+}
+
+func TestArchiveOpenRejectsLargeFiles(t *testing.T) {
+	root := t.TempDir()
+	langDir := filepath.Join(root, "en")
+	if err := os.Mkdir(langDir, 0o755); err != nil {
+		t.Fatalf("mkdir en: %v", err)
+	}
+	filePath := filepath.Join(langDir, "001-Intro")
+	large := strings.Repeat("x", maxArchiveFileBytes+1)
+	if err := os.WriteFile(filePath, []byte(large), 0o600); err != nil {
+		t.Fatalf("write large file: %v", err)
+	}
+	t.Setenv(archiveRootEnvVar, root)
+
+	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: "archive"})
+	m = m.Update(KeyMsg{Key: "1"})
+	m = m.Update(KeyMsg{Key: "enter"})
+	m = m.Update(KeyMsg{Key: "1"})
+	m = m.Update(KeyMsg{Key: "enter"})
+
+	if !strings.Contains(m.archiveStatus, "file too large") {
+		t.Fatalf("expected file too large warning, got %q", m.archiveStatus)
+	}
+	if m.archiveEditorBuffer != "" {
+		t.Fatalf("large file should not be loaded into editor buffer")
 	}
 }
