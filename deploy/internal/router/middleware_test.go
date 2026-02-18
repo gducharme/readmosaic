@@ -1,36 +1,94 @@
 package router
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/charmbracelet/ssh"
 )
 
+type fakeContext struct {
+	context.Context
+	mu     sync.Mutex
+	values map[any]any
+	user   string
+	remote net.Addr
+	local  net.Addr
+}
+
+func newFakeContext(user string, remote net.Addr) *fakeContext {
+	return &fakeContext{
+		Context: context.Background(),
+		values:  map[any]any{},
+		user:    user,
+		remote:  remote,
+		local:   &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 2222},
+	}
+}
+
+func (f *fakeContext) Lock()                         { f.mu.Lock() }
+func (f *fakeContext) Unlock()                       { f.mu.Unlock() }
+func (f *fakeContext) User() string                  { return f.user }
+func (f *fakeContext) SessionID() string             { return "test-session" }
+func (f *fakeContext) ClientVersion() string         { return "ssh-test-client" }
+func (f *fakeContext) ServerVersion() string         { return "ssh-test-server" }
+func (f *fakeContext) RemoteAddr() net.Addr          { return f.remote }
+func (f *fakeContext) LocalAddr() net.Addr           { return f.local }
+func (f *fakeContext) Permissions() *ssh.Permissions { return &ssh.Permissions{} }
+func (f *fakeContext) SetValue(key, value interface{}) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.values[key] = value
+}
+func (f *fakeContext) Value(key interface{}) interface{} {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.values[key]
+}
+
 type fakeSession struct {
 	user   string
-	ctx    context.Context
-	values map[any]any
+	ctx    *fakeContext
+	remote net.Addr
 	writes []string
 }
 
 func newFakeSession(user string) *fakeSession {
-	return &fakeSession{user: user, ctx: context.Background(), values: map[any]any{}}
+	remote := &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 22}
+	return &fakeSession{user: user, ctx: newFakeContext(user, remote), remote: remote}
 }
 
-func (f *fakeSession) User() string                { return f.user }
-func (f *fakeSession) Context() context.Context    { return f.ctx }
-func (f *fakeSession) SetValue(key any, value any) { f.values[key] = value }
-func (f *fakeSession) Value(key any) any           { return f.values[key] }
+func (f *fakeSession) Read(_ []byte) (int, error) { return 0, io.EOF }
 func (f *fakeSession) Write(p []byte) (int, error) {
 	f.writes = append(f.writes, string(p))
 	return len(p), nil
 }
-func (f *fakeSession) RemoteAddr() net.Addr {
-	return &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 22}
+func (f *fakeSession) Close() error                                   { return nil }
+func (f *fakeSession) CloseWrite() error                              { return nil }
+func (f *fakeSession) SendRequest(string, bool, []byte) (bool, error) { return false, nil }
+func (f *fakeSession) Stderr() io.ReadWriter                          { return &bytes.Buffer{} }
+func (f *fakeSession) User() string                                   { return f.user }
+func (f *fakeSession) RemoteAddr() net.Addr                           { return f.remote }
+func (f *fakeSession) LocalAddr() net.Addr {
+	return &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 2222}
 }
+func (f *fakeSession) Environ() []string                       { return nil }
+func (f *fakeSession) Exit(int) error                          { return nil }
+func (f *fakeSession) Command() []string                       { return nil }
+func (f *fakeSession) RawCommand() string                      { return "" }
+func (f *fakeSession) Subsystem() string                       { return "" }
+func (f *fakeSession) PublicKey() ssh.PublicKey                { return nil }
+func (f *fakeSession) Context() ssh.Context                    { return f.ctx }
+func (f *fakeSession) Permissions() ssh.Permissions            { return ssh.Permissions{} }
+func (f *fakeSession) EmulatedPty() bool                       { return false }
+func (f *fakeSession) Pty() (ssh.Pty, <-chan ssh.Window, bool) { return ssh.Pty{}, nil, false }
+func (f *fakeSession) Signals(chan<- ssh.Signal)               {}
+func (f *fakeSession) Break(chan<- bool)                       {}
 
 func TestDefaultChainKeepsIdentityBeforeSessionMetadata(t *testing.T) {
 	chain := DefaultChain()
@@ -74,18 +132,13 @@ func TestUsernameRoutingKnownVectorUsers(t *testing.T) {
 				t.Fatalf("expected next handler to be called")
 			}
 
-			identityValue, ok := s.values[sessionIdentityKey]
+			identityValue, ok := s.Context().Value(sessionIdentityKey).(Identity)
 			if !ok {
 				t.Fatalf("expected %v to be set", sessionIdentityKey)
 			}
 
-			identity, ok := identityValue.(Identity)
-			if !ok {
-				t.Fatalf("identity type = %T, want Identity", identityValue)
-			}
-
-			if identity.Route != routeVector || identity.Vector != user {
-				t.Fatalf("identity = %+v, expected vector route for user %q", identity, user)
+			if identityValue.Route != routeVector || identityValue.Vector != user {
+				t.Fatalf("identity = %+v, expected vector route for user %q", identityValue, user)
 			}
 		})
 	}
@@ -106,7 +159,11 @@ func TestUsernameRoutingTriageUsers(t *testing.T) {
 				t.Fatalf("expected next handler to be called")
 			}
 
-			identity := s.values[sessionIdentityKey].(Identity)
+			identityValue := s.Context().Value(sessionIdentityKey)
+			identity, ok := identityValue.(Identity)
+			if !ok {
+				t.Fatalf("identity type = %T, want Identity", identityValue)
+			}
 			if identity.Route != routeTriage || identity.Vector != routeTriage {
 				t.Fatalf("identity = %+v, want triage metadata", identity)
 			}
@@ -149,18 +206,13 @@ func TestSessionMetadataStoresIdentity(t *testing.T) {
 		t.Fatalf("expected next handler to be called")
 	}
 
-	infoValue, ok := s.values[sessionMetadataKey]
+	infoValue, ok := s.Context().Value(sessionMetadataKey).(SessionInfo)
 	if !ok {
 		t.Fatalf("expected %v to be set", sessionMetadataKey)
 	}
 
-	info, ok := infoValue.(SessionInfo)
-	if !ok {
-		t.Fatalf("session info type = %T, want SessionInfo", infoValue)
-	}
-
-	if info.Identity.Username != "fitra" || info.Identity.Route != routeVector || info.Identity.Vector != "fitra" {
-		t.Fatalf("info.Identity = %+v", info.Identity)
+	if infoValue.Identity.Username != "fitra" || infoValue.Identity.Route != routeVector || infoValue.Identity.Vector != "fitra" {
+		t.Fatalf("info.Identity = %+v", infoValue.Identity)
 	}
 }
 
@@ -202,7 +254,7 @@ func TestUsernameRoutingRejectsSecurityBoundaryEdgeCases(t *testing.T) {
 				t.Fatalf("unexpected next handler call for user %q", tc.user)
 			}
 
-			if _, ok := s.values[sessionIdentityKey]; ok {
+			if _, ok := s.Context().Value(sessionIdentityKey).(Identity); ok {
 				t.Fatalf("identity metadata should not be set for rejected user %q", tc.user)
 			}
 
@@ -228,7 +280,7 @@ func TestUsernameRoutingRepeatedRejectionDoesNotBypass(t *testing.T) {
 		t.Fatalf("unexpected next handler calls = %d", called)
 	}
 
-	if _, ok := s.values[sessionIdentityKey]; ok {
+	if _, ok := s.Context().Value(sessionIdentityKey).(Identity); ok {
 		t.Fatalf("identity metadata should not be set for rejected session")
 	}
 	if _, ok := SessionMetadata(s); ok {
@@ -261,8 +313,8 @@ func TestSessionAccessors(t *testing.T) {
 	s := newFakeSession("west")
 	identity := Identity{Username: "west", Route: routeVector, Vector: "west"}
 	info := SessionInfo{User: "west", Identity: identity}
-	s.SetValue(sessionIdentityKey, identity)
-	s.SetValue(sessionMetadataKey, info)
+	s.Context().SetValue(sessionIdentityKey, identity)
+	s.Context().SetValue(sessionMetadataKey, info)
 
 	gotIdentity, ok := SessionIdentity(s)
 	if !ok || gotIdentity != identity {

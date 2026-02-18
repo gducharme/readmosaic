@@ -1,45 +1,96 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/charmbracelet/ssh"
 )
 
+type fakeRateLimitContext struct {
+	context.Context
+	mu     sync.Mutex
+	values map[any]any
+	remote net.Addr
+	local  net.Addr
+}
+
+func newFakeRateLimitContext(remote net.Addr) *fakeRateLimitContext {
+	return &fakeRateLimitContext{
+		Context: context.Background(),
+		values:  map[any]any{},
+		remote:  remote,
+		local:   &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 2222},
+	}
+}
+
+func (f *fakeRateLimitContext) Lock()                         { f.mu.Lock() }
+func (f *fakeRateLimitContext) Unlock()                       { f.mu.Unlock() }
+func (f *fakeRateLimitContext) User() string                  { return "guest" }
+func (f *fakeRateLimitContext) SessionID() string             { return "test-session" }
+func (f *fakeRateLimitContext) ClientVersion() string         { return "ssh-test-client" }
+func (f *fakeRateLimitContext) ServerVersion() string         { return "ssh-test-server" }
+func (f *fakeRateLimitContext) RemoteAddr() net.Addr          { return f.remote }
+func (f *fakeRateLimitContext) LocalAddr() net.Addr           { return f.local }
+func (f *fakeRateLimitContext) Permissions() *ssh.Permissions { return &ssh.Permissions{} }
+func (f *fakeRateLimitContext) SetValue(key, value interface{}) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.values[key] = value
+}
+func (f *fakeRateLimitContext) Value(key interface{}) interface{} {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.values[key]
+}
+
 type fakeRateLimitSession struct {
 	remote net.Addr
-	values map[any]any
+	ctx    *fakeRateLimitContext
 	writes []string
 }
 
-func (f *fakeRateLimitSession) User() string             { return "guest" }
-func (f *fakeRateLimitSession) Context() context.Context { return context.Background() }
-func (f *fakeRateLimitSession) SetValue(key any, value any) {
-	if f.values == nil {
-		f.values = map[any]any{}
-	}
-	f.values[key] = value
+func newFakeRateLimitSession(remote net.Addr) *fakeRateLimitSession {
+	return &fakeRateLimitSession{remote: remote, ctx: newFakeRateLimitContext(remote)}
 }
-func (f *fakeRateLimitSession) Value(key any) any {
-	if f.values == nil {
-		return nil
-	}
-	return f.values[key]
-}
+
+func (f *fakeRateLimitSession) Read(_ []byte) (int, error) { return 0, io.EOF }
 func (f *fakeRateLimitSession) Write(p []byte) (int, error) {
 	f.writes = append(f.writes, string(p))
 	return len(p), nil
 }
-func (f *fakeRateLimitSession) RemoteAddr() net.Addr { return f.remote }
+func (f *fakeRateLimitSession) Close() error                                   { return nil }
+func (f *fakeRateLimitSession) CloseWrite() error                              { return nil }
+func (f *fakeRateLimitSession) SendRequest(string, bool, []byte) (bool, error) { return false, nil }
+func (f *fakeRateLimitSession) Stderr() io.ReadWriter                          { return &bytes.Buffer{} }
+func (f *fakeRateLimitSession) User() string                                   { return "guest" }
+func (f *fakeRateLimitSession) RemoteAddr() net.Addr                           { return f.remote }
+func (f *fakeRateLimitSession) LocalAddr() net.Addr {
+	return &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 2222}
+}
+func (f *fakeRateLimitSession) Environ() []string                       { return nil }
+func (f *fakeRateLimitSession) Exit(int) error                          { return nil }
+func (f *fakeRateLimitSession) Command() []string                       { return nil }
+func (f *fakeRateLimitSession) RawCommand() string                      { return "" }
+func (f *fakeRateLimitSession) Subsystem() string                       { return "" }
+func (f *fakeRateLimitSession) PublicKey() ssh.PublicKey                { return nil }
+func (f *fakeRateLimitSession) Context() ssh.Context                    { return f.ctx }
+func (f *fakeRateLimitSession) Permissions() ssh.Permissions            { return ssh.Permissions{} }
+func (f *fakeRateLimitSession) EmulatedPty() bool                       { return false }
+func (f *fakeRateLimitSession) Pty() (ssh.Pty, <-chan ssh.Window, bool) { return ssh.Pty{}, nil, false }
+func (f *fakeRateLimitSession) Signals(chan<- ssh.Signal)               {}
+func (f *fakeRateLimitSession) Break(chan<- bool)                       {}
 
 func TestRateLimitMiddlewareRapidConnectionsFromSameIP(t *testing.T) {
 	l := newRateLimiter(rateLimiterOptions{maxAttempts: 60, window: time.Minute, burst: 2, enabled: true, maxTrackedIPs: 100})
 	handlerCalls := 0
 	handler := l.middleware()(func(ssh.Session) { handlerCalls++ })
-	session := &fakeRateLimitSession{remote: &net.TCPAddr{IP: net.ParseIP("203.0.113.10"), Port: 2222}}
+	session := newFakeRateLimitSession(&net.TCPAddr{IP: net.ParseIP("203.0.113.10"), Port: 2222})
 
 	handler(session)
 	handler(session)
@@ -59,7 +110,7 @@ func TestRateLimitMiddlewareManyIPsIndependentBuckets(t *testing.T) {
 	handler := l.middleware()(func(ssh.Session) { handlerCalls++ })
 
 	for i := 1; i <= 50; i++ {
-		s := &fakeRateLimitSession{remote: &net.TCPAddr{IP: net.ParseIP("203.0.113." + itoa(i)), Port: 22}}
+		s := newFakeRateLimitSession(&net.TCPAddr{IP: net.ParseIP("203.0.113." + itoa(i)), Port: 22})
 		handler(s)
 	}
 	if handlerCalls != 50 {
@@ -79,7 +130,7 @@ func TestRateLimitMiddlewareLimitResetsAfterWindow(t *testing.T) {
 	})
 	handlerCalls := 0
 	handler := l.middleware()(func(ssh.Session) { handlerCalls++ })
-	s := &fakeRateLimitSession{remote: &net.TCPAddr{IP: net.ParseIP("203.0.113.44"), Port: 22}}
+	s := newFakeRateLimitSession(&net.TCPAddr{IP: net.ParseIP("203.0.113.44"), Port: 22})
 
 	handler(s)
 	handler(s)
@@ -92,12 +143,12 @@ func TestRateLimitMiddlewareLimitResetsAfterWindow(t *testing.T) {
 }
 
 func TestExtractRemoteIPNormalizesIPv6AndIPv4(t *testing.T) {
-	ipv4Mapped := &fakeRateLimitSession{remote: &net.TCPAddr{IP: net.ParseIP("::ffff:203.0.113.9"), Port: 22}}
+	ipv4Mapped := newFakeRateLimitSession(&net.TCPAddr{IP: net.ParseIP("::ffff:203.0.113.9"), Port: 22})
 	if got := extractRemoteIP(ipv4Mapped, false); got != "203.0.113.9" {
 		t.Fatalf("extractRemoteIP(mapped) = %q", got)
 	}
 
-	ipv6 := &fakeRateLimitSession{remote: &net.TCPAddr{IP: net.ParseIP("2001:db8::10"), Port: 22}}
+	ipv6 := newFakeRateLimitSession(&net.TCPAddr{IP: net.ParseIP("2001:db8::10"), Port: 22})
 	if got := extractRemoteIP(ipv6, false); got != "2001:db8::10" {
 		t.Fatalf("extractRemoteIP(v6) = %q", got)
 	}
@@ -108,8 +159,8 @@ func TestRateLimitMiddlewareSharedNATSharesLimit(t *testing.T) {
 	handlerCalls := 0
 	handler := l.middleware()(func(ssh.Session) { handlerCalls++ })
 
-	a := &fakeRateLimitSession{remote: &net.TCPAddr{IP: net.ParseIP("198.51.100.50"), Port: 1111}}
-	b := &fakeRateLimitSession{remote: &net.TCPAddr{IP: net.ParseIP("198.51.100.50"), Port: 2222}}
+	a := newFakeRateLimitSession(&net.TCPAddr{IP: net.ParseIP("198.51.100.50"), Port: 1111})
+	b := newFakeRateLimitSession(&net.TCPAddr{IP: net.ParseIP("198.51.100.50"), Port: 2222})
 
 	handler(a)
 	handler(b)
@@ -125,7 +176,7 @@ func TestRateLimitMiddlewareConnectionReuseCountsPerAttempt(t *testing.T) {
 	handlerCalls := 0
 	handler := l.middleware()(func(ssh.Session) { handlerCalls++ })
 
-	s := &fakeRateLimitSession{remote: &net.TCPAddr{IP: net.ParseIP("203.0.113.90"), Port: 4444}}
+	s := newFakeRateLimitSession(&net.TCPAddr{IP: net.ParseIP("203.0.113.90"), Port: 4444})
 	handler(s)
 	handler(s)
 
@@ -146,7 +197,7 @@ func TestRateLimitMiddlewareClockSkewBackwardsDoesNotCreateTokens(t *testing.T) 
 	})
 	handlerCalls := 0
 	handler := l.middleware()(func(ssh.Session) { handlerCalls++ })
-	s := &fakeRateLimitSession{remote: &net.TCPAddr{IP: net.ParseIP("203.0.113.91"), Port: 22}}
+	s := newFakeRateLimitSession(&net.TCPAddr{IP: net.ParseIP("203.0.113.91"), Port: 22})
 
 	handler(s)
 	now = now.Add(-10 * time.Second)
@@ -170,21 +221,21 @@ func TestRateLimitMiddlewareCleanupPreventsUnboundedMapGrowth(t *testing.T) {
 	handler := l.middleware()(func(ssh.Session) {})
 
 	for i := 1; i <= 20; i++ {
-		handler(&fakeRateLimitSession{remote: &net.TCPAddr{IP: net.ParseIP("203.0.114." + itoa(i)), Port: 22}})
+		handler(newFakeRateLimitSession(&net.TCPAddr{IP: net.ParseIP("203.0.114." + itoa(i)), Port: 22}))
 	}
 	if len(l.buckets) != 20 {
 		t.Fatalf("buckets = %d, want 20", len(l.buckets))
 	}
 
 	now = now.Add(6 * time.Minute)
-	handler(&fakeRateLimitSession{remote: &net.TCPAddr{IP: net.ParseIP("203.0.114.200"), Port: 22}})
+	handler(newFakeRateLimitSession(&net.TCPAddr{IP: net.ParseIP("203.0.114.200"), Port: 22}))
 	if len(l.buckets) >= 20 {
 		t.Fatalf("cleanup should evict stale entries, buckets = %d", len(l.buckets))
 	}
 }
 
 func TestRateLimitMiddlewareProcessRestartResetsState(t *testing.T) {
-	s := &fakeRateLimitSession{remote: &net.TCPAddr{IP: net.ParseIP("203.0.113.111"), Port: 22}}
+	s := newFakeRateLimitSession(&net.TCPAddr{IP: net.ParseIP("203.0.113.111"), Port: 22})
 
 	l1 := newRateLimiter(rateLimiterOptions{maxAttempts: 60, window: time.Minute, burst: 1, enabled: true, maxTrackedIPs: 100})
 	h1calls := 0
@@ -209,9 +260,9 @@ func TestRateLimitMiddlewareCapacityLimitBlocksNewIPs(t *testing.T) {
 	handlerCalls := 0
 	handler := l.middleware()(func(ssh.Session) { handlerCalls++ })
 
-	handler(&fakeRateLimitSession{remote: &net.TCPAddr{IP: net.ParseIP("203.0.113.1"), Port: 22}})
-	handler(&fakeRateLimitSession{remote: &net.TCPAddr{IP: net.ParseIP("203.0.113.2"), Port: 22}})
-	blocked := &fakeRateLimitSession{remote: &net.TCPAddr{IP: net.ParseIP("203.0.113.3"), Port: 22}}
+	handler(newFakeRateLimitSession(&net.TCPAddr{IP: net.ParseIP("203.0.113.1"), Port: 22}))
+	handler(newFakeRateLimitSession(&net.TCPAddr{IP: net.ParseIP("203.0.113.2"), Port: 22}))
+	blocked := newFakeRateLimitSession(&net.TCPAddr{IP: net.ParseIP("203.0.113.3"), Port: 22})
 	handler(blocked)
 
 	if handlerCalls != 2 {
@@ -223,7 +274,8 @@ func TestRateLimitMiddlewareCapacityLimitBlocksNewIPs(t *testing.T) {
 }
 
 func TestExtractRemoteIPTrustProxyFlag(t *testing.T) {
-	s := &fakeRateLimitSession{remote: &net.TCPAddr{IP: net.ParseIP("198.51.100.8"), Port: 22}, values: map[any]any{proxyIPSessionKey: "203.0.113.8"}}
+	s := newFakeRateLimitSession(&net.TCPAddr{IP: net.ParseIP("198.51.100.8"), Port: 22})
+	s.Context().SetValue(proxyIPSessionKey, "203.0.113.8")
 	if got := extractRemoteIP(s, false); got != "198.51.100.8" {
 		t.Fatalf("without trust proxy expected remote addr, got %q", got)
 	}
