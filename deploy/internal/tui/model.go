@@ -4,25 +4,27 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 )
 
 // Architecture:
-//   - Pane 1: fixed header (protocol/node, live status, observer hash, active vector).
+//   - Pane 1: fixed header (protocol/node, live status, observer identifier, active vector).
 //   - Pane 2: bounded viewport buffer with append/replace streaming contract.
 //   - Pane 3: interactive prompt with blink cursor in command mode.
 //
 // State machine:
 //
 //	MOTD -> TRIAGE -> COMMAND -> EXIT
-//	- MOTD supports Enter or direct A/B/C hotkeys.
+//	- MOTD only accepts Enter (all other keys are no-op).
 //	- TRIAGE supports A/B/C and optional Esc back to MOTD only before command mode is entered.
 //	- COMMAND never re-enters MOTD.
 //
 // Tick system:
 //   - status ticks toggle STATUS: [LIVE] visibility in TTY mode.
 //   - cursor ticks toggle prompt cursor visibility in TTY mode.
+//   - scheduling is external to this model; each tick message mutates state exactly once.
 const (
 	statusLiveOn  = "STATUS: [LIVE]"
 	statusLiveOff = "STATUS: [    ]"
@@ -35,13 +37,13 @@ const (
 
 // Keybindings (source of truth for tests and operators):
 //
-//	+---------+-------------------------------+
-//	| Mode    | Keys                          |
-//	+---------+-------------------------------+
-//	| MOTD    | enter, a, b, c                |
-//	| TRIAGE  | a, b, c, esc (pre-command)    |
-//	| COMMAND | text, backspace, enter, ctrl+d|
-//	+---------+-------------------------------+
+//	+---------+----------------------------------+
+//	| Mode    | Keys                             |
+//	+---------+----------------------------------+
+//	| MOTD    | enter                            |
+//	| TRIAGE  | a/A, b/B, c/C, esc (pre-command) |
+//	| COMMAND | text, backspace, enter, ctrl+d   |
+//	+---------+----------------------------------+
 
 // Screen identifies the active top-level TUI view.
 type Screen int
@@ -118,13 +120,12 @@ type Model struct {
 	statusBlink bool
 	cursorBlink bool
 
-	screen             Screen
-	hasEnteredCommand  bool
-	observerHash       string
-	promptInput        string
-	selectedVector     string
-	selectedVectorMode string
-	ticks              TickSource
+	screen            Screen
+	hasEnteredCommand bool
+	observerHash      string
+	promptInput       string
+	selectedVector    string
+	ticks             TickSource
 }
 
 // NewModel constructs the interactive TUI model from caller/session metadata.
@@ -142,10 +143,11 @@ func NewModelWithOptions(remoteAddr string, opts Options) Model {
 	if ticks == nil {
 		ticks = defaultTickSource{}
 	}
+
 	m := Model{
 		width:         max(opts.Width, 1),
 		height:        max(opts.Height, 1),
-		viewportH:     max(opts.Height-6, 1),
+		viewportH:     max(opts.Height-6, 0),
 		isTTY:         opts.IsTTY,
 		statusBlink:   true,
 		cursorBlink:   true,
@@ -160,6 +162,7 @@ func NewModelWithOptions(remoteAddr string, opts Options) Model {
 		m.cursorBlink = false
 	}
 	m.enforceBufferLimit()
+	m.clampViewportBounds()
 	return m
 }
 
@@ -175,8 +178,8 @@ func (m Model) Update(msg any) Model {
 	case ResizeMsg:
 		m.width = max(msg.Width, 1)
 		m.height = max(msg.Height, 1)
-		m.viewportH = max(m.height-6, 1)
-		m.viewportTop = clamp(m.viewportTop, 0, max(len(m.viewportLines)-1, 0))
+		m.viewportH = max(m.height-6, 0)
+		m.clampViewportBounds()
 	case TickMsg:
 		if m.isTTY {
 			m.statusBlink = !m.statusBlink
@@ -191,6 +194,7 @@ func (m Model) Update(msg any) Model {
 		msg.Apply(&m)
 	}
 
+	m.clampViewportBounds()
 	return m
 }
 
@@ -201,9 +205,7 @@ func (m *Model) handleKey(key string) {
 		if lower == "enter" {
 			m.screen = ScreenTriage
 			m.setViewportContent(renderTriageMenu())
-			return
 		}
-		m.selectVectorByKey(lower)
 	case ScreenTriage:
 		if lower == "esc" && !m.hasEnteredCommand {
 			m.screen = ScreenMOTD
@@ -249,7 +251,6 @@ func (m *Model) selectVectorByKey(key string) {
 
 func (m *Model) activateVector(vector, mode string) {
 	m.selectedVector = vector
-	m.selectedVectorMode = mode
 	m.screen = ScreenCommand
 	m.hasEnteredCommand = true
 	m.setViewportContent(fmt.Sprintf("TRIAGE SELECTION: %s => %s", mode, vector))
@@ -287,10 +288,10 @@ func renderHeader(m Model) string {
 }
 
 func renderViewport(m Model) string {
-	if len(m.viewportLines) == 0 {
+	if len(m.viewportLines) == 0 || m.viewportH == 0 {
 		return ""
 	}
-	from := clamp(m.viewportTop, 0, max(len(m.viewportLines)-1, 0))
+	from := m.viewportTop
 	to := min(from+m.viewportH, len(m.viewportLines))
 	if from >= to {
 		return ""
@@ -303,7 +304,7 @@ func renderPrompt(m Model) string {
 		return promptPrefix + "[SESSION CLOSED]"
 	}
 	if m.screen != ScreenCommand {
-		return promptPrefix + "[PRESS ENTER TO CONTINUE / A/B/C TO SELECT VECTOR]"
+		return promptPrefix + "[PRESS ENTER TO CONTINUE]"
 	}
 	cursor := " "
 	if m.cursorBlink {
@@ -316,12 +317,14 @@ func (m *Model) setViewportContent(content string) {
 	m.viewportLines = strings.Split(content, "\n")
 	m.viewportTop = 0
 	m.enforceBufferLimit()
+	m.clampViewportBounds()
 }
 
 func (m *Model) appendViewportLine(line string) {
 	m.viewportLines = append(m.viewportLines, line)
 	m.enforceBufferLimit()
 	m.viewportTop = max(len(m.viewportLines)-m.viewportH, 0)
+	m.clampViewportBounds()
 }
 
 func (m *Model) enforceBufferLimit() {
@@ -329,13 +332,45 @@ func (m *Model) enforceBufferLimit() {
 		return
 	}
 	over := len(m.viewportLines) - m.maxBuffer
-	m.viewportLines = append([]string(nil), m.viewportLines[over:]...)
+	copy(m.viewportLines, m.viewportLines[over:])
+	m.viewportLines = m.viewportLines[:m.maxBuffer]
 	m.viewportTop = max(m.viewportTop-over, 0)
 }
 
+func (m *Model) clampViewportBounds() {
+	m.viewportH = max(m.viewportH, 0)
+	maxTop := max(len(m.viewportLines)-m.viewportH, 0)
+	m.viewportTop = clamp(m.viewportTop, 0, maxTop)
+}
+
 func deriveObserverHash(remoteAddr string) string {
-	sum := sha256.Sum256([]byte(strings.TrimSpace(remoteAddr)))
+	normalized := normalizeRemoteAddr(remoteAddr)
+	sum := sha256.Sum256([]byte(normalized))
 	return strings.ToUpper(hex.EncodeToString(sum[:]))[:12]
+}
+
+func normalizeRemoteAddr(remoteAddr string) string {
+	v := strings.TrimSpace(remoteAddr)
+	if v == "" {
+		return ""
+	}
+
+	if host, port, err := net.SplitHostPort(v); err == nil {
+		host = strings.Trim(strings.TrimSpace(host), "[]")
+		if ip := net.ParseIP(host); ip != nil {
+			host = ip.String()
+		}
+		if port != "" {
+			return host + ":" + port
+		}
+		return host
+	}
+
+	host := strings.Trim(v, "[]")
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.String()
+	}
+	return host
 }
 
 func renderMOTD() string {
@@ -347,7 +382,7 @@ func renderMOTD() string {
 		"- Genesis telemetry online.",
 		"- Triage vectors available after acknowledgement.",
 		"",
-		"Press Enter to continue / A/B/C to select vector.",
+		"Press Enter to continue.",
 	}, "\n")
 }
 

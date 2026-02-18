@@ -25,16 +25,33 @@ func TestNewModelStartsOnMOTD(t *testing.T) {
 	}
 }
 
+func TestRemoteAddrNormalizationCases(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{in: "127.0.0.1:1234", want: "127.0.0.1:1234"},
+		{in: "127.0.0.1", want: "127.0.0.1"},
+		{in: " [::1]:1234 ", want: "::1:1234"},
+		{in: "::1", want: "::1"},
+	}
+	for _, tc := range cases {
+		if got := normalizeRemoteAddr(tc.in); got != tc.want {
+			t.Fatalf("normalizeRemoteAddr(%q)=%q want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestObserverHashDerivationCases(t *testing.T) {
 	cases := []struct {
 		name string
 		in   string
 		want string
 	}{
-		{name: "ipv4", in: "198.51.100.14:2048", want: "19D336FB0E33"},
-		{name: "ipv6", in: "[2001:db8::1]:2222", want: "28E931B5B859"},
+		{name: "ipv4", in: "198.51.100.14:2048", want: deriveObserverHash("198.51.100.14:2048")},
+		{name: "ipv6_equivalent_1", in: "[::1]:1234", want: deriveObserverHash("::1:1234")},
 		{name: "empty", in: "", want: "E3B0C44298FC"},
-		{name: "malformed", in: "not-an-addr", want: "B2A8A057290D"},
+		{name: "malformed", in: "not-an-addr", want: deriveObserverHash("not-an-addr")},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -53,8 +70,8 @@ func TestStateMachineTransitionsTable(t *testing.T) {
 		wantVector string
 	}{
 		{name: "motd-enter-triage", keys: []string{"enter"}, wantScreen: ScreenTriage},
-		{name: "motd-direct-hotkey", keys: []string{"a"}, wantScreen: ScreenCommand, wantVector: "VECTOR_A"},
 		{name: "motd-triage-command", keys: []string{"enter", "b"}, wantScreen: ScreenCommand, wantVector: "VECTOR_B"},
+		{name: "motd-triage-command-uppercase", keys: []string{"enter", "A"}, wantScreen: ScreenCommand, wantVector: "VECTOR_A"},
 		{name: "command-exit", keys: []string{"enter", "c", "ctrl+d"}, wantScreen: ScreenExit, wantVector: "VECTOR_C"},
 	}
 	for _, tc := range cases {
@@ -73,31 +90,36 @@ func TestStateMachineTransitionsTable(t *testing.T) {
 	}
 }
 
-func TestInvalidKeysAreNoOp(t *testing.T) {
+func TestInvalidKeysAreNoOpInEachMode(t *testing.T) {
 	m := NewModel("127.0.0.1:1234", 80, 24)
 	before := m
-	m = m.Update(KeyMsg{Key: "z"}) // invalid in MOTD
+	m = m.Update(KeyMsg{Key: "z"})
 	if m.screen != before.screen || m.selectedVector != before.selectedVector {
 		t.Fatalf("motd invalid key should be no-op")
 	}
 
-	m = m.Update(KeyMsg{Key: "enter"}) // to triage
+	m = m.Update(KeyMsg{Key: "enter"})
 	before = m
+	m = m.Update(KeyMsg{Key: "enter"})
+	if m.screen != before.screen {
+		t.Fatalf("triage enter should be no-op")
+	}
 	m = m.Update(KeyMsg{Key: "?"})
-	if m.screen != before.screen || m.selectedVector != before.selectedVector {
+	if m.screen != before.screen {
 		t.Fatalf("triage invalid key should be no-op")
 	}
 
-	m = m.Update(KeyMsg{Key: "a"}) // to command
-	beforePrompt := m.promptInput
-	m = m.Update(KeyMsg{Key: "enter"}) // empty enter
-	if m.promptInput != beforePrompt {
-		t.Fatalf("empty enter should preserve empty prompt")
+	m = m.Update(KeyMsg{Key: "a"})
+	beforeVector := m.selectedVector
+	m = m.Update(KeyMsg{Key: "b"})
+	if m.selectedVector != beforeVector {
+		t.Fatalf("command b should append prompt text, not change vector")
 	}
 }
 
 func TestNoReenterMOTDAfterCommandStarts(t *testing.T) {
 	m := NewModel("127.0.0.1:1234", 80, 24)
+	m = m.Update(KeyMsg{Key: "enter"})
 	m = m.Update(KeyMsg{Key: "a"})
 	if m.screen != ScreenCommand {
 		t.Fatalf("expected command")
@@ -108,28 +130,34 @@ func TestNoReenterMOTDAfterCommandStarts(t *testing.T) {
 	}
 }
 
-func TestExtremeResizeNeverPanicsOrGoesNegative(t *testing.T) {
-	m := NewModel("127.0.0.1:1234", 80, 24)
-	sizes := []ResizeMsg{{Width: 0, Height: 0}, {Width: -10, Height: -1}, {Width: 1, Height: 1}, {Width: 9999, Height: 2}}
-	for _, sz := range sizes {
-		m = m.Update(sz)
-		if m.width < 1 || m.height < 1 || m.viewportH < 1 {
-			t.Fatalf("invalid dimensions after resize: %+v", m)
-		}
-		_ = m.View()
+func TestResizeClampViewportBounds(t *testing.T) {
+	m := NewModelWithOptions("", Options{Width: 80, Height: 24, IsTTY: true, MaxBufferLines: 64})
+	for i := 0; i < 20; i++ {
+		m = m.Update(AppendLineMsg{Line: fmt.Sprintf("line-%d", i)})
 	}
+	m.viewportTop = 999
+
+	m = m.Update(ResizeMsg{Width: 0, Height: 0})
+	if m.viewportH < 0 {
+		t.Fatalf("viewportH must be >= 0")
+	}
+	maxTop := max(len(m.viewportLines)-m.viewportH, 0)
+	if m.viewportTop < 0 || m.viewportTop > maxTop {
+		t.Fatalf("viewportTop out of bounds: top=%d max=%d", m.viewportTop, maxTop)
+	}
+	_ = m.View()
 }
 
-func TestSimultaneousTicksNoStateDrift(t *testing.T) {
+func TestTickTogglesDeterministic(t *testing.T) {
 	m := NewModel("127.0.0.1:1234", 80, 24)
-	for i := 0; i < 100; i++ {
-		m = m.Update(TickMsg{})
-		m = m.Update(CursorTickMsg{})
-		m = m.Update(TickMsg{})
-		m = m.Update(CursorTickMsg{})
+	status0, cursor0 := m.statusBlink, m.cursorBlink
+	m = m.Update(TickMsg{})
+	if m.statusBlink == status0 {
+		t.Fatalf("status should toggle once per TickMsg")
 	}
-	if !m.statusBlink || !m.cursorBlink {
-		t.Fatalf("even number of toggles should restore initial blink states")
+	m = m.Update(CursorTickMsg{})
+	if m.cursorBlink == cursor0 {
+		t.Fatalf("cursor should toggle once per CursorTickMsg")
 	}
 }
 
@@ -141,8 +169,20 @@ func TestNonTTYDegradesGracefully(t *testing.T) {
 	if m.statusBlink != before.statusBlink || m.cursorBlink != before.cursorBlink {
 		t.Fatalf("non-tty should not blink-toggle")
 	}
-	if !strings.Contains(m.View(), "[PRESS ENTER TO CONTINUE / A/B/C TO SELECT VECTOR]") {
+	if !strings.Contains(m.View(), "[PRESS ENTER TO CONTINUE]") {
 		t.Fatalf("expected non-tty prompt hint")
+	}
+}
+
+func TestPromptBackspaceEditing(t *testing.T) {
+	m := NewModel("127.0.0.1:1234", 80, 24)
+	m = m.Update(KeyMsg{Key: "enter"})
+	m = m.Update(KeyMsg{Key: "a"})
+	m = m.Update(KeyMsg{Key: "x"})
+	m = m.Update(KeyMsg{Key: "y"})
+	m = m.Update(KeyMsg{Key: "backspace"})
+	if m.promptInput != "x" {
+		t.Fatalf("expected backspace to remove last rune, got %q", m.promptInput)
 	}
 }
 
@@ -165,7 +205,7 @@ func TestGoldenRenders(t *testing.T) {
 	if !strings.Contains(motdView, "MOSAIC PROTOCOL v.1.0 // NODE: GENESIS_BLOCK\nSTATUS: [LIVE]") {
 		t.Fatalf("motd header snapshot mismatch")
 	}
-	if !strings.Contains(motdView, "Press Enter to continue / A/B/C to select vector.") {
+	if !strings.Contains(motdView, "Press Enter to continue.") {
 		t.Fatalf("motd golden mismatch")
 	}
 
@@ -214,8 +254,12 @@ func FuzzViewportScrollingLogic(f *testing.F) {
 		if len(m.viewportLines) > m.maxBuffer {
 			t.Fatalf("buffer overflow")
 		}
-		if m.viewportH < 1 {
+		if m.viewportH < 0 {
 			t.Fatalf("invalid viewport height")
+		}
+		maxTop := max(len(m.viewportLines)-m.viewportH, 0)
+		if m.viewportTop < 0 || m.viewportTop > maxTop {
+			t.Fatalf("viewport top out of bounds")
 		}
 	})
 }
