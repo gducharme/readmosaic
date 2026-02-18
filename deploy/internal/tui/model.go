@@ -5,10 +5,12 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
+	"strconv"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+	"mosaic-terminal/internal/theme"
 )
 
 // Architecture:
@@ -109,6 +111,7 @@ type Options struct {
 	IsTTY          bool
 	MaxBufferLines int
 	Ticks          TickSource
+	ThemeBundle    *theme.Bundle
 }
 
 // Model represents the terminal UI state with three panes.
@@ -131,6 +134,8 @@ type Model struct {
 	promptInput       string
 	selectedVector    string
 	ticks             TickSource
+	themeBundle       theme.Bundle
+	hasThemeBundle    bool
 }
 
 // NewModel constructs the interactive TUI model from caller/session metadata.
@@ -161,6 +166,10 @@ func NewModelWithOptions(remoteAddr string, opts Options) Model {
 		maxBuffer:     maxBuffer,
 		ticks:         ticks,
 		viewportLines: strings.Split(renderMOTD(), "\n"),
+	}
+	if opts.ThemeBundle != nil {
+		m.themeBundle = cloneThemeBundle(*opts.ThemeBundle)
+		m.hasThemeBundle = true
 	}
 	if !m.isTTY {
 		m.statusBlink = true
@@ -317,12 +326,16 @@ func renderHeader(m Model) string {
 	if m.selectedVector != "" {
 		vector = m.selectedVector
 	}
-	return strings.Join([]string{
+	head := strings.Join([]string{
 		"MOSAIC PROTOCOL v.1.0 // NODE: GENESIS_BLOCK",
 		status,
 		fmt.Sprintf("OBSERVER: [%s]", m.observerHash),
 		fmt.Sprintf("VECTOR: [%s]", vector),
 	}, "\n")
+	if !m.isTTY || !m.hasThemeBundle {
+		return head
+	}
+	return applyStyle(head, m.themeBundle.Header)
 }
 
 func renderViewport(m Model) string {
@@ -334,26 +347,93 @@ func renderViewport(m Model) string {
 	if from >= to {
 		return ""
 	}
-	return strings.Join(m.viewportLines[from:to], "\n")
+	content := strings.Join(m.viewportLines[from:to], "\n")
+	if !m.isTTY || !m.hasThemeBundle {
+		return content
+	}
+	return applyStyle(content, m.themeBundle.Viewport)
 }
 
 func renderPrompt(m Model) string {
+	var prompt string
 	switch m.screen {
 	case ScreenExit:
-		return promptPrefix + "[SESSION CLOSED]"
+		prompt = promptPrefix + "[SESSION CLOSED]"
 	case ScreenMOTD:
-		return promptPrefix + "[PRESS ENTER TO CONTINUE]"
+		prompt = promptPrefix + "[PRESS ENTER TO CONTINUE]"
 	case ScreenTriage:
-		return promptPrefix + "[PRESS A/B/C TO SELECT, ESC TO RETURN]"
+		prompt = promptPrefix + "[PRESS A/B/C TO SELECT, ESC TO RETURN]"
 	case ScreenCommand:
 		cursor := " "
 		if m.cursorBlink {
 			cursor = "█"
 		}
-		return promptPrefix + m.promptInput + cursor
+		prompt = promptPrefix + m.promptInput + cursor
 	default:
-		return promptPrefix
+		prompt = promptPrefix
 	}
+
+	if !m.isTTY || !m.hasThemeBundle {
+		return prompt
+	}
+	return applyStyle(prompt, m.themeBundle.Prompt)
+}
+
+func cloneThemeBundle(src theme.Bundle) theme.Bundle {
+	return theme.Bundle{
+		StyleSet: theme.StyleSet{
+			Header:      src.Header,
+			Viewport:    src.Viewport,
+			Prompt:      src.Prompt,
+			Warning:     src.Warning,
+			DossierCard: src.DossierCard,
+		},
+		Roles: src.Roles,
+	}
+}
+
+func applyStyle(content string, style theme.Style) string {
+	parts := []string{}
+	if fg := rgbFromHex(style.Foreground); fg != "" {
+		parts = append(parts, "38;2;"+fg)
+	}
+	if bg := rgbFromHex(style.Background); bg != "" {
+		parts = append(parts, "48;2;"+bg)
+	}
+	if style.Bold {
+		parts = append(parts, "1")
+	}
+	if len(parts) == 0 {
+		return content
+	}
+
+	prefix := "\x1b[" + strings.Join(parts, ";") + "m"
+	reset := "\x1b[0m"
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		lines[i] = prefix + line + reset
+	}
+	return strings.Join(lines, "\n")
+}
+
+func rgbFromHex(v string) string {
+	v = strings.TrimSpace(strings.TrimPrefix(v, "#"))
+	if len(v) != 6 {
+		return ""
+	}
+	r, err := strconv.ParseInt(v[0:2], 16, 64)
+	if err != nil {
+		return ""
+	}
+	g, err := strconv.ParseInt(v[2:4], 16, 64)
+	if err != nil {
+		return ""
+	}
+	b, err := strconv.ParseInt(v[4:6], 16, 64)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%d;%d;%d", r, g, b)
 }
 
 func (m *Model) setViewportContent(content string) {

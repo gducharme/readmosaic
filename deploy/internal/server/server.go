@@ -20,6 +20,7 @@ import (
 
 	"mosaic-terminal/internal/config"
 	"mosaic-terminal/internal/router"
+	"mosaic-terminal/internal/theme"
 	"mosaic-terminal/internal/tui"
 )
 
@@ -230,10 +231,21 @@ func defaultHandler(s ssh.Session) {
 		height = 24
 	}
 
+	variant := theme.Variant(identity.Username)
+	resolvedVariant, bundle, err := theme.ResolveFromEnv(variant, pty.Term)
+	var themeBundle *theme.Bundle
+	if err != nil {
+		log.Printf("level=warn event=theme_resolve_failed user=%s route=%s vector=%s requested_variant=%s term=%q error=%v session=%s", user, route, vector, variant, pty.Term, err, traceID)
+	} else {
+		themeBundle = &bundle
+		log.Printf("level=info event=theme_resolved user=%s route=%s vector=%s requested_variant=%s resolved_variant=%s term=%q session=%s", user, route, vector, variant, resolvedVariant, pty.Term, traceID)
+	}
+
 	model := tui.NewModelWithOptions(s.RemoteAddr().String(), tui.Options{
-		Width:  width,
-		Height: height,
-		IsTTY:  true,
+		Width:       width,
+		Height:      height,
+		IsTTY:       true,
+		ThemeBundle: themeBundle,
 	})
 
 	switch flow {
