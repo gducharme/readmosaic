@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -30,9 +32,12 @@ const (
 	statusLiveOff = "STATUS: [    ]"
 	promptPrefix  = "MSC-USER ~ $ "
 
-	defaultStatusTick = 450 * time.Millisecond
-	defaultCursorTick = 530 * time.Millisecond
-	maxViewportLines  = 512
+	defaultStatusTick       = 450 * time.Millisecond
+	defaultCursorTick       = 530 * time.Millisecond
+	maxViewportLines        = 512
+	defaultReadFragmentPath = "internal/content/vector_a_read_fragment.txt"
+	readFragmentPathEnvVar  = "MOSAIC_VECTOR_A_FRAGMENT_PATH"
+	readFallbackLine        = "READ FRAGMENT UNAVAILABLE"
 )
 
 // Keybindings (source of truth for tests and operators):
@@ -259,7 +264,36 @@ func (m *Model) activateVector(vector, mode string) {
 	m.hasEnteredCommand = true
 	m.setViewportContent(fmt.Sprintf("TRIAGE SELECTION: %s => %s", mode, vector))
 	m.appendViewportLine("CONFIRMED VECTOR: " + vector)
+	if vector == "VECTOR_A" {
+		m.appendViewportLine("READ PAYLOAD:")
+		for _, line := range loadReadFragmentLines() {
+			m.appendViewportLine(line)
+		}
+	}
 	m.appendViewportLine("Awaiting command input.")
+}
+
+func loadReadFragmentLines() []string {
+	path := strings.TrimSpace(os.Getenv(readFragmentPathEnvVar))
+	if path == "" {
+		path = defaultReadFragmentPath
+	}
+
+	content, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		return []string{readFallbackLine}
+	}
+
+	fragment := strings.TrimSpace(string(content))
+	if fragment == "" {
+		return []string{readFallbackLine}
+	}
+
+	lines := strings.Split(fragment, "\n")
+	for i := range lines {
+		lines[i] = strings.TrimSpace(lines[i])
+	}
+	return lines
 }
 
 // Render returns a pure string representation of the current model.
