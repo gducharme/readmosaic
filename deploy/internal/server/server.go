@@ -167,7 +167,7 @@ func defaultHandler(s ssh.Session) {
 		} else {
 			duration = time.Since(runtimeStart).Milliseconds()
 		}
-		log.Printf("level=info event=session_runtime_end user=%s route=%s vector=%s duration_ms=%d exit_code=%d status=%s session=%s", user, route, vector, duration, exitCode, status, traceID)
+		log.Printf("level=info event=session_end user=%s route=%s vector=%s duration_ms=%d exit_code=%d status=%s session=%s", user, route, vector, duration, exitCode, status, traceID)
 	}()
 
 	pty, windowChanges, hasPTY := s.Pty()
@@ -183,7 +183,7 @@ func defaultHandler(s ssh.Session) {
 
 	if !hasPTY {
 		exitCode = 1
-		status = "error"
+		status = "rejected"
 		log.Printf("level=error event=session_rejected user=%s class=missing_pty session=%s", user, traceID)
 		_, _ = s.Write([]byte("interactive terminal requires an attached PTY\n"))
 		_ = s.Exit(1)
@@ -193,7 +193,7 @@ func defaultHandler(s ssh.Session) {
 	identity, ok := router.SessionIdentity(s)
 	if !ok {
 		exitCode = 1
-		status = "error"
+		status = "rejected"
 		log.Printf("level=error event=session_rejected user=%s class=missing_identity session=%s", user, traceID)
 		_, _ = s.Write([]byte("session identity unavailable; routing middleware is required\n"))
 		_ = s.Exit(1)
@@ -207,7 +207,7 @@ func defaultHandler(s ssh.Session) {
 	flow, err := resolveFlow(identity)
 	if err != nil {
 		exitCode = 1
-		status = "error"
+		status = "rejected"
 		log.Printf("level=error event=session_rejected user=%s class=resolve_flow error=%v route=%s vector=%s session=%s", user, err, route, vector, traceID)
 		_, _ = s.Write([]byte(err.Error() + "\n"))
 		_ = s.Exit(1)
