@@ -309,3 +309,33 @@ func TestResolveFlowRejectsUnsupportedIdentity(t *testing.T) {
 		t.Fatal("expected unsupported identity to return an error")
 	}
 }
+
+func TestStreamKeysDecodesUTF8AndControls(t *testing.T) {
+	input := strings.NewReader("é\n\x7f\x04")
+	keys := make(chan string, 8)
+	eof := make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go streamKeys(ctx, input, keys, eof)
+
+	got := make([]string, 0, 4)
+	for i := 0; i < 4; i++ {
+		select {
+		case key := <-keys:
+			got = append(got, key)
+		case <-time.After(time.Second):
+			t.Fatalf("timeout waiting for key %d", i)
+		}
+	}
+
+	want := []string{"é", "enter", "backspace", "ctrl+d"}
+	if len(got) != len(want) {
+		t.Fatalf("unexpected key count: got=%d want=%d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("key[%d]=%q want %q", i, got[i], want[i])
+		}
+	}
+}

@@ -373,20 +373,14 @@ func archiveLanguageCode(dirName string) string {
 
 	tag, err := language.Parse(normalized)
 	if err == nil {
-		base, _ := tag.Base()
-		region, confidence := tag.Region()
-		if confidence == language.Exact && region.String() != "ZZ" {
-			return fmt.Sprintf("%s-%s", strings.ToLower(base.String()), strings.ToUpper(region.String()))
-		}
-		baseCode := strings.ToLower(base.String())
-		return fmt.Sprintf("%s-%s", baseCode, strings.ToUpper(baseCode))
+		return tag.String()
 	}
 
 	fallback := map[string]string{
-		"english":  "en-EN",
-		"francais": "fr-FR",
-		"français": "fr-FR",
-		"arabic":   "ar-AR",
+		"english":  "en",
+		"francais": "fr",
+		"français": "fr",
+		"arabic":   "ar",
 	}
 	key := strings.ToLower(normalized)
 	if code, ok := fallback[key]; ok {
@@ -414,7 +408,7 @@ func (m *Model) renderArchiveLanguageMenu() {
 		lines = append(lines, "", "No language directories found.")
 	} else {
 		for idx, lang := range m.archiveLanguages {
-			lines = append(lines, fmt.Sprintf("%d) %s -> /archive/%s", idx+1, lang.DisplayCode, lang.DirName))
+			lines = append(lines, fmt.Sprintf("%d) %s -> %s", idx+1, lang.DisplayCode, filepath.Join(m.archiveRoot, lang.DirName)))
 		}
 	}
 	lines = append(lines, "", "Type language number then Enter.")
@@ -468,6 +462,19 @@ func (m *Model) loadArchiveFiles(lang archiveLanguage) {
 	m.archiveStatus = ""
 }
 
+func (m *Model) isPathInsideArchiveRoot(candidate string) bool {
+	rootClean := filepath.Clean(m.archiveRoot)
+	candidateClean := filepath.Clean(candidate)
+	rel, err := filepath.Rel(rootClean, candidateClean)
+	if err != nil {
+		return false
+	}
+	if rel == "." {
+		return true
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
+}
+
 func (m *Model) renderArchiveFileMenu() {
 	lang := m.archiveLanguages[m.archiveLanguageIdx]
 	lines := []string{fmt.Sprintf("ARCHIVE LANGUAGE: %s (%s)", lang.DirName, lang.DisplayCode)}
@@ -519,13 +526,19 @@ func (m *Model) handleArchiveFileKey(lower, raw string) {
 }
 
 func (m *Model) openArchiveFile(file archiveDocument) {
-	data, err := os.ReadFile(filepath.Clean(file.Path))
+	clean := filepath.Clean(file.Path)
+	if !m.isPathInsideArchiveRoot(clean) {
+		m.archiveEditorBuffer = ""
+		m.archiveStatus = "Refusing to open file outside archive root"
+		return
+	}
+	data, err := os.ReadFile(clean)
 	if err != nil {
 		m.archiveEditorBuffer = ""
 		m.archiveStatus = fmt.Sprintf("Unable to open %s: %v", file.Name, err)
 		return
 	}
-	m.archiveEditPath = file.Path
+	m.archiveEditPath = clean
 	m.archiveEditorBuffer = string(data)
 	m.archiveStatus = ""
 }
@@ -569,7 +582,12 @@ func (m *Model) handleArchiveEditorKey(lower, raw string) {
 		m.renderArchiveEditor()
 		return
 	}
-	if len([]rune(raw)) == 1 {
+	if raw != "" {
+		for _, r := range raw {
+			if unicode.IsControl(r) {
+				return
+			}
+		}
 		m.archiveEditorBuffer += raw
 		m.persistArchiveEdit()
 		m.renderArchiveEditor()
@@ -580,11 +598,22 @@ func (m *Model) persistArchiveEdit() {
 	if m.archiveEditPath == "" {
 		return
 	}
-	if err := os.WriteFile(filepath.Clean(m.archiveEditPath), []byte(m.archiveEditorBuffer), 0o600); err != nil {
+	clean := filepath.Clean(m.archiveEditPath)
+	if !m.isPathInsideArchiveRoot(clean) {
+		m.archiveStatus = "Save failed: refusing to write outside archive root"
+		return
+	}
+	tmpPath := clean + ".tmp"
+	if err := os.WriteFile(tmpPath, []byte(m.archiveEditorBuffer), 0o600); err != nil {
 		m.archiveStatus = fmt.Sprintf("Save failed: %v", err)
 		return
 	}
-	m.archiveStatus = "Saved"
+	if err := os.Rename(tmpPath, clean); err != nil {
+		_ = os.Remove(tmpPath)
+		m.archiveStatus = fmt.Sprintf("Save failed: %v", err)
+		return
+	}
+	m.archiveStatus = "Saved at " + time.Now().Format("15:04:05")
 }
 
 func (m *Model) selectVectorByKey(key string) {

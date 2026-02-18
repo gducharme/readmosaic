@@ -709,8 +709,11 @@ func TestArchiveUserStartsInLanguageMenu(t *testing.T) {
 		t.Fatalf("expected archive language screen, got %v", m.screen)
 	}
 	view := renderViewport(m)
-	if !strings.Contains(view, "en-EN") || !strings.Contains(view, "ar-AR") {
+	if !strings.Contains(view, "en") || !strings.Contains(view, "ar") {
 		t.Fatalf("expected normalized language codes, got: %q", view)
+	}
+	if !strings.Contains(view, filepath.Join(root, "en")) {
+		t.Fatalf("expected rendered menu path to follow configured archive root, got: %q", view)
 	}
 }
 
@@ -777,5 +780,37 @@ func TestArchiveEditorMarksRTLDirection(t *testing.T) {
 
 	if !strings.Contains(renderViewport(m), "[RTL]") {
 		t.Fatalf("expected RTL marker in editor header")
+	}
+}
+
+func TestArchivePersistenceRejectsPathOutsideRoot(t *testing.T) {
+	root := t.TempDir()
+	langDir := filepath.Join(root, "en")
+	if err := os.Mkdir(langDir, 0o755); err != nil {
+		t.Fatalf("mkdir en: %v", err)
+	}
+	inside := filepath.Join(langDir, "001-Intro")
+	if err := os.WriteFile(inside, []byte("Hello"), 0o600); err != nil {
+		t.Fatalf("write inside file: %v", err)
+	}
+	outside := filepath.Join(t.TempDir(), "evil.txt")
+	if err := os.WriteFile(outside, []byte("bad"), 0o600); err != nil {
+		t.Fatalf("write outside file: %v", err)
+	}
+	t.Setenv(archiveRootEnvVar, root)
+
+	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: "archive"})
+	m.archiveEditPath = outside
+	m.archiveEditorBuffer = "changed"
+	m.persistArchiveEdit()
+	if got := m.archiveStatus; !strings.Contains(got, "outside archive root") {
+		t.Fatalf("expected containment warning, got %q", got)
+	}
+	content, err := os.ReadFile(outside)
+	if err != nil {
+		t.Fatalf("read outside file: %v", err)
+	}
+	if string(content) != "bad" {
+		t.Fatalf("outside file must stay unchanged, got %q", string(content))
 	}
 }
