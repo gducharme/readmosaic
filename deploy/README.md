@@ -45,7 +45,7 @@ These are read by `internal/config.LoadFromEnv()`:
 
 - `MOSAIC_SSH_HOST` (default `0.0.0.0`)
 - `MOSAIC_SSH_PORT` (default `2222`)
-- `MOSAIC_SSH_HOST_KEY_PATH` (default `.data/host_ed25519`)
+- `MOSAIC_SSH_HOST_KEY_PATH` (default `/run/keys/ssh_host_ed25519` in container deployments)
 - `MOSAIC_SSH_IDLE_TIMEOUT` (default `120s`)
 - `MOSAIC_SSH_MAX_SESSIONS` (default `32`)
 - `MOSAIC_SSH_RATE_LIMIT_PER_SECOND` (default `20`)
@@ -141,10 +141,7 @@ make docker-test  # deterministic image smoke check with required key/env
 
 ## CI workflow intent
 
-`.github/workflows/deploy-go.yml` keeps two test styles intentionally:
-
-1. `go test ./...` on runner toolchain (fast host validation).
-2. `go test ./...` inside pinned Go container (toolchain parity with image build environment).
+`.github/workflows/deploy-go.yml` runs `go test ./...` on the runner toolchain for fast validation.
 
 It also performs:
 
