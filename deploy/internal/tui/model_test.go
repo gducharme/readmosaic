@@ -703,6 +703,7 @@ func TestArchiveUserStartsInLanguageMenu(t *testing.T) {
 		t.Fatalf("mkdir ar: %v", err)
 	}
 	t.Setenv(archiveRootEnvVar, root)
+	t.Setenv(archiveSeedEnvVar, "false")
 
 	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: "archive"})
 	if m.screen != ScreenArchiveLanguage {
@@ -729,6 +730,7 @@ func TestArchiveEditorPersistsEditsImmediately(t *testing.T) {
 		t.Fatalf("write initial file: %v", err)
 	}
 	t.Setenv(archiveRootEnvVar, root)
+	t.Setenv(archiveSeedEnvVar, "false")
 
 	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: "archive"})
 	m = m.Update(KeyMsg{Key: "1"})
@@ -772,6 +774,7 @@ func TestArchiveEditorMarksRTLDirection(t *testing.T) {
 		t.Fatalf("write initial file: %v", err)
 	}
 	t.Setenv(archiveRootEnvVar, root)
+	t.Setenv(archiveSeedEnvVar, "false")
 
 	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: "archive"})
 	m = m.Update(KeyMsg{Key: "1"})
@@ -799,6 +802,7 @@ func TestArchivePersistenceRejectsPathOutsideRoot(t *testing.T) {
 		t.Fatalf("write outside file: %v", err)
 	}
 	t.Setenv(archiveRootEnvVar, root)
+	t.Setenv(archiveSeedEnvVar, "false")
 
 	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: "archive"})
 	m.archiveEditPath = outside
@@ -827,6 +831,7 @@ func TestArchiveEditorFiltersControlRunesFromInputChunk(t *testing.T) {
 		t.Fatalf("write initial file: %v", err)
 	}
 	t.Setenv(archiveRootEnvVar, root)
+	t.Setenv(archiveSeedEnvVar, "false")
 
 	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: "archive"})
 	m = m.Update(KeyMsg{Key: "1"})
@@ -856,6 +861,7 @@ func TestArchiveOpenRejectsLargeFiles(t *testing.T) {
 		t.Fatalf("write large file: %v", err)
 	}
 	t.Setenv(archiveRootEnvVar, root)
+	t.Setenv(archiveSeedEnvVar, "false")
 
 	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: "archive"})
 	m = m.Update(KeyMsg{Key: "1"})
@@ -868,5 +874,28 @@ func TestArchiveOpenRejectsLargeFiles(t *testing.T) {
 	}
 	if m.archiveEditorBuffer != "" {
 		t.Fatalf("large file should not be loaded into editor buffer")
+	}
+}
+
+func TestArchiveSeedContentCreatesDefaultLanguageDirectoriesAndFiles(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv(archiveRootEnvVar, root)
+	t.Setenv(archiveSeedEnvVar, "true")
+
+	_ = NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: "archive"})
+
+	checks := []struct {
+		dir  string
+		file string
+	}{
+		{dir: "english", file: "001-Intro"},
+		{dir: "french", file: "001-Intro"},
+		{dir: "arabic", file: "001-Intro"},
+	}
+	for _, check := range checks {
+		path := filepath.Join(root, check.dir, check.file)
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected seed file %s to exist: %v", path, err)
+		}
 	}
 }

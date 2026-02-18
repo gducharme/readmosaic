@@ -48,6 +48,7 @@ const (
 	defaultReadFragmentPath = "internal/content/vector_a_read_fragment.txt"
 	readFragmentPathEnvVar  = "MOSAIC_VECTOR_A_FRAGMENT_PATH"
 	archiveRootEnvVar       = "MOSAIC_ARCHIVE_ROOT"
+	archiveSeedEnvVar       = "MOSAIC_ARCHIVE_SEED_DEFAULTS"
 	defaultArchiveRoot      = "/archive"
 	typewriterTickMsEnvVar  = "MOSAIC_TUI_TYPEWRITER_TICK_MS"
 	typewriterBatchEnvVar   = "MOSAIC_TUI_TYPEWRITER_BATCH"
@@ -151,6 +152,43 @@ type archiveLanguage struct {
 type archiveDocument struct {
 	Name string
 	Path string
+}
+
+type archiveSeedFile struct {
+	Name    string
+	Content string
+}
+
+type archiveSeedLanguage struct {
+	DirName string
+	Files   []archiveSeedFile
+}
+
+var archiveSeedLanguages = []archiveSeedLanguage{
+	{
+		DirName: "english",
+		Files: []archiveSeedFile{
+			{Name: "001-Intro", Content: "Welcome to the archive.\n"},
+			{Name: "002-The start", Content: "This is the start of the story.\n"},
+			{Name: "003-The surprise", Content: "A surprise appears at the end.\n"},
+		},
+	},
+	{
+		DirName: "french",
+		Files: []archiveSeedFile{
+			{Name: "001-Intro", Content: "Bienvenue dans les archives.\n"},
+			{Name: "002-Le début", Content: "Voici le début de l'histoire.\n"},
+			{Name: "003-La surprise", Content: "Une surprise apparaît à la fin.\n"},
+		},
+	},
+	{
+		DirName: "arabic",
+		Files: []archiveSeedFile{
+			{Name: "001-Intro", Content: "مرحباً بك في الأرشيف.\n"},
+			{Name: "002-البداية", Content: "هذه هي بداية القصة.\n"},
+			{Name: "003-المفاجأة", Content: "تظهر مفاجأة في النهاية.\n"},
+		},
+	},
 }
 
 // Model represents the terminal UI state with three panes.
@@ -338,8 +376,47 @@ func (m *Model) initArchiveMode() {
 	m.screen = ScreenArchiveLanguage
 	m.promptInput = ""
 	m.selectedVector = "ARCHIVE"
+	if archiveSeedEnabled() {
+		m.ensureArchiveSeedContent()
+	}
 	m.loadArchiveLanguages()
 	m.renderArchiveLanguageMenu()
+}
+
+func archiveSeedEnabled() bool {
+	value := strings.TrimSpace(strings.ToLower(os.Getenv(archiveSeedEnvVar)))
+	if value == "" {
+		return true
+	}
+	switch value {
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return true
+	}
+}
+
+func (m *Model) ensureArchiveSeedContent() {
+	root := filepath.Clean(m.archiveRoot)
+	for _, lang := range archiveSeedLanguages {
+		langDir := filepath.Join(root, lang.DirName)
+		if err := os.MkdirAll(langDir, 0o755); err != nil {
+			m.archiveStatus = fmt.Sprintf("Failed to prepare archive directory %s: %v", lang.DirName, err)
+			continue
+		}
+		for _, seed := range lang.Files {
+			path := filepath.Join(langDir, seed.Name)
+			if _, err := os.Stat(path); err == nil {
+				continue
+			} else if !os.IsNotExist(err) {
+				m.archiveStatus = fmt.Sprintf("Failed to inspect archive file %s: %v", path, err)
+				continue
+			}
+			if err := os.WriteFile(path, []byte(seed.Content), 0o600); err != nil {
+				m.archiveStatus = fmt.Sprintf("Failed to seed archive file %s: %v", path, err)
+			}
+		}
+	}
 }
 
 func (m *Model) loadArchiveLanguages() {
