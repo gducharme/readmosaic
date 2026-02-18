@@ -179,11 +179,39 @@ func TestDefaultHandlerDoesNotAutoExitOnSuccessfulRuntimeStart(t *testing.T) {
 	}
 
 	cancel()
-	sess.closeInput()
 	select {
 	case <-done:
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("handler did not exit after context cancellation")
+	}
+
+	if code, ok := sess.recordedExitCode(); ok {
+		t.Fatalf("expected no explicit exit code on context cancellation, got %d", code)
+	}
+}
+
+func TestDefaultHandlerExitsGracefullyOnEOF(t *testing.T) {
+	sess := newFakeDefaultHandlerSession(context.Background(), "west", true, "")
+	h := routedHandler()
+
+	done := make(chan struct{})
+	go func() {
+		h(sess)
+		close(done)
+	}()
+
+	waitForOutputContains(t, sess, "MOSAIC PROTOCOL", time.Second)
+	sess.closeInput()
+
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("handler did not exit after EOF")
+	}
+
+	code, ok := sess.recordedExitCode()
+	if !ok || code != 0 {
+		t.Fatalf("expected graceful EOF exit code 0, got (%d, %v)", code, ok)
 	}
 }
 
