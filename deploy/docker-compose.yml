@@ -19,9 +19,6 @@ services:
         source: ./data/ssh/host_ed25519
         target: /run/keys/ssh_host_ed25519
         read_only: true
-    depends_on:
-      neo4j:
-        condition: service_healthy
     healthcheck:
       test:
         - CMD-SHELL

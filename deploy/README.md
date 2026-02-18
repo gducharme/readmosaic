@@ -161,7 +161,7 @@ The Trivy image scan references the same tag, so scan/build tags stay aligned.
 
 ## Compose compatibility note
 
-`depends_on` is limited to `condition: service_healthy` (no `required: false`) for broader compatibility with older Compose implementations. The app should tolerate Neo4j being absent unless Neo4j env vars are explicitly configured.
+The `app` service does not declare `depends_on` for `neo4j`. This keeps Neo4j truly optional across Compose versions and lets the app start independently unless Neo4j client env vars are explicitly configured.
 
 ## How to test (copy/paste)
 
