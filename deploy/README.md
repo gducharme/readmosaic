@@ -93,9 +93,52 @@ docker run --rm -p 2222:2222 \
   mosaic-terminal:latest
 ```
 
+## Docker deployment assets
+
+- `Dockerfile` provides a **multi-stage build** that compiles a static Linux binary in a Go builder image, then copies only the binary, CA bundle, and minimal passwd/group metadata into a `scratch` runtime.
+- `docker-compose.yml` provides:
+  - `app` service for the SSH runtime.
+  - Optional `neo4j` service (enable with `--profile neo4j`) for local integration.
+  - Host key bind mount:
+    - `./data/ssh/host_ed25519:/run/keys/ssh_host_ed25519:ro`
+  - Persistent named volume: `neo4j-data:/data`.
+  - Port publication via `MOSAIC_SSH_PUBLISH_PORT`:
+    - Default: `22:2222`
+    - Fallback when host 22 is unavailable: `2222:2222` (set `MOSAIC_SSH_PUBLISH_PORT=2222`).
+
+### Compose quick start
+
+```bash
+cd deploy
+mkdir -p data/ssh
+# Provide an existing ed25519 private host key at ./data/ssh/host_ed25519
+# chmod 600 ./data/ssh/host_ed25519
+
+# default publish strategy (host 22 -> container 2222)
+docker compose up --build -d
+
+# fallback publish strategy (host 2222 -> container 2222)
+MOSAIC_SSH_PUBLISH_PORT=2222 docker compose up --build -d
+
+# enable optional Neo4j integration service
+MOSAIC_SSH_PUBLISH_PORT=2222 docker compose --profile neo4j up --build -d
+```
+
 ## Healthcheck strategy
 
-SSH transport has no HTTP health endpoint in this scaffold. Use a TCP healthcheck on `${MOSAIC_SSH_HOST}:${MOSAIC_SSH_PORT}` and watch startup/session lifecycle logs.
+- **App service (`scratch`)**: there is no shell in the container, so define health from the outside using a TCP probe against the published SSH port.
+  - Example host probe: `nc -zv 127.0.0.1 ${MOSAIC_SSH_PUBLISH_PORT:-22}`
+  - In orchestrators, use TCP socket probes against container port `2222`.
+- **Neo4j service**: compose includes an in-container `cypher-shell` healthcheck (`RETURN 1;`).
+- Inspect status with `docker compose ps` and only treat the stack as healthy when app TCP and (if enabled) Neo4j healthcheck both pass.
+
+## Logging guidance
+
+- Both services default to Docker `json-file` logging with rotation (`max-size=10m`, `max-file=3`) in `docker-compose.yml`.
+- Follow runtime logs with:
+  - `docker compose logs -f app`
+  - `docker compose --profile neo4j logs -f neo4j`
+- The app emits startup metadata (runtime mode + middleware chain) and rate-limit events (`remote_ip`, counters, reason). Route these logs to your collector in production.
 
 ## Using real upstream dependencies
 

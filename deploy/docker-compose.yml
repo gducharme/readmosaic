@@ -1,0 +1,59 @@
+version: "3.9"
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mosaic-terminal:local
+    container_name: mosaic-terminal
+    restart: unless-stopped
+    environment:
+      MOSAIC_SSH_HOST: 0.0.0.0
+      MOSAIC_SSH_PORT: 2222
+      MOSAIC_SSH_HOST_KEY_PATH: /run/keys/ssh_host_ed25519
+      # Set to 2222 when host port 22 is unavailable (rootless Docker, existing sshd, CI):
+      # MOSAIC_SSH_PUBLISH_PORT=2222
+    ports:
+      - "${MOSAIC_SSH_PUBLISH_PORT:-22}:2222"
+    volumes:
+      - type: bind
+        source: ./data/ssh/host_ed25519
+        target: /run/keys/ssh_host_ed25519
+        read_only: true
+    depends_on:
+      neo4j:
+        condition: service_healthy
+        required: false
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  neo4j:
+    image: neo4j:5-community
+    container_name: mosaic-neo4j
+    profiles: ["neo4j"]
+    restart: unless-stopped
+    environment:
+      NEO4J_AUTH: neo4j/localdevpassword
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p localdevpassword 'RETURN 1;' >/dev/null 2>&1"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  neo4j-data:
