@@ -34,6 +34,7 @@ type Runtime struct {
 func New(cfg config.Config, chain []router.Descriptor) (*Runtime, error) {
 	address := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
 	middleware := router.MiddlewareFromDescriptors(chain)
+	middleware = append([]wish.Middleware{RateLimitMiddleware(cfg.RateLimitPerMin, cfg.RateLimitBurst)}, middleware...)
 
 	wishServer, err := wish.NewServer(
 		wish.WithAddress(address),
@@ -47,7 +48,8 @@ func New(cfg config.Config, chain []router.Descriptor) (*Runtime, error) {
 		return nil, err
 	}
 
-	ids := make([]string, 0, len(chain))
+	ids := make([]string, 0, len(chain)+1)
+	ids = append(ids, "rate-limit")
 	for _, descriptor := range chain {
 		ids = append(ids, descriptor.Name)
 	}

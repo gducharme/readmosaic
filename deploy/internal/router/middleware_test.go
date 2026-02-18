@@ -2,6 +2,7 @@ package router
 
 import (
 	"context"
+	"net"
 	"strings"
 	"testing"
 
@@ -27,11 +28,14 @@ func (f *fakeSession) Write(p []byte) (int, error) {
 	f.writes = append(f.writes, string(p))
 	return len(p), nil
 }
+func (f *fakeSession) RemoteAddr() net.Addr {
+	return &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 22}
+}
 
 func TestDefaultChainKeepsIdentityBeforeSessionMetadata(t *testing.T) {
-	chain := DefaultChain(10)
-	if len(chain) != 3 {
-		t.Fatalf("chain length = %d, want 3", len(chain))
+	chain := DefaultChain()
+	if len(chain) != 2 {
+		t.Fatalf("chain length = %d, want 2", len(chain))
 	}
 
 	s := newFakeSession("west")
