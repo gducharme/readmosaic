@@ -159,6 +159,10 @@ func resolveIdentity(username string) (Identity, bool) {
 	return Identity{Username: username, Route: policy.Route, Vector: policy.Vector}, true
 }
 
+func SessionTraceID(s ssh.Session) string {
+	return sessionTraceID(s)
+}
+
 func sessionTraceID(s ssh.Session) string {
 	return fmt.Sprintf("%p", s)
 }

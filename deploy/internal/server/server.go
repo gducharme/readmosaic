@@ -151,8 +151,20 @@ func MaxSessionsMiddleware(maxSessions int) wish.Middleware {
 }
 
 func defaultHandler(s ssh.Session) {
+	acceptedAt := time.Now()
 	pty, windowChanges, hasPTY := s.Pty()
+	term := "missing"
+	cols := 0
+	rows := 0
+	if hasPTY {
+		term = pty.Term
+		cols = pty.Window.Width
+		rows = pty.Window.Height
+	}
+	log.Printf("level=info event=session_accepted user=%s remote_addr=%s pty_present=%t term=%s cols=%d rows=%d session=%s", s.User(), s.RemoteAddr().String(), hasPTY, term, cols, rows, router.SessionTraceID(s))
+
 	if !hasPTY {
+		log.Printf("level=error event=session_runtime_error user=%s class=missing_pty session=%s", s.User(), router.SessionTraceID(s))
 		_, _ = s.Write([]byte("interactive terminal requires an attached PTY\n"))
 		_ = s.Exit(1)
 		return
@@ -160,6 +172,7 @@ func defaultHandler(s ssh.Session) {
 
 	identity, ok := router.SessionIdentity(s)
 	if !ok {
+		log.Printf("level=error event=session_runtime_error user=%s class=missing_identity session=%s", s.User(), router.SessionTraceID(s))
 		_, _ = s.Write([]byte("session identity unavailable; routing middleware is required\n"))
 		_ = s.Exit(1)
 		return
@@ -167,10 +180,23 @@ func defaultHandler(s ssh.Session) {
 
 	flow, err := resolveFlow(identity)
 	if err != nil {
+		log.Printf("level=error event=session_runtime_error user=%s class=resolve_flow error=%q route=%s vector=%s session=%s", identity.Username, err.Error(), identity.Route, identity.Vector, router.SessionTraceID(s))
 		_, _ = s.Write([]byte(err.Error() + "\n"))
 		_ = s.Exit(1)
 		return
 	}
+
+	log.Printf("level=info event=session_runtime_start user=%s route=%s vector=%s selected_flow=%s session=%s", identity.Username, identity.Route, identity.Vector, flow, router.SessionTraceID(s))
+	runtimeStart := time.Now()
+	exitCode := 0
+	status := "normal"
+	defer func() {
+		duration := time.Since(runtimeStart).Milliseconds()
+		if runtimeStart.IsZero() {
+			duration = time.Since(acceptedAt).Milliseconds()
+		}
+		log.Printf("level=info event=session_runtime_end user=%s route=%s vector=%s duration_ms=%d exit_code=%d status=%s session=%s", identity.Username, identity.Route, identity.Vector, duration, exitCode, status, router.SessionTraceID(s))
+	}()
 
 	width := pty.Window.Width
 	height := pty.Window.Height
@@ -211,16 +237,23 @@ func defaultHandler(s ssh.Session) {
 	for {
 		select {
 		case <-s.Context().Done():
+			exitCode = 1
+			status = "error"
+			log.Printf("level=error event=session_runtime_error user=%s class=context_done session=%s", identity.Username, router.SessionTraceID(s))
 			_ = s.CloseWrite()
 			return
 		case <-eof:
 			_ = s.Exit(0)
+			exitCode = 0
+			status = "normal"
 			return
 		case key := <-keys:
 			model = model.Update(tui.KeyMsg{Key: key})
 			render()
 			if key == "ctrl+d" {
 				_ = s.Exit(0)
+				exitCode = 0
+				status = "normal"
 				return
 			}
 		case win := <-windowChanges:
