@@ -211,7 +211,7 @@ func defaultHandler(s ssh.Session) {
 	for {
 		select {
 		case <-s.Context().Done():
-			_ = s.Close()
+			_ = s.CloseWrite()
 			return
 		case <-eof:
 			_ = s.Exit(0)
@@ -247,6 +247,7 @@ func resolveFlow(identity router.Identity) (string, error) {
 	}
 }
 
+// safeTickerDuration defends ticker creation from non-positive model cadence values.
 func safeTickerDuration(candidate, fallback time.Duration) time.Duration {
 	if candidate > 0 {
 		return candidate
