@@ -242,6 +242,17 @@ wss.on('connection', (ws) => {
   let shell;
   let gatewaySession;
 
+  async function finalizeGatewaySession() {
+    if (!gatewaySession) {
+      return;
+    }
+
+    const sessionToClose = gatewaySession;
+    gatewaySession = null;
+
+    await closeGatewaySession(sessionToClose.session_id, sessionToClose.resume_token);
+  }
+
   ws.on('message', async (rawMessage) => {
     const text = rawMessage.toString();
     let message;
@@ -299,8 +310,7 @@ wss.on('connection', (ws) => {
         const diagnosticError = buildSshLaunchDiagnostics(error, username);
         console.error(diagnosticError);
         ws.send(JSON.stringify({ type: 'error', payload: diagnosticError }));
-        await closeGatewaySession(gatewaySession && gatewaySession.session_id, gatewaySession && gatewaySession.resume_token);
-        gatewaySession = null;
+        await finalizeGatewaySession();
         return;
       }
 
@@ -313,8 +323,7 @@ wss.on('connection', (ws) => {
           type: 'output',
           payload: `\\r\\n\\r\\n[SSH session ended with code ${exitCode}]\\r\\n`,
         }));
-        await closeGatewaySession(gatewaySession && gatewaySession.session_id, gatewaySession && gatewaySession.resume_token);
-        gatewaySession = null;
+        await finalizeGatewaySession();
         ws.close();
       });
 
@@ -341,8 +350,7 @@ wss.on('connection', (ws) => {
       shell = null;
     }
 
-    await closeGatewaySession(gatewaySession && gatewaySession.session_id, gatewaySession && gatewaySession.resume_token);
-    gatewaySession = null;
+    await finalizeGatewaySession();
   });
 });
 
