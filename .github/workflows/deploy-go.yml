@@ -26,6 +26,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Clear Go module cache
+        run: rm -rf ~/go/pkg/mod
+
       - uses: actions/setup-go@v5
         with:
           go-version-file: deploy/go.mod

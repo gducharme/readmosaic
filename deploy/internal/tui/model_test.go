@@ -719,6 +719,81 @@ func TestArchiveUserStartsInLanguageMenu(t *testing.T) {
 	}
 }
 
+func TestArchiveFlowStartsInLanguageMenuForReadUser(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "en"), 0o755); err != nil {
+		t.Fatalf("mkdir en: %v", err)
+	}
+	t.Setenv(archiveRootEnvVar, root)
+	t.Setenv(archiveSeedEnvVar, "false")
+
+	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: "read", Flow: "archive"})
+	if m.screen != ScreenArchiveLanguage {
+		t.Fatalf("expected archive language screen for archive flow, got %v", m.screen)
+	}
+	if !strings.Contains(renderPrompt(m), "[ARCHIVE LANGUAGE #]") {
+		t.Fatalf("expected archive language prompt, got %q", renderPrompt(m))
+	}
+}
+
+func TestArchiveFlowNormalizationStartsForReadUser(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "en"), 0o755); err != nil {
+		t.Fatalf("mkdir en: %v", err)
+	}
+	t.Setenv(archiveRootEnvVar, root)
+	t.Setenv(archiveSeedEnvVar, "false")
+
+	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: "read", Flow: " ARCHIVE "})
+	if m.screen != ScreenArchiveLanguage {
+		t.Fatalf("expected normalized archive flow to start archive mode, got %v", m.screen)
+	}
+}
+
+func TestUnknownFlowDoesNotTriggerArchiveForNonArchiveUser(t *testing.T) {
+	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: "read", Flow: "read"})
+	if m.screen != ScreenMOTD {
+		t.Fatalf("expected non-archive flow to preserve default screen, got %v", m.screen)
+	}
+}
+
+func TestArchiveModePrecedenceBetweenUsernameAndFlow(t *testing.T) {
+	t.Run("username archive flow empty", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.Mkdir(filepath.Join(root, "en"), 0o755); err != nil {
+			t.Fatalf("mkdir en: %v", err)
+		}
+		t.Setenv(archiveRootEnvVar, root)
+		t.Setenv(archiveSeedEnvVar, "false")
+
+		m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: "archive", Flow: ""})
+		if m.screen != ScreenArchiveLanguage {
+			t.Fatalf("expected archive username fallback to archive screen, got %v", m.screen)
+		}
+	})
+
+	t.Run("username read flow archive", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.Mkdir(filepath.Join(root, "en"), 0o755); err != nil {
+			t.Fatalf("mkdir en: %v", err)
+		}
+		t.Setenv(archiveRootEnvVar, root)
+		t.Setenv(archiveSeedEnvVar, "false")
+
+		m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: "read", Flow: "archive"})
+		if m.screen != ScreenArchiveLanguage {
+			t.Fatalf("expected explicit archive flow to start archive screen, got %v", m.screen)
+		}
+	})
+}
+
+func TestDefaultBehaviorUnchangedWithoutFlowForNonArchiveUser(t *testing.T) {
+	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: "read"})
+	if m.screen != ScreenMOTD {
+		t.Fatalf("expected default MOTD for non-archive user without flow, got %v", m.screen)
+	}
+}
+
 func TestArchiveEditorPersistsEditsImmediately(t *testing.T) {
 	root := t.TempDir()
 	langDir := filepath.Join(root, "en")

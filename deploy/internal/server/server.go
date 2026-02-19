@@ -223,6 +223,11 @@ func defaultHandler(s ssh.Session) {
 	status = "normal"
 	log.Printf("level=info event=session_runtime_start user=%s route=%s vector=%s selected_flow=%s session=%s", user, route, vector, flow, traceID)
 
+	// Normalize once at runtime boundary before passing flow into the TUI model.
+	// resolveFlow currently returns known values, but this keeps model startup
+	// resilient if future plumbing introduces alternate flow sources.
+	flow = strings.ToLower(strings.TrimSpace(flow))
+
 	width := pty.Window.Width
 	height := pty.Window.Height
 	if width <= 0 {
@@ -248,6 +253,7 @@ func defaultHandler(s ssh.Session) {
 		IsTTY:       true,
 		ThemeBundle: themeBundle,
 		Username:    identity.Username,
+		Flow:        flow,
 	})
 
 	switch flow {
