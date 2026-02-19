@@ -19,7 +19,7 @@ const (
 	defaultIdleTimeout            = 120 * time.Second
 	defaultMaxSessions            = 32
 	defaultRateLimitPerSecond     = 20
-	defaultListenAddr             = ":2222"
+	defaultListenAddr             = "0.0.0.0:8080"
 	defaultRateLimitMaxAttempts   = 30
 	defaultRateLimitBurst         = 10
 	defaultRateLimitWindow        = time.Minute
