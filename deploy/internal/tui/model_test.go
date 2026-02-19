@@ -710,10 +710,10 @@ func TestArchiveUserStartsInLanguageMenu(t *testing.T) {
 		t.Fatalf("expected archive language screen, got %v", m.screen)
 	}
 	view := renderViewport(m)
-	if !strings.Contains(view, "en") || !strings.Contains(view, "ar") {
-		t.Fatalf("expected normalized language codes, got: %q", view)
+	if !strings.Contains(view, "English (en)") || !strings.Contains(view, "العربية (ar)") {
+		t.Fatalf("expected autonym + code labels, got: %q", view)
 	}
-	expectedLine := "1) ar -> " + filepath.Join(root, "ar")
+	expectedLine := "1) العربية (ar) -> " + filepath.Join(root, "ar")
 	if !strings.Contains(view, expectedLine) {
 		t.Fatalf("expected explicit menu line %q, got: %q", expectedLine, view)
 	}
@@ -921,5 +921,34 @@ func TestArchiveContainmentRejectsSymlinkEscape(t *testing.T) {
 	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: "archive"})
 	if m.isPathInsideArchiveRoot(linkPath) {
 		t.Fatalf("symlink escaping archive root should be rejected")
+	}
+}
+
+func TestArchivePersistRejectsOversizedBuffer(t *testing.T) {
+	root := t.TempDir()
+	langDir := filepath.Join(root, "en")
+	if err := os.MkdirAll(langDir, 0o755); err != nil {
+		t.Fatalf("mkdir en: %v", err)
+	}
+	filePath := filepath.Join(langDir, "001-Intro")
+	if err := os.WriteFile(filePath, []byte("seed"), 0o600); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	t.Setenv(archiveRootEnvVar, root)
+	t.Setenv(archiveSeedEnvVar, "false")
+
+	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: "archive"})
+	m.archiveEditPath = filePath
+	m.archiveEditorBuffer = strings.Repeat("x", maxArchiveFileBytes+1)
+	m.persistArchiveEdit()
+	if !strings.Contains(m.archiveStatus, "exceeds max size") {
+		t.Fatalf("expected oversize error, got %q", m.archiveStatus)
+	}
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	if string(content) != "seed" {
+		t.Fatalf("oversize write should not mutate file, got %q", string(content))
 	}
 }

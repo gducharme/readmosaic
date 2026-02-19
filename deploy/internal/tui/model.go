@@ -145,6 +145,7 @@ type Options struct {
 type archiveLanguage struct {
 	DirName     string
 	DisplayCode string
+	DisplayName string
 	Path        string
 	IsRTL       bool
 }
@@ -433,8 +434,9 @@ func (m *Model) loadArchiveLanguages() {
 			continue
 		}
 		dirName := entry.Name()
-		display := archiveLanguageCode(dirName)
-		langs = append(langs, archiveLanguage{DirName: dirName, DisplayCode: display, Path: filepath.Join(m.archiveRoot, dirName), IsRTL: isRTLLanguage(display)})
+		display := archiveDirectoryToLanguageCode(dirName)
+		menuName := archiveLanguageMenuName(display, dirName)
+		langs = append(langs, archiveLanguage{DirName: dirName, DisplayCode: display, DisplayName: menuName, Path: filepath.Join(m.archiveRoot, dirName), IsRTL: isRTLLanguage(display)})
 	}
 	sort.Slice(langs, func(i, j int) bool {
 		return strings.ToLower(langs[i].DirName) < strings.ToLower(langs[j].DirName)
@@ -443,7 +445,7 @@ func (m *Model) loadArchiveLanguages() {
 	m.archiveStatus = ""
 }
 
-func archiveLanguageCode(dirName string) string {
+func archiveDirectoryToLanguageCode(dirName string) string {
 	normalized := strings.TrimSpace(dirName)
 	if normalized == "" {
 		return "und"
@@ -467,6 +469,30 @@ func archiveLanguageCode(dirName string) string {
 	return normalized
 }
 
+func archiveLanguageAutonym(code string) string {
+	base := strings.ToLower(strings.Split(strings.TrimSpace(code), "-")[0])
+	autonyms := map[string]string{
+		"en": "English",
+		"fr": "Français",
+		"ar": "العربية",
+	}
+	if name, ok := autonyms[base]; ok {
+		return name
+	}
+	if base == "" {
+		return code
+	}
+	return strings.ToUpper(base)
+}
+
+func archiveLanguageMenuName(code, dirName string) string {
+	autonym := archiveLanguageAutonym(code)
+	if strings.EqualFold(strings.TrimSpace(dirName), strings.TrimSpace(code)) {
+		return fmt.Sprintf("%s (%s)", autonym, code)
+	}
+	return fmt.Sprintf("%s (%s · dir: %s)", autonym, code, dirName)
+}
+
 func isRTLLanguage(code string) bool {
 	base := strings.ToLower(strings.Split(strings.TrimSpace(code), "-")[0])
 	switch base {
@@ -486,7 +512,7 @@ func (m *Model) renderArchiveLanguageMenu() {
 		lines = append(lines, "", "No language directories found.")
 	} else {
 		for idx, lang := range m.archiveLanguages {
-			lines = append(lines, fmt.Sprintf("%d) %s -> %s", idx+1, lang.DisplayCode, filepath.Join(m.archiveRoot, lang.DirName)))
+			lines = append(lines, fmt.Sprintf("%d) %s -> %s", idx+1, lang.DisplayName, filepath.Join(m.archiveRoot, lang.DirName)))
 		}
 	}
 	lines = append(lines, "", "Type language number then Enter.")
@@ -581,7 +607,7 @@ func (m *Model) isPathInsideArchiveRoot(candidate string) bool {
 
 func (m *Model) renderArchiveFileMenu() {
 	lang := m.archiveLanguages[m.archiveLanguageIdx]
-	lines := []string{fmt.Sprintf("ARCHIVE LANGUAGE: %s (%s)", lang.DirName, lang.DisplayCode)}
+	lines := []string{fmt.Sprintf("ARCHIVE LANGUAGE: %s", lang.DisplayName)}
 	if m.archiveStatus != "" {
 		lines = append(lines, "WARNING: "+m.archiveStatus)
 	}
@@ -665,7 +691,7 @@ func (m *Model) renderArchiveEditor() {
 	if lang.IsRTL {
 		dir = "RTL"
 	}
-	lines := []string{fmt.Sprintf("ARCHIVE EDITOR // %s", file.Name), fmt.Sprintf("Language: %s (%s) [%s]", lang.DirName, lang.DisplayCode, dir), "Append/backspace/newline editing only. No cursor navigation.", "Edits save immediately.", "Esc returns to file list.", ""}
+	lines := []string{fmt.Sprintf("ARCHIVE EDITOR // %s", file.Name), fmt.Sprintf("Language: %s [%s]", lang.DisplayName, dir), "Append/backspace/newline editing only. No cursor navigation.", "Edits save immediately.", "Esc returns to file list.", ""}
 	if m.archiveStatus != "" {
 		lines = append(lines, "WARNING: "+m.archiveStatus, "")
 	}
@@ -723,13 +749,24 @@ func (m *Model) persistArchiveEdit() {
 		m.archiveStatus = "Save failed: refusing to write outside archive root"
 		return
 	}
+	payload := []byte(m.archiveEditorBuffer)
+	if len(payload) > maxArchiveFileBytes {
+		m.archiveStatus = fmt.Sprintf("Save failed: content exceeds max size (%d bytes > %d)", len(payload), maxArchiveFileBytes)
+		return
+	}
+	info, err := os.Stat(clean)
+	if err != nil {
+		m.archiveStatus = fmt.Sprintf("Save failed: %v", err)
+		return
+	}
 	tmpFile, err := os.CreateTemp(filepath.Dir(clean), filepath.Base(clean)+".tmp-*")
 	if err != nil {
 		m.archiveStatus = fmt.Sprintf("Save failed: %v", err)
 		return
 	}
+	_ = tmpFile.Chmod(info.Mode().Perm())
 	tmpPath := tmpFile.Name()
-	if _, err := tmpFile.Write([]byte(m.archiveEditorBuffer)); err != nil {
+	if _, err := tmpFile.Write(payload); err != nil {
 		_ = tmpFile.Close()
 		_ = os.Remove(tmpPath)
 		m.archiveStatus = fmt.Sprintf("Save failed: %v", err)
