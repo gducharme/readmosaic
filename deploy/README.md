@@ -71,6 +71,11 @@ These are read by `internal/config.LoadFromEnv()`:
 - `RATE_LIMIT_ENABLED` (default `true`)
 - `RATE_LIMIT_TRUST_PROXY_HEADERS` (default `false`)
 
+### Gateway SSH verification controls
+
+- `GATEWAY_SSH_STRICT_HOST_KEY_CHECKING` (default `accept-new` for local dev; set `yes` in production)
+- `GATEWAY_SSH_KNOWN_HOSTS` (default `/tmp/gateway_known_hosts`; mount a managed file in production)
+
 ### Optional app-side Neo4j client config
 
 Set all 3 together or leave unset:
