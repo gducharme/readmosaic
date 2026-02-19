@@ -143,7 +143,7 @@ type Options struct {
 	TypewriterStep int
 	Username       string
 	// Flow selects the startup UI flow (e.g. "archive").
-	Flow           string
+	Flow string
 }
 
 type archiveLanguage struct {
