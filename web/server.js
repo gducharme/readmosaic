@@ -9,6 +9,8 @@ const sshPort = process.env.SSH_PORT || '2222';
 const gatewayBaseUrl = (process.env.GATEWAY_BASE_URL || 'http://127.0.0.1:8080').replace(/\/$/, '');
 const gatewayTargetHost = process.env.GATEWAY_TARGET_HOST || sshHost;
 const gatewayTargetPort = Number(process.env.GATEWAY_TARGET_PORT || sshPort || 22);
+const gatewayFatalStatuses = new Set([401, 403, 404, 410]);
+const maxGatewayOperationFailures = 5;
 
 function buildGatewayBaseUrlCandidates(baseUrl) {
   const candidates = [baseUrl];
@@ -206,7 +208,9 @@ async function streamGatewayOutput(session, ws) {
 
   try {
     await reader.cancel();
-  } catch {
+  } catch (error) {
+    const reason = error && error.message ? error.message : 'unknown error';
+    console.debug(`[gateway] output stream cancel failed for session ${session.session_id}: ${reason}`);
   }
 
 }
@@ -254,6 +258,42 @@ function buildGatewayIoDiagnostics(error, username) {
   return `Gateway terminal I/O failed: ${reason}. Diagnostics: ${diagnostics.join(', ')}`;
 }
 
+function extractGatewayErrorMessage(payload) {
+  if (!payload || typeof payload !== 'object') {
+    return '';
+  }
+
+  if (payload.error && typeof payload.error.message === 'string') {
+    return payload.error.message;
+  }
+
+  if (typeof payload.message === 'string') {
+    return payload.message;
+  }
+
+  return '';
+}
+
+async function parseGatewayErrorResponse(response, fallbackMessage) {
+  let payload;
+  try {
+    payload = await response.json();
+  } catch {
+    payload = null;
+  }
+
+  const structured = extractGatewayErrorMessage(payload);
+  if (structured) {
+    return structured;
+  }
+
+  return fallbackMessage;
+}
+
+function isFatalGatewayStatus(status) {
+  return gatewayFatalStatuses.has(status);
+}
+
 app.use(express.static(`${__dirname}/public`));
 
 const server = http.createServer(app);
@@ -262,22 +302,69 @@ const wss = new WebSocket.Server({ server, path: '/terminal' });
 wss.on('connection', (ws) => {
   let gatewaySession;
   let outputReaderPromise = null;
+  let finalizePromise = null;
+  let gatewayFailureCount = 0;
+  let lastGatewayErrorKey = '';
+  let lastGatewayErrorRepeat = 0;
 
   async function finalizeGatewaySession() {
-    if (!gatewaySession) {
+    if (finalizePromise) {
+      return finalizePromise;
+    }
+
+    finalizePromise = (async () => {
+      const sessionToClose = gatewaySession;
+      gatewaySession = null;
+
+      if (sessionToClose) {
+        await closeGatewaySession(sessionToClose.session_id, sessionToClose.resume_token);
+      }
+      if (outputReaderPromise) {
+        try {
+          await outputReaderPromise;
+        } catch {
+        }
+        outputReaderPromise = null;
+      }
+    })();
+
+    return finalizePromise;
+  }
+
+  function noteGatewayFailure(errorKey) {
+    gatewayFailureCount += 1;
+    if (errorKey === lastGatewayErrorKey) {
+      lastGatewayErrorRepeat += 1;
       return;
     }
 
-    const sessionToClose = gatewaySession;
-    gatewaySession = null;
+    lastGatewayErrorKey = errorKey;
+    lastGatewayErrorRepeat = 1;
+  }
 
-    await closeGatewaySession(sessionToClose.session_id, sessionToClose.resume_token);
-    if (outputReaderPromise) {
-      try {
-        await outputReaderPromise;
-      } catch {
+  function resetGatewayFailureTracking() {
+    gatewayFailureCount = 0;
+    lastGatewayErrorKey = '';
+    lastGatewayErrorRepeat = 0;
+  }
+
+  async function handleGatewayActionFailure(response, actionLabel, fallbackMessage) {
+    const message = await parseGatewayErrorResponse(response, fallbackMessage);
+    const errorKey = `${actionLabel}:${response.status}:${message}`;
+    noteGatewayFailure(errorKey);
+
+    if (ws.readyState === WebSocket.OPEN && (lastGatewayErrorRepeat <= 3 || lastGatewayErrorRepeat % 10 === 0)) {
+      ws.send(JSON.stringify({ type: 'error', payload: `${actionLabel} failed: ${message} (HTTP ${response.status})` }));
+    }
+
+    if (isFatalGatewayStatus(response.status) || gatewayFailureCount >= maxGatewayOperationFailures) {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'error', payload: 'Gateway session is no longer valid; closing terminal session.' }));
       }
-      outputReaderPromise = null;
+      await finalizeGatewaySession();
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.close();
+      }
     }
   }
 
@@ -312,6 +399,7 @@ wss.on('connection', (ws) => {
         return;
       }
 
+      resetGatewayFailureTracking();
       outputReaderPromise = streamGatewayOutput(gatewaySession, ws);
       return;
     }
@@ -329,7 +417,9 @@ wss.on('connection', (ws) => {
         });
 
         if (!response.ok) {
-          ws.send(JSON.stringify({ type: 'error', payload: `Gateway rejected terminal input: HTTP ${response.status}` }));
+          await handleGatewayActionFailure(response, 'Gateway terminal input', 'gateway rejected terminal input');
+        } else {
+          resetGatewayFailureTracking();
         }
       } catch (error) {
         const diagnosticError = buildGatewayIoDiagnostics(error, gatewaySession.user || 'unknown');
@@ -353,7 +443,9 @@ wss.on('connection', (ws) => {
           });
 
           if (!response.ok) {
-            ws.send(JSON.stringify({ type: 'error', payload: `Gateway rejected resize request: HTTP ${response.status}` }));
+            await handleGatewayActionFailure(response, 'Gateway resize', 'gateway rejected resize request');
+          } else {
+            resetGatewayFailureTracking();
           }
         } catch (error) {
           const diagnosticError = buildGatewayIoDiagnostics(error, gatewaySession.user || 'unknown');
