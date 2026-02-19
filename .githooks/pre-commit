@@ -1,0 +1,12 @@
+#!/bin/sh
+set -e
+
+cd "$(dirname "$0")/../deploy"
+
+bad="$(gofmt -l ./cmd ./internal ./third_party)"
+if [ -n "$bad" ]; then
+  echo "gofmt needed on:"
+  echo "$bad"
+  echo "Run: (cd deploy && gofmt -w ./cmd ./internal ./third_party)"
+  exit 1
+fi

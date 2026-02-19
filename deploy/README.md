@@ -137,6 +137,24 @@ make logs         # tail app logs
 make docker-test  # deterministic image smoke check with required key/env
 ```
 
+## Git pre-commit hook (gofmt check)
+
+A repo-managed pre-commit hook is available at `../.githooks/pre-commit` to enforce formatting in this Go module.
+
+Enable it once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+The hook runs:
+
+```bash
+cd deploy && gofmt -l ./cmd ./internal ./third_party
+```
+
+and blocks commits when formatting is needed.
+
 ## Healthcheck and logging strategy
 
 - App healthcheck: TCP probe (`nc -z 127.0.0.1 2222`) in container.
