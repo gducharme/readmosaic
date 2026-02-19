@@ -185,7 +185,7 @@ func TestUnknownSessionAndTokenReturn404(t *testing.T) {
 	h := NewHandler(mustNewService(t, &fakeLauncher{}, &fakeStore{})).Routes()
 	meta := openSession(t, h)
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, authedRequest(http.MethodDelete, "/gateway/sessions/nope", meta.ResumeToken, ""))
+	h.ServeHTTP(rec, authedRequest(http.MethodDelete, "/gateway/sessions/0123456789abcdef0123456789abcdef", meta.ResumeToken, ""))
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("close unknown status=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -252,6 +252,47 @@ func TestExpiredTokenUnauthorized(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, authedRequest(http.MethodPost, "/gateway/sessions/"+meta.SessionID+"/stdin", meta.ResumeToken, `{"data":"`+payload+`"}`))
 	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDeleteRequiresAuthorization(t *testing.T) {
+	h := NewHandler(mustNewService(t, &fakeLauncher{}, &fakeStore{})).Routes()
+	meta := openSession(t, h)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/gateway/sessions/"+meta.SessionID, nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestInvalidSessionIDRejected(t *testing.T) {
+	h := NewHandler(mustNewService(t, &fakeLauncher{}, &fakeStore{})).Routes()
+	meta := openSession(t, h)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, authedRequest(http.MethodPost, "/gateway/sessions/not-hex/stdin", meta.ResumeToken, `{"data":""}`))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestStdinRateLimited(t *testing.T) {
+	svc := mustNewService(t, &fakeLauncher{}, &fakeStore{})
+	fixed := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return fixed }
+	h := NewHandler(svc).Routes()
+	meta := openSession(t, h)
+	chunk := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("a", 64*1024)))
+	for i := 0; i < 4; i++ {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, authedRequest(http.MethodPost, "/gateway/sessions/"+meta.SessionID+"/stdin", meta.ResumeToken, `{"data":"`+chunk+`"}`))
+		if rec.Code != http.StatusAccepted {
+			t.Fatalf("i=%d status=%d body=%s", i, rec.Code, rec.Body.String())
+		}
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, authedRequest(http.MethodPost, "/gateway/sessions/"+meta.SessionID+"/stdin", meta.ResumeToken, `{"data":"`+chunk+`"}`))
+	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }

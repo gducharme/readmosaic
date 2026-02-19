@@ -29,11 +29,14 @@ var (
 )
 
 const (
-	sessionTokenTTL    = 12 * time.Hour
-	sessionIdleLimit   = 30 * time.Minute
-	minSecretBytes     = 32
-	envGatewayHMACKey  = "GATEWAY_HMAC_SECRET"
-	envGatewayHostList = "GATEWAY_HOST_ALLOWLIST"
+	sessionTokenTTL        = 12 * time.Hour
+	sessionIdleLimit       = 30 * time.Minute
+	minSecretBytes         = 32
+	envGatewayHMACKey      = "GATEWAY_HMAC_SECRET"
+	envGatewayHostList     = "GATEWAY_HOST_ALLOWLIST"
+	envGatewayEnv          = "GATEWAY_ENV"
+	defaultGatewayEnv      = "development"
+	maxStdinBytesPerSecond = 256 * 1024
 )
 
 type SessionLimits struct {
@@ -82,6 +85,7 @@ type Service struct {
 	now           func() time.Time
 	secret        []byte
 	hostAllowlist []string
+	environment   string
 
 	mu       sync.RWMutex
 	sessions map[string]*sessionState
@@ -89,9 +93,11 @@ type Service struct {
 }
 
 type sessionState struct {
-	meta   SessionMetadata
-	proc   Process
-	cancel context.CancelFunc
+	meta             SessionMetadata
+	proc             Process
+	cancel           context.CancelFunc
+	writeWindowStart time.Time
+	bytesInWindow    int
 }
 
 func NewService(launcher Launcher, store MetadataStore) (*Service, error) {
@@ -100,6 +106,13 @@ func NewService(launcher Launcher, store MetadataStore) (*Service, error) {
 		return nil, fmt.Errorf("%s must be set to at least %d bytes", envGatewayHMACKey, minSecretBytes)
 	}
 	allow := parseHostAllowlist(os.Getenv(envGatewayHostList))
+	env := strings.ToLower(strings.TrimSpace(os.Getenv(envGatewayEnv)))
+	if env == "" {
+		env = defaultGatewayEnv
+	}
+	if env == "production" && len(allow) == 0 {
+		return nil, fmt.Errorf("%s must be set in production", envGatewayHostList)
+	}
 	return NewServiceWithSecret(launcher, store, []byte(secret), allow)
 }
 
@@ -113,6 +126,7 @@ func NewServiceWithSecret(launcher Launcher, store MetadataStore, secret []byte,
 		now:           time.Now,
 		secret:        append([]byte(nil), secret...),
 		hostAllowlist: hostAllowlist,
+		environment:   defaultGatewayEnv,
 		sessions:      map[string]*sessionState{},
 		tokens:        map[string]string{},
 	}, nil
@@ -156,7 +170,7 @@ func (s *Service) OpenSession(ctx context.Context, req OpenSessionRequest) (Sess
 		cancel()
 		return SessionMetadata{}, mapLaunchError(err)
 	}
-	state := &sessionState{meta: meta, proc: proc, cancel: cancel}
+	state := &sessionState{meta: meta, proc: proc, cancel: cancel, writeWindowStart: now}
 
 	s.mu.Lock()
 	s.sessions[sessionID] = state
@@ -220,6 +234,9 @@ func (s *Service) ResumeSession(token string) (SessionMetadata, error) {
 func (s *Service) WriteStdin(sessionID string, token string, payload []byte) error {
 	st, err := s.authorize(sessionID, token)
 	if err != nil {
+		return err
+	}
+	if err := s.checkWriteBudget(sessionID, len(payload)); err != nil {
 		return err
 	}
 	if _, err := st.proc.Write(payload); err != nil {
@@ -305,6 +322,25 @@ func (s *Service) authorize(sessionID string, token string) (*sessionState, erro
 		return nil, ErrSessionExpired
 	}
 	return st, nil
+}
+
+func (s *Service) checkWriteBudget(sessionID string, bytes int) error {
+	now := s.now().UTC()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, ok := s.sessions[sessionID]
+	if !ok {
+		return ErrSessionNotFound
+	}
+	if st.writeWindowStart.IsZero() || now.Sub(st.writeWindowStart) >= time.Second {
+		st.writeWindowStart = now
+		st.bytesInWindow = 0
+	}
+	if st.bytesInWindow+bytes > maxStdinBytesPerSecond {
+		return &FriendlyError{Code: "STDIN_RATE_LIMITED", Message: "stdin throughput limit exceeded", Cause: nil}
+	}
+	st.bytesInWindow += bytes
+	return nil
 }
 
 func (s *Service) touchSession(sessionID string) {

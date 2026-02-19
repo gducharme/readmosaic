@@ -6,6 +6,9 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"regexp"
+var validSessionIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
+
 	"strconv"
 	"strings"
 )
@@ -74,6 +77,10 @@ func bearerToken(r *http.Request) (string, bool) {
 	return token, true
 }
 
+	if !validSessionIDPattern.MatchString(sid) {
+		writeErr(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid session id format")
+		return
+	}
 	if errors.Is(err, ErrUnauthorized) {
 		writeErr(w, http.StatusForbidden, "FORBIDDEN", "session token does not authorize this action")
 		return
@@ -192,7 +199,9 @@ func decodeJSONBody(w http.ResponseWriter, r *http.Request, maxBytes int64, targ
 			writeErr(w, http.StatusBadRequest, "BAD_JSON", "request contains unknown fields")
 			return err
 		}
-		if strings.Contains(err.Error(), "http: request body too large") {
+		if friendly.Code == "STDIN_RATE_LIMITED" {
+			status = http.StatusTooManyRequests
+		} else if strings.HasPrefix(friendly.Code, "SPAWN_") || friendly.Code == "PERSISTENCE_FAILED" {
 			writeErr(w, http.StatusRequestEntityTooLarge, "BODY_TOO_LARGE", "request body exceeds max size")
 			return err
 		}
