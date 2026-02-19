@@ -204,6 +204,11 @@ async function streamGatewayOutput(session, ws) {
     }
   }
 
+  try {
+    await reader.cancel();
+  } catch {
+  }
+
 }
 
 async function closeGatewaySession(sessionId, resumeToken) {
@@ -314,7 +319,7 @@ wss.on('connection', (ws) => {
     if (message.type === 'input' && gatewaySession) {
       const payload = Buffer.from(String(message.payload || ''), 'utf8').toString('base64');
       try {
-        await fetchGateway(`/gateway/sessions/${encodeURIComponent(gatewaySession.session_id)}/stdin`, {
+        const response = await fetchGateway(`/gateway/sessions/${encodeURIComponent(gatewaySession.session_id)}/stdin`, {
           method: 'POST',
           headers: {
             Authorization: `Bearer ${gatewaySession.resume_token}`,
@@ -322,6 +327,10 @@ wss.on('connection', (ws) => {
           },
           body: JSON.stringify({ data: payload }),
         });
+
+        if (!response.ok) {
+          ws.send(JSON.stringify({ type: 'error', payload: `Gateway rejected terminal input: HTTP ${response.status}` }));
+        }
       } catch (error) {
         const diagnosticError = buildGatewayIoDiagnostics(error, gatewaySession.user || 'unknown');
         ws.send(JSON.stringify({ type: 'error', payload: diagnosticError }));
@@ -334,7 +343,7 @@ wss.on('connection', (ws) => {
       const rows = Number(message.rows);
       if (Number.isInteger(cols) && Number.isInteger(rows) && cols > 0 && rows > 0) {
         try {
-          await fetchGateway(`/gateway/sessions/${encodeURIComponent(gatewaySession.session_id)}/resize`, {
+          const response = await fetchGateway(`/gateway/sessions/${encodeURIComponent(gatewaySession.session_id)}/resize`, {
             method: 'POST',
             headers: {
               Authorization: `Bearer ${gatewaySession.resume_token}`,
@@ -342,6 +351,10 @@ wss.on('connection', (ws) => {
             },
             body: JSON.stringify({ cols, rows }),
           });
+
+          if (!response.ok) {
+            ws.send(JSON.stringify({ type: 'error', payload: `Gateway rejected resize request: HTTP ${response.status}` }));
+          }
         } catch (error) {
           const diagnosticError = buildGatewayIoDiagnostics(error, gatewaySession.user || 'unknown');
           ws.send(JSON.stringify({ type: 'error', payload: diagnosticError }));
@@ -351,6 +364,10 @@ wss.on('connection', (ws) => {
   });
 
   ws.on('close', async () => {
+    await finalizeGatewaySession();
+  });
+
+  ws.on('error', async () => {
     await finalizeGatewaySession();
   });
 });
