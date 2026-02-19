@@ -28,8 +28,59 @@ function shellEscape(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
 }
 
+function buildGatewayBaseUrlCandidates(baseUrl) {
+  const candidates = [baseUrl];
+
+  let parsed;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    return candidates;
+  }
+
+  if (parsed.hostname === '127.0.0.1') {
+    parsed.hostname = 'localhost';
+    candidates.push(parsed.toString().replace(/\/$/, ''));
+  } else if (parsed.hostname === 'localhost') {
+    parsed.hostname = '127.0.0.1';
+    candidates.push(parsed.toString().replace(/\/$/, ''));
+  }
+
+  return candidates;
+}
+
+function describeGatewayFetchError(error) {
+  if (!error) {
+    return 'failed to contact gateway';
+  }
+
+  if (error.cause && error.cause.code) {
+    return `${error.message} (${error.cause.code})`;
+  }
+
+  return error.message || 'failed to contact gateway';
+}
+
+async function fetchGateway(pathname, init) {
+  const attempts = [];
+  const baseUrlCandidates = buildGatewayBaseUrlCandidates(gatewayBaseUrl);
+
+  for (const baseUrlCandidate of baseUrlCandidates) {
+    const url = `${baseUrlCandidate}${pathname}`;
+
+    try {
+      const response = await fetch(url, init);
+      return response;
+    } catch (error) {
+      attempts.push(`${url}: ${describeGatewayFetchError(error)}`);
+    }
+  }
+
+  throw new Error(`gateway request failed (${attempts.join('; ')})`);
+}
+
 async function openGatewaySession(username) {
-  const response = await fetch(`${gatewayBaseUrl}/gateway/sessions`, {
+  const response = await fetchGateway('/gateway/sessions', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -61,7 +112,7 @@ async function closeGatewaySession(sessionId, resumeToken) {
     return;
   }
 
-  await fetch(`${gatewayBaseUrl}/gateway/sessions/${encodeURIComponent(sessionId)}`, {
+  await fetchGateway(`/gateway/sessions/${encodeURIComponent(sessionId)}`, {
     method: 'DELETE',
     headers: { Authorization: `Bearer ${resumeToken}` },
   });
