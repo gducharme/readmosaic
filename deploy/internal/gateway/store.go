@@ -48,7 +48,7 @@ func (s *FileMetadataStore) ByToken(token string) (SessionMetadata, error) {
 			return meta, nil
 		}
 	}
-	return SessionMetadata{}, errors.New("token not found")
+	return SessionMetadata{}, ErrSessionNotFound
 }
 
 func (s *FileMetadataStore) readLocked() (map[string]SessionMetadata, error) {
@@ -74,5 +74,29 @@ func (s *FileMetadataStore) writeLocked(rows map[string]SessionMetadata) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.path, data, 0o600)
+	dir := filepath.Dir(s.path)
+	tmpFile, err := os.CreateTemp(dir, ".gateway-sessions-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmpFile.Name()
+	if _, err := tmpFile.Write(data); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := tmpFile.Chmod(0o600); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, s.path); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	return nil
 }

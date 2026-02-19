@@ -28,8 +28,7 @@ func (l *SSHLauncher) Launch(ctx context.Context, meta SessionMetadata, command 
 	if sshPath == "" {
 		sshPath = "/usr/bin/ssh"
 	}
-	baseArgs := []string{"-o", "BatchMode=yes", "-p", strconv.Itoa(meta.Port), fmt.Sprintf("%s@%s", meta.User, meta.Host)}
-	baseArgs = append(baseArgs, command...)
+	baseArgs := []string{"-o", "BatchMode=yes", "-p", strconv.Itoa(meta.Port), fmt.Sprintf("%s@%s", meta.User, meta.Host), "--", "bash", "-l"}
 
 	cmdPath := sshPath
 	cmdArgs := baseArgs
@@ -38,7 +37,7 @@ func (l *SSHLauncher) Launch(ctx context.Context, meta SessionMetadata, command 
 		if prlimitPath == "" {
 			prlimitPath = "/usr/bin/prlimit"
 		}
-		args := make([]string, 0, 10)
+		args := make([]string, 0, 12)
 		if meta.Limits.CPUSeconds > 0 {
 			args = append(args, "--cpu="+strconv.Itoa(meta.Limits.CPUSeconds))
 		}
@@ -57,8 +56,8 @@ func (l *SSHLauncher) Launch(ctx context.Context, meta SessionMetadata, command 
 		return nil, err
 	}
 	proc := &sshProcess{cmd: cmd, pty: ptmx, done: make(chan error, 1)}
-	if meta.Limits.MaxDuration > 0 {
-		proc.timer = time.AfterFunc(meta.Limits.MaxDuration, func() {
+	if meta.Limits.MaxDurationSeconds > 0 {
+		proc.timer = time.AfterFunc(time.Duration(meta.Limits.MaxDurationSeconds)*time.Second, func() {
 			_ = proc.Close()
 		})
 	}
@@ -67,6 +66,7 @@ func (l *SSHLauncher) Launch(ctx context.Context, meta SessionMetadata, command 
 		close(proc.done)
 		_ = proc.Close()
 	}()
+	_ = command // intentionally ignored; command is server-fixed for safety.
 	return proc, nil
 }
 

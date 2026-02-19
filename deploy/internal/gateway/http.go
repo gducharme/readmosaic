@@ -4,10 +4,18 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
+)
+
+const (
+	maxOpenBodyBytes   = 16 * 1024
+	maxResumeBodyBytes = 4 * 1024
+	maxResizeBodyBytes = 4 * 1024
+	maxStdinBodyBytes  = 256 * 1024
+	maxStdinBytes      = 64 * 1024
 )
 
 type Handler struct {
@@ -39,13 +47,12 @@ func (h *Handler) openSession(w http.ResponseWriter, r *http.Request) {
 		MemoryBytes uint64            `json:"memory_bytes"`
 		MaxDuration int               `json:"max_duration_seconds"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErr(w, http.StatusBadRequest, "BAD_JSON", "request body must be valid JSON")
+	if err := decodeJSONBody(w, r, maxOpenBodyBytes, &req); err != nil {
 		return
 	}
 	meta, err := h.svc.OpenSession(r.Context(), OpenSessionRequest{
 		User: req.User, Host: req.Host, Port: req.Port, Command: req.Command, Env: req.Env,
-		Limits: SessionLimits{CPUSeconds: req.CPUSeconds, MemoryBytes: req.MemoryBytes, MaxDuration: time.Duration(req.MaxDuration) * time.Second},
+		Limits: SessionLimits{CPUSeconds: req.CPUSeconds, MemoryBytes: req.MemoryBytes, MaxDurationSeconds: req.MaxDuration},
 	})
 	if err != nil {
 		writeMappedErr(w, err)
@@ -62,8 +69,7 @@ func (h *Handler) resumeSession(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ResumeToken string `json:"resume_token"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErr(w, http.StatusBadRequest, "BAD_JSON", "request body must be valid JSON")
+	if err := decodeJSONBody(w, r, maxResumeBodyBytes, &req); err != nil {
 		return
 	}
 	meta, err := h.svc.ResumeSession(req.ResumeToken)
@@ -75,15 +81,19 @@ func (h *Handler) resumeSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) sessionAction(w http.ResponseWriter, r *http.Request) {
-	trimmed := strings.TrimPrefix(r.URL.Path, "/gateway/sessions/")
-	parts := strings.Split(trimmed, "/")
-	if len(parts) == 0 || parts[0] == "" {
+	trimmed := strings.Trim(strings.TrimPrefix(r.URL.Path, "/gateway/sessions/"), "/")
+	if trimmed == "" {
 		writeErr(w, http.StatusBadRequest, "BAD_PATH", "session id is required")
+		return
+	}
+	parts := strings.Split(trimmed, "/")
+	if len(parts) > 2 {
+		writeErr(w, http.StatusNotFound, "NOT_FOUND", "endpoint not found")
 		return
 	}
 	sid := parts[0]
 	action := ""
-	if len(parts) > 1 {
+	if len(parts) == 2 {
 		action = parts[1]
 	}
 	switch {
@@ -97,13 +107,16 @@ func (h *Handler) sessionAction(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Data string `json:"data"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeErr(w, http.StatusBadRequest, "BAD_JSON", "request body must be valid JSON")
+		if err := decodeJSONBody(w, r, maxStdinBodyBytes, &req); err != nil {
 			return
 		}
 		payload, err := base64.StdEncoding.DecodeString(req.Data)
 		if err != nil {
 			writeErr(w, http.StatusBadRequest, "BAD_STDIN", "stdin data must be base64 encoded")
+			return
+		}
+		if len(payload) > maxStdinBytes {
+			writeErr(w, http.StatusRequestEntityTooLarge, "STDIN_TOO_LARGE", "stdin payload exceeds max size")
 			return
 		}
 		if err := h.svc.WriteStdin(sid, payload); err != nil {
@@ -116,8 +129,7 @@ func (h *Handler) sessionAction(w http.ResponseWriter, r *http.Request) {
 			Cols int `json:"cols"`
 			Rows int `json:"rows"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeErr(w, http.StatusBadRequest, "BAD_JSON", "request body must be valid JSON")
+		if err := decodeJSONBody(w, r, maxResizeBodyBytes, &req); err != nil {
 			return
 		}
 		if req.Cols < 1 || req.Rows < 1 || req.Cols > 4096 || req.Rows > 4096 {
@@ -134,19 +146,47 @@ func (h *Handler) sessionAction(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func decodeJSONBody(w http.ResponseWriter, r *http.Request, maxBytes int64, target any) error {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(target); err != nil {
+		var syntaxErr *json.SyntaxError
+		if errors.As(err, &syntaxErr) {
+			writeErr(w, http.StatusBadRequest, "BAD_JSON", "request body must be valid JSON")
+			return err
+		}
+		if strings.Contains(err.Error(), "unknown field") {
+			writeErr(w, http.StatusBadRequest, "BAD_JSON", "request contains unknown fields")
+			return err
+		}
+		if strings.Contains(err.Error(), "http: request body too large") {
+			writeErr(w, http.StatusRequestEntityTooLarge, "BODY_TOO_LARGE", "request body exceeds max size")
+			return err
+		}
+		writeErr(w, http.StatusBadRequest, "BAD_JSON", "request body must be valid JSON")
+		return err
+	}
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		writeErr(w, http.StatusBadRequest, "BAD_JSON", "request body must contain exactly one JSON object")
+		return err
+	}
+	return nil
+}
+
 func writeMappedErr(w http.ResponseWriter, err error) {
 	if errors.Is(err, ErrSessionNotFound) {
 		writeErr(w, http.StatusNotFound, "SESSION_NOT_FOUND", "session could not be found or already closed")
 		return
 	}
 	if errors.Is(err, ErrInvalidRequest) {
-		writeErr(w, http.StatusBadRequest, "INVALID_REQUEST", "request is missing required fields")
+		writeErr(w, http.StatusBadRequest, "INVALID_REQUEST", "request is missing required fields or uses disallowed values")
 		return
 	}
 	var friendly *FriendlyError
 	if errors.As(err, &friendly) {
 		status := http.StatusBadGateway
-		if strings.HasPrefix(friendly.Code, "SPAWN_") {
+		if strings.HasPrefix(friendly.Code, "SPAWN_") || friendly.Code == "PERSISTENCE_FAILED" {
 			status = http.StatusServiceUnavailable
 		}
 		writeErr(w, status, friendly.Code, friendly.Message)
