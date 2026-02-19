@@ -109,6 +109,7 @@ type sshProcess struct {
 	once  sync.Once
 }
 
+func (p *sshProcess) Read(data []byte) (int, error)  { return p.pty.Read(data) }
 func (p *sshProcess) Write(data []byte) (int, error) { return p.pty.Write(data) }
 func (p *sshProcess) Resize(cols, rows uint16) error {
 	return pty.Setsize(p.pty, &pty.Winsize{Cols: cols, Rows: rows})

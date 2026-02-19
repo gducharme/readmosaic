@@ -69,6 +69,7 @@ type SessionMetadata struct {
 }
 
 type Process interface {
+	Read([]byte) (int, error)
 	Write([]byte) (int, error)
 	Resize(cols, rows uint16) error
 	Close() error
@@ -98,6 +99,8 @@ type sessionState struct {
 	cancel           context.CancelFunc
 	writeWindowStart time.Time
 	bytesInWindow    int
+	subscribers      map[int]chan []byte
+	nextSubscriberID int
 }
 
 func NewService(launcher Launcher, store MetadataStore) (*Service, error) {
@@ -170,7 +173,7 @@ func (s *Service) OpenSession(ctx context.Context, req OpenSessionRequest) (Sess
 		cancel()
 		return SessionMetadata{}, mapLaunchError(err)
 	}
-	state := &sessionState{meta: meta, proc: proc, cancel: cancel, writeWindowStart: now}
+	state := &sessionState{meta: meta, proc: proc, cancel: cancel, writeWindowStart: now, subscribers: map[int]chan []byte{}}
 
 	s.mu.Lock()
 	s.sessions[sessionID] = state
@@ -184,7 +187,43 @@ func (s *Service) OpenSession(ctx context.Context, req OpenSessionRequest) (Sess
 		return SessionMetadata{}, &FriendlyError{Code: "PERSISTENCE_FAILED", Message: "session metadata could not be persisted", Cause: err}
 	}
 	go s.watch(sessionID, proc)
+	go s.captureOutput(sessionID, proc)
 	return meta, nil
+}
+
+func (s *Service) SubscribeOutput(sessionID string, token string) (<-chan []byte, func(), error) {
+	if _, err := s.authorize(sessionID, token); err != nil {
+		return nil, nil, err
+	}
+
+	s.mu.Lock()
+	st, ok := s.sessions[sessionID]
+	if !ok {
+		s.mu.Unlock()
+		return nil, nil, ErrSessionNotFound
+	}
+	id := st.nextSubscriberID
+	st.nextSubscriberID++
+	ch := make(chan []byte, 128)
+	st.subscribers[id] = ch
+	s.mu.Unlock()
+
+	var once sync.Once
+	unsubscribe := func() {
+		once.Do(func() {
+			s.mu.Lock()
+			if current, ok := s.sessions[sessionID]; ok {
+				if sub, exists := current.subscribers[id]; exists {
+					delete(current.subscribers, id)
+					close(sub)
+				}
+			}
+			s.mu.Unlock()
+		})
+	}
+
+	s.touchSession(sessionID)
+	return ch, unsubscribe, nil
 }
 
 func (s *Service) ResumeSession(token string) (SessionMetadata, error) {
@@ -287,6 +326,7 @@ func (s *Service) Close(sessionID string, token string) error {
 
 func (s *Service) watch(sessionID string, proc Process) {
 	<-proc.Done()
+	s.closeSubscribers(sessionID)
 	s.mu.Lock()
 	st, ok := s.sessions[sessionID]
 	if !ok {
@@ -302,6 +342,51 @@ func (s *Service) watch(sessionID string, proc Process) {
 	meta.ResumeToken = ""
 	if err := s.store.Upsert(meta); err != nil {
 		log.Printf("level=warn event=gateway_store_upsert_failed session=%s error=%v", meta.SessionID, err)
+	}
+}
+
+func (s *Service) captureOutput(sessionID string, proc Process) {
+	buf := make([]byte, 4096)
+	for {
+		n, err := proc.Read(buf)
+		if n > 0 {
+			chunk := append([]byte(nil), buf[:n]...)
+			s.publishOutput(sessionID, chunk)
+		}
+		if err != nil {
+			s.closeSubscribers(sessionID)
+			return
+		}
+	}
+}
+
+func (s *Service) publishOutput(sessionID string, payload []byte) {
+	s.mu.RLock()
+	st, ok := s.sessions[sessionID]
+	if !ok {
+		s.mu.RUnlock()
+		return
+	}
+	subs := make([]chan []byte, 0, len(st.subscribers))
+	for _, ch := range st.subscribers {
+		subs = append(subs, ch)
+	}
+	s.mu.RUnlock()
+	for _, ch := range subs {
+		ch <- append([]byte(nil), payload...)
+	}
+}
+
+func (s *Service) closeSubscribers(sessionID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, ok := s.sessions[sessionID]
+	if !ok {
+		return
+	}
+	for id, ch := range st.subscribers {
+		close(ch)
+		delete(st.subscribers, id)
 	}
 }
 

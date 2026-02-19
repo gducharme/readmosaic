@@ -92,7 +92,13 @@
       ws.addEventListener('message', (event) => {
         const message = JSON.parse(event.data);
         if (message.type === 'output') {
-          terminal.write(message.payload);
+          if (message.encoding === 'base64') {
+            const binary = atob(message.payload || '');
+            const bytes = Uint8Array.from(binary, (ch) => ch.charCodeAt(0));
+            terminal.write(bytes);
+          } else {
+            terminal.write(message.payload);
+          }
           status.textContent = `Connected as ${username}`;
           return;
         }
