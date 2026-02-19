@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -61,6 +62,12 @@ type statusObserver struct {
 func (o *statusObserver) WriteHeader(status int) {
 	o.status = status
 	o.ResponseWriter.WriteHeader(status)
+}
+
+func (o *statusObserver) Flush() {
+	if flusher, ok := o.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
 }
 
 func (h *Handler) openSession(w http.ResponseWriter, r *http.Request) {
@@ -222,6 +229,42 @@ func (h *Handler) sessionAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.WriteHeader(http.StatusAccepted)
+	case r.Method == http.MethodGet && action == "output":
+		updates, unsubscribe, err := h.svc.SubscribeOutput(sid, token)
+		if err != nil {
+			logGatewayRejection(r, "session_action", "output_subscribe_failed", err.Error())
+			writeMappedErr(w, err)
+			return
+		}
+		defer unsubscribe()
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.WriteHeader(http.StatusOK)
+
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			writeErr(w, http.StatusInternalServerError, "STREAM_UNAVAILABLE", "streaming output is not available")
+			return
+		}
+		flusher.Flush()
+
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case chunk, ok := <-updates:
+				if !ok {
+					return
+				}
+				encoded := base64.StdEncoding.EncodeToString(chunk)
+				if _, err := fmt.Fprintf(w, "event: output\ndata: %s\n\n", encoded); err != nil {
+					return
+				}
+				flusher.Flush()
+			}
+		}
 	default:
 		logGatewayRejection(r, "session_action", "unknown_route", trimmed)
 		writeErr(w, http.StatusNotFound, "NOT_FOUND", "endpoint not found")

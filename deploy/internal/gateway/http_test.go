@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -33,11 +34,20 @@ func (f *fakeStore) ByTokenHash(tokenHash string) (SessionMetadata, error) {
 
 type fakeProc struct {
 	done       chan error
+	reads      chan []byte
 	writes     [][]byte
 	cols, rows uint16
 	closed     bool
 }
 
+func (f *fakeProc) Read(p []byte) (int, error) {
+	chunk, ok := <-f.reads
+	if !ok {
+		return 0, io.EOF
+	}
+	n := copy(p, chunk)
+	return n, nil
+}
 func (f *fakeProc) Write(p []byte) (int, error) {
 	f.writes = append(f.writes, append([]byte(nil), p...))
 	return len(p), nil
@@ -61,7 +71,7 @@ type fakeLauncher struct {
 func (f *fakeLauncher) Launch(_ context.Context, meta SessionMetadata, _ []string, _ map[string]string) (Process, error) {
 	f.lastMeta = meta
 	if f.proc == nil {
-		f.proc = &fakeProc{done: make(chan error, 1)}
+		f.proc = &fakeProc{done: make(chan error, 1), reads: make(chan []byte, 8)}
 	}
 	return f.proc, nil
 }
@@ -319,6 +329,56 @@ func TestStdinRateLimited(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, authedRequest(http.MethodPost, "/gateway/sessions/"+meta.SessionID+"/stdin", meta.ResumeToken, `{"data":"`+chunk+`"}`))
 	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestOutputStreamAuthorized(t *testing.T) {
+	launcher := &fakeLauncher{}
+	handler := NewHandler(mustNewService(t, launcher, &fakeStore{})).Routes()
+	meta := openSession(t, handler)
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	req, err := http.NewRequest(http.MethodGet, ts.URL+"/gateway/sessions/"+meta.SessionID+"/output", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+meta.ResumeToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+
+	launcher.proc.reads <- []byte("\x1b[31mred\x1b[0m")
+	close(launcher.proc.reads)
+
+	buf := make([]byte, 256)
+	n, err := resp.Body.Read(buf)
+	if err != nil && err != io.EOF {
+		t.Fatalf("read: %v", err)
+	}
+	body := string(buf[:n])
+	if !strings.Contains(body, "event: output") {
+		t.Fatalf("missing output event: %s", body)
+	}
+	if !strings.Contains(body, base64.StdEncoding.EncodeToString([]byte("\x1b[31mred\x1b[0m"))) {
+		t.Fatalf("missing base64 payload: %s", body)
+	}
+}
+
+func TestOutputStreamUnauthorized(t *testing.T) {
+	launcher := &fakeLauncher{}
+	h := NewHandler(mustNewService(t, launcher, &fakeStore{})).Routes()
+	meta := openSession(t, h)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, authedRequest(http.MethodGet, "/gateway/sessions/"+meta.SessionID+"/output", "wrong-token", ""))
+	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }

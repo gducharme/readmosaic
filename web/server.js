@@ -143,6 +143,69 @@ function buildGatewayDiagnostics(error) {
   return diagnostics.join(', ');
 }
 
+
+
+async function streamGatewayOutput(session, ws) {
+  if (!session || !session.session_id || !session.resume_token) {
+    return;
+  }
+
+  let response;
+  try {
+    response = await fetchGateway(`/gateway/sessions/${encodeURIComponent(session.session_id)}/output`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${session.resume_token}` },
+    });
+  } catch (error) {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'error', payload: `Unable to stream gateway output: ${describeGatewayFetchError(error)}` }));
+    }
+    return;
+  }
+
+  if (!response.ok || !response.body) {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'error', payload: `Unable to stream gateway output: HTTP ${response.status}` }));
+    }
+    return;
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (ws.readyState === WebSocket.OPEN) {
+    const { done, value } = await reader.read();
+    if (done) {
+      return;
+    }
+    buffer += decoder.decode(value, { stream: true });
+
+    for (;;) {
+      const frameEnd = buffer.indexOf("\n\n");
+      if (frameEnd === -1) {
+        break;
+      }
+      const frame = buffer.slice(0, frameEnd);
+      buffer = buffer.slice(frameEnd + 2);
+      const lines = frame.split("\n");
+      let eventType = '';
+      let data = '';
+      for (const line of lines) {
+        if (line.startsWith('event:')) {
+          eventType = line.slice(6).trim();
+        } else if (line.startsWith('data:')) {
+          data += line.slice(5).trim();
+        }
+      }
+      if (eventType === 'output' && data && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'output', payload: data, encoding: 'base64' }));
+      }
+    }
+  }
+
+}
+
 async function closeGatewaySession(sessionId, resumeToken) {
   if (!sessionId || !resumeToken) {
     return;
@@ -193,6 +256,7 @@ const wss = new WebSocket.Server({ server, path: '/terminal' });
 
 wss.on('connection', (ws) => {
   let gatewaySession;
+  let outputReaderPromise = null;
 
   async function finalizeGatewaySession() {
     if (!gatewaySession) {
@@ -203,6 +267,13 @@ wss.on('connection', (ws) => {
     gatewaySession = null;
 
     await closeGatewaySession(sessionToClose.session_id, sessionToClose.resume_token);
+    if (outputReaderPromise) {
+      try {
+        await outputReaderPromise;
+      } catch {
+      }
+      outputReaderPromise = null;
+    }
   }
 
   ws.on('message', async (rawMessage) => {
@@ -236,23 +307,7 @@ wss.on('connection', (ws) => {
         return;
       }
 
-      ws.send(JSON.stringify({
-        type: 'output',
-        payload: `[Gateway session ${gatewaySession.session_id || 'created'}]\\r\\n`,
-      }));
-
-      if (gatewaySession.gateway_diagnostics && gatewaySession.gateway_diagnostics.attempts) {
-        ws.send(JSON.stringify({
-          type: 'output',
-          payload: `[Gateway diagnostics: ${formatGatewayAttemptDiagnostics(gatewaySession.gateway_diagnostics.attempts)}]\\r\\n`,
-        }));
-      }
-
-      ws.send(JSON.stringify({
-        type: 'output',
-        payload: '[SSH is managed by the gateway; local SSH spawning is disabled.]\\r\\n',
-      }));
-
+      outputReaderPromise = streamGatewayOutput(gatewaySession, ws);
       return;
     }
 
