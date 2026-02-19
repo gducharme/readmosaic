@@ -61,22 +61,57 @@ function describeGatewayFetchError(error) {
   return error.message || 'failed to contact gateway';
 }
 
+function summarizeGatewayRequest(init) {
+  return {
+    method: (init && init.method) || 'GET',
+    hasBody: Boolean(init && init.body),
+    headers: init && init.headers ? Object.keys(init.headers) : [],
+  };
+}
+
+function formatGatewayAttemptDiagnostics(attempts) {
+  if (!Array.isArray(attempts) || attempts.length === 0) {
+    return 'no gateway request attempts recorded';
+  }
+
+  return attempts.map((attempt) => {
+    if (attempt.ok) {
+      return `${attempt.url} -> HTTP ${attempt.status} (${attempt.durationMs}ms)`;
+    }
+
+    return `${attempt.url} -> ERROR ${attempt.error} (${attempt.durationMs}ms)`;
+  }).join('; ');
+}
+
 async function fetchGateway(pathname, init) {
   const attempts = [];
   const baseUrlCandidates = buildGatewayBaseUrlCandidates(gatewayBaseUrl);
+  const requestSummary = summarizeGatewayRequest(init);
+
+  console.log(`[gateway] request ${requestSummary.method} ${pathname} candidates=${baseUrlCandidates.join(',')} body=${requestSummary.hasBody} headers=${requestSummary.headers.join(',') || '(none)'}`);
 
   for (const baseUrlCandidate of baseUrlCandidates) {
     const url = `${baseUrlCandidate}${pathname}`;
+    const startedAt = Date.now();
 
     try {
       const response = await fetch(url, init);
+      const durationMs = Date.now() - startedAt;
+      attempts.push({ url, ok: true, status: response.status, durationMs });
+      console.log(`[gateway] response ${url} status=${response.status} durationMs=${durationMs}`);
+      response.gatewayDiagnostics = { attempts };
       return response;
     } catch (error) {
-      attempts.push(`${url}: ${describeGatewayFetchError(error)}`);
+      const durationMs = Date.now() - startedAt;
+      const errorDescription = describeGatewayFetchError(error);
+      attempts.push({ url, ok: false, error: errorDescription, durationMs });
+      console.error(`[gateway] request failure ${url} durationMs=${durationMs} error=${errorDescription}`);
     }
   }
 
-  throw new Error(`gateway request failed (${attempts.join('; ')})`);
+  const requestError = new Error(`gateway request failed (${formatGatewayAttemptDiagnostics(attempts)})`);
+  requestError.gatewayDiagnostics = { attempts };
+  throw requestError;
 }
 
 async function openGatewaySession(username) {
@@ -104,7 +139,26 @@ async function openGatewaySession(username) {
     throw new Error(message);
   }
 
+  if (payload && response.gatewayDiagnostics) {
+    payload.gateway_diagnostics = response.gatewayDiagnostics;
+  }
+
   return payload;
+}
+
+function buildGatewayDiagnostics(error) {
+  const diagnostics = [
+    `gatewayBaseUrl=${gatewayBaseUrl}`,
+    `gatewayCandidates=${buildGatewayBaseUrlCandidates(gatewayBaseUrl).join(',')}`,
+    `targetHost=${gatewayTargetHost}`,
+    `targetPort=${gatewayTargetPort}`,
+  ];
+
+  if (error && error.gatewayDiagnostics && error.gatewayDiagnostics.attempts) {
+    diagnostics.push(`attempts=${formatGatewayAttemptDiagnostics(error.gatewayDiagnostics.attempts)}`);
+  }
+
+  return diagnostics.join(', ');
 }
 
 async function closeGatewaySession(sessionId, resumeToken) {
@@ -213,7 +267,9 @@ wss.on('connection', (ws) => {
         gatewaySession = await openGatewaySession(username);
       } catch (error) {
         const reason = error && error.message ? error.message : 'failed to contact gateway';
-        ws.send(JSON.stringify({ type: 'error', payload: `Unable to open gateway session: ${reason}` }));
+        const gatewayDiagnostics = buildGatewayDiagnostics(error);
+        console.error(`[gateway] unable to open session for user=${username}: ${reason}; ${gatewayDiagnostics}`);
+        ws.send(JSON.stringify({ type: 'error', payload: `Unable to open gateway session: ${reason}. Diagnostics: ${gatewayDiagnostics}` }));
         return;
       }
 
@@ -225,6 +281,13 @@ wss.on('connection', (ws) => {
           type: 'output',
           payload: `[Gateway session ${gatewaySession.session_id || 'created'}]\\r\\n`,
         }));
+
+        if (gatewaySession.gateway_diagnostics && gatewaySession.gateway_diagnostics.attempts) {
+          ws.send(JSON.stringify({
+            type: 'output',
+            payload: `[Gateway diagnostics: ${formatGatewayAttemptDiagnostics(gatewaySession.gateway_diagnostics.attempts)}]\\r\\n`,
+          }));
+        }
 
         if (launchResult.mode === 'shell-fallback') {
           ws.send(JSON.stringify({
