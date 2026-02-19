@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mosaic SSH Web Terminal</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm/css/xterm.css" />
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0;
+      background: #0b0f14;
+      font-family: Inter, system-ui, sans-serif;
+      color: #e7edf4;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .dialog {
+      border-bottom: 1px solid #202b38;
+      padding: 0.85rem;
+      display: flex;
+      gap: 0.75rem;
+      align-items: center;
+      background: #121922;
+    }
+    .dialog label { font-size: 0.9rem; color: #b9c6d4; }
+    .dialog input {
+      background: #0b0f14;
+      color: #e7edf4;
+      border: 1px solid #2a394b;
+      border-radius: 6px;
+      padding: 0.45rem 0.6rem;
+      min-width: 220px;
+    }
+    .dialog button {
+      border: 0;
+      background: #2f81f7;
+      color: white;
+      padding: 0.5rem 0.8rem;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    #terminal { flex: 1; padding: 0.5rem; }
+    #status { font-size: 0.8rem; color: #94a7bb; }
+  </style>
+</head>
+<body>
+  <div class="dialog">
+    <label for="username">Username</label>
+    <input id="username" placeholder="mosaic" autocomplete="username" />
+    <button id="connect">Connect</button>
+    <span id="status">Not connected</span>
+  </div>
+  <div id="terminal"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/xterm/lib/xterm.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit/lib/xterm-addon-fit.js"></script>
+  <script>
+    const terminal = new Terminal({ cursorBlink: true, fontFamily: 'Menlo, Consolas, monospace' });
+    const fitAddon = new FitAddon.FitAddon();
+    terminal.loadAddon(fitAddon);
+    terminal.open(document.getElementById('terminal'));
+    fitAddon.fit();
+    terminal.writeln('Mosaic SSH web terminal ready. Enter username above and press Connect.');
+
+    const usernameInput = document.getElementById('username');
+    const connectButton = document.getElementById('connect');
+    const status = document.getElementById('status');
+    let ws;
+
+    function connect() {
+      const username = usernameInput.value.trim();
+      if (!username) {
+        status.textContent = 'Username is required';
+        return;
+      }
+
+      ws = new WebSocket(`${window.location.origin.replace('http', 'ws')}/terminal`);
+
+      ws.addEventListener('open', () => {
+        status.textContent = `Connecting as ${username}...`;
+        ws.send(JSON.stringify({ type: 'start', username }));
+        setTimeout(() => {
+          fitAddon.fit();
+          ws.send(JSON.stringify({ type: 'resize', cols: terminal.cols, rows: terminal.rows }));
+        }, 20);
+        terminal.focus();
+      });
+
+      ws.addEventListener('message', (event) => {
+        const message = JSON.parse(event.data);
+        if (message.type === 'output') {
+          terminal.write(message.payload);
+          status.textContent = `Connected as ${username}`;
+          return;
+        }
+
+        if (message.type === 'error') {
+          terminal.writeln(`\r\n${message.payload}\r\n`);
+          status.textContent = message.payload;
+        }
+      });
+
+      ws.addEventListener('close', () => {
+        status.textContent = 'Disconnected';
+      });
+
+      terminal.onData((data) => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'input', payload: data }));
+        }
+      });
+    }
+
+    connectButton.addEventListener('click', connect);
+    usernameInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') connect();
+    });
+
+    window.addEventListener('resize', () => {
+      fitAddon.fit();
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'resize', cols: terminal.cols, rows: terminal.rows }));
+      }
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+{
+  "name": "readmosaic-web-terminal",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Ultra lightweight web terminal for connecting to Mosaic SSH runtime",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "node-pty": "^1.1.0-beta34",
+    "ws": "^8.18.0"
+  }
+}
