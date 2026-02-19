@@ -254,11 +254,7 @@ func defaultHandler(s ssh.Session) {
 	case "vector":
 		model = model.Update(tui.AppendLineMsg{Line: fmt.Sprintf("VECTOR FLOW ACTIVE [%s]", identity.Username)})
 	case "triage":
-		// Archive sessions initialize directly into archive-mode screens; avoid preloading
-		// a triage banner that would immediately be replaced by archive UI content.
-		if strings.EqualFold(identity.Username, "read") {
-			model = model.Update(tui.AppendLineMsg{Line: fmt.Sprintf("TRIAGE FLOW ACTIVE [%s]", identity.Username)})
-		}
+		model = model.Update(tui.AppendLineMsg{Line: fmt.Sprintf("TRIAGE FLOW ACTIVE [%s]", identity.Username)})
 	}
 
 	render := func() {
