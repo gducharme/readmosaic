@@ -10,7 +10,9 @@ const gatewayBaseUrl = (process.env.GATEWAY_BASE_URL || 'http://127.0.0.1:8080')
 const gatewayTargetHost = process.env.GATEWAY_TARGET_HOST || sshHost;
 const gatewayTargetPort = Number(process.env.GATEWAY_TARGET_PORT || sshPort || 22);
 const gatewayFatalStatuses = new Set([401, 403, 404, 410]);
-const maxGatewayOperationFailures = 5;
+const maxGatewayOperationFailures = 8;
+const websocketCloseGraceMs = 1500;
+const outputReaderFinalizeTimeoutMs = 2000;
 
 function buildGatewayBaseUrlCandidates(baseUrl) {
   const candidates = [baseUrl];
@@ -275,16 +277,26 @@ function extractGatewayErrorMessage(payload) {
 }
 
 async function parseGatewayErrorResponse(response, fallbackMessage) {
-  let payload;
+  let rawBody = '';
   try {
-    payload = await response.json();
+    rawBody = await response.text();
   } catch {
-    payload = null;
+    rawBody = '';
   }
 
-  const structured = extractGatewayErrorMessage(payload);
-  if (structured) {
-    return structured;
+  if (rawBody) {
+    try {
+      const payload = JSON.parse(rawBody);
+      const structured = extractGatewayErrorMessage(payload);
+      if (structured) {
+        return structured;
+      }
+    } catch {
+      const compact = rawBody.replace(/\s+/g, ' ').trim();
+      if (compact) {
+        return compact.slice(0, 240);
+      }
+    }
   }
 
   return fallbackMessage;
@@ -298,6 +310,22 @@ app.use(express.static(`${__dirname}/public`));
 
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server, path: '/terminal' });
+
+function closeWebSocketWithFallback(ws) {
+  if (ws.readyState !== WebSocket.OPEN && ws.readyState !== WebSocket.CLOSING) {
+    return;
+  }
+
+  if (ws.readyState === WebSocket.OPEN) {
+    ws.close();
+  }
+
+  setTimeout(() => {
+    if (ws.readyState !== WebSocket.CLOSED) {
+      ws.terminate();
+    }
+  }, websocketCloseGraceMs);
+}
 
 wss.on('connection', (ws) => {
   let gatewaySession;
@@ -321,7 +349,12 @@ wss.on('connection', (ws) => {
       }
       if (outputReaderPromise) {
         try {
-          await outputReaderPromise;
+          await Promise.race([
+            outputReaderPromise,
+            new Promise((resolve) => {
+              setTimeout(resolve, outputReaderFinalizeTimeoutMs);
+            }),
+          ]);
         } catch {
         }
         outputReaderPromise = null;
@@ -350,7 +383,7 @@ wss.on('connection', (ws) => {
 
   async function handleGatewayActionFailure(response, actionLabel, fallbackMessage) {
     const message = await parseGatewayErrorResponse(response, fallbackMessage);
-    const errorKey = `${actionLabel}:${response.status}:${message}`;
+    const errorKey = `${actionLabel}:${response.status}`;
     noteGatewayFailure(errorKey);
 
     if (ws.readyState === WebSocket.OPEN && (lastGatewayErrorRepeat <= 3 || lastGatewayErrorRepeat % 10 === 0)) {
@@ -363,7 +396,7 @@ wss.on('connection', (ws) => {
       }
       await finalizeGatewaySession();
       if (ws.readyState === WebSocket.OPEN) {
-        ws.close();
+        closeWebSocketWithFallback(ws);
       }
     }
   }
