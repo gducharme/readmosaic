@@ -9,6 +9,9 @@ const app = express();
 const port = Number(process.env.WEB_PORT || 3000);
 const sshHost = process.env.SSH_HOST || '127.0.0.1';
 const sshPort = process.env.SSH_PORT || '2222';
+const gatewayBaseUrl = (process.env.GATEWAY_BASE_URL || 'http://127.0.0.1:8080').replace(/\/$/, '');
+const gatewayTargetHost = process.env.GATEWAY_TARGET_HOST || sshHost;
+const gatewayTargetPort = Number(process.env.GATEWAY_TARGET_PORT || sshPort || 22);
 
 const commonSshPaths = ['/usr/bin/ssh', '/bin/ssh', '/usr/local/bin/ssh'];
 const configuredSshPath = process.env.SSH_BIN;
@@ -23,6 +26,45 @@ const shellCwd = homeDirectory && fs.existsSync(homeDirectory)
 
 function shellEscape(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
+async function openGatewaySession(username) {
+  const response = await fetch(`${gatewayBaseUrl}/gateway/sessions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      user: username,
+      host: gatewayTargetHost,
+      port: gatewayTargetPort,
+    }),
+  });
+
+  let payload;
+  try {
+    payload = await response.json();
+  } catch {
+    payload = null;
+  }
+
+  if (!response.ok) {
+    const message = payload && payload.error && payload.error.message
+      ? payload.error.message
+      : `gateway open session failed with status ${response.status}`;
+    throw new Error(message);
+  }
+
+  return payload;
+}
+
+async function closeGatewaySession(sessionId, resumeToken) {
+  if (!sessionId || !resumeToken) {
+    return;
+  }
+
+  await fetch(`${gatewayBaseUrl}/gateway/sessions/${encodeURIComponent(sessionId)}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${resumeToken}` },
+  });
 }
 
 function launchSshPty(username) {
@@ -93,8 +135,9 @@ const wss = new WebSocket.Server({ server, path: '/terminal' });
 
 wss.on('connection', (ws) => {
   let shell;
+  let gatewaySession;
 
-  ws.on('message', (rawMessage) => {
+  ws.on('message', async (rawMessage) => {
     const text = rawMessage.toString();
     let message;
 
@@ -116,19 +159,34 @@ wss.on('connection', (ws) => {
       }
 
       try {
+        gatewaySession = await openGatewaySession(username);
+      } catch (error) {
+        const reason = error && error.message ? error.message : 'failed to contact gateway';
+        ws.send(JSON.stringify({ type: 'error', payload: `Unable to open gateway session: ${reason}` }));
+        return;
+      }
+
+      try {
         const launchResult = launchSshPty(username);
         shell = launchResult.shell;
+
+        ws.send(JSON.stringify({
+          type: 'output',
+          payload: `[Gateway session ${gatewaySession.session_id || 'created'}]\\r\\n`,
+        }));
 
         if (launchResult.mode === 'shell-fallback') {
           ws.send(JSON.stringify({
             type: 'output',
-            payload: '[Direct PTY launch failed; using shell fallback]\r\n',
+            payload: '[Direct PTY launch failed; using shell fallback]\\r\\n',
           }));
         }
       } catch (error) {
         const diagnosticError = buildSshLaunchDiagnostics(error, username);
         console.error(diagnosticError);
         ws.send(JSON.stringify({ type: 'error', payload: diagnosticError }));
+        await closeGatewaySession(gatewaySession && gatewaySession.session_id, gatewaySession && gatewaySession.resume_token);
+        gatewaySession = null;
         return;
       }
 
@@ -136,11 +194,13 @@ wss.on('connection', (ws) => {
         ws.send(JSON.stringify({ type: 'output', payload: data }));
       });
 
-      shell.onExit(({ exitCode }) => {
+      shell.onExit(async ({ exitCode }) => {
         ws.send(JSON.stringify({
           type: 'output',
-          payload: `\r\n\r\n[SSH session ended with code ${exitCode}]\r\n`,
+          payload: `\\r\\n\\r\\n[SSH session ended with code ${exitCode}]\\r\\n`,
         }));
+        await closeGatewaySession(gatewaySession && gatewaySession.session_id, gatewaySession && gatewaySession.resume_token);
+        gatewaySession = null;
         ws.close();
       });
 
@@ -161,17 +221,22 @@ wss.on('connection', (ws) => {
     }
   });
 
-  ws.on('close', () => {
+  ws.on('close', async () => {
     if (shell) {
       shell.kill();
       shell = null;
     }
+
+    await closeGatewaySession(gatewaySession && gatewaySession.session_id, gatewaySession && gatewaySession.resume_token);
+    gatewaySession = null;
   });
 });
 
 server.listen(port, () => {
   console.log(`Web terminal listening on http://0.0.0.0:${port}`);
   console.log(`SSH target: ${sshHost}:${sshPort}`);
+  console.log(`Gateway API: ${gatewayBaseUrl}`);
+  console.log(`Gateway SSH target: ${gatewayTargetHost}:${gatewayTargetPort}`);
   console.log(`SSH binary: ${sshCommand}`);
   console.log(`Shell cwd: ${shellCwd}`);
 });
