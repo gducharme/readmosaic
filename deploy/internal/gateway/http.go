@@ -50,6 +50,10 @@ func (h *Handler) openSession(w http.ResponseWriter, r *http.Request) {
 	if err := decodeJSONBody(w, r, maxOpenBodyBytes, &req); err != nil {
 		return
 	}
+	if req.Port != 0 && (req.Port < 1 || req.Port > 65535) {
+		writeErr(w, http.StatusBadRequest, "INVALID_REQUEST", "port must be between 1 and 65535")
+		return
+	}
 	meta, err := h.svc.OpenSession(r.Context(), OpenSessionRequest{
 		User: req.User, Host: req.Host, Port: req.Port, Command: req.Command, Env: req.Env,
 		Limits: SessionLimits{CPUSeconds: req.CPUSeconds, MemoryBytes: req.MemoryBytes, MaxDurationSeconds: req.MaxDuration},

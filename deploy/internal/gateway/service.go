@@ -89,6 +89,9 @@ func (s *Service) OpenSession(ctx context.Context, req OpenSessionRequest) (Sess
 	if req.Port == 0 {
 		req.Port = 22
 	}
+	if req.Port < 1 || req.Port > 65535 {
+		return SessionMetadata{}, ErrInvalidRequest
+	}
 	started := s.now().UTC()
 	sessionID, err := randomID()
 	if err != nil {
@@ -160,6 +163,12 @@ func (s *Service) WriteStdin(sessionID string, payload []byte) error {
 	if _, err := st.proc.Write(payload); err != nil {
 		return mapLaunchError(err)
 	}
+	lastSeen := s.now().UTC()
+	s.mu.Lock()
+	if current, ok := s.sessions[sessionID]; ok {
+		current.meta.LastSeenAt = lastSeen
+	}
+	s.mu.Unlock()
 	return nil
 }
 
@@ -173,6 +182,12 @@ func (s *Service) Resize(sessionID string, cols, rows uint16) error {
 	if err := st.proc.Resize(cols, rows); err != nil {
 		return mapLaunchError(err)
 	}
+	lastSeen := s.now().UTC()
+	s.mu.Lock()
+	if current, ok := s.sessions[sessionID]; ok {
+		current.meta.LastSeenAt = lastSeen
+	}
+	s.mu.Unlock()
 	return nil
 }
 
@@ -188,7 +203,9 @@ func (s *Service) Close(sessionID string) error {
 		return ErrSessionNotFound
 	}
 	st.cancel()
-	_ = st.proc.Close()
+	if err := st.proc.Close(); err != nil {
+		log.Printf("level=warn event=gateway_process_close_failed session=%s error=%v", sessionID, err)
+	}
 	st.meta.Connected = false
 	st.meta.LastSeenAt = s.now().UTC()
 	if err := s.store.Upsert(st.meta); err != nil {

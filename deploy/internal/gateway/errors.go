@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"errors"
-	"fmt"
 	"os/exec"
 	"strings"
 )
@@ -40,5 +39,5 @@ func mapLaunchError(err error) error {
 	if strings.Contains(err.Error(), "executable file not found") {
 		return &FriendlyError{Code: "SPAWN_BINARY_NOT_FOUND", Message: "Terminal worker binary is missing on server.", Cause: err}
 	}
-	return &FriendlyError{Code: "SESSION_IO_FAILURE", Message: fmt.Sprintf("Terminal session failed: %v", err), Cause: err}
+	return &FriendlyError{Code: "SESSION_IO_FAILURE", Message: "Terminal session I/O failed.", Cause: err}
 }

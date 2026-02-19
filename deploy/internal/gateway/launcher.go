@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -111,6 +110,14 @@ func (p *sshProcess) Close() error {
 		}
 		if p.cmd.Process != nil {
 			_ = p.cmd.Process.Signal(syscall.SIGTERM)
+			go func(proc *os.Process) {
+				select {
+				case <-p.done:
+					return
+				case <-time.After(2 * time.Second):
+					_ = proc.Signal(syscall.SIGKILL)
+				}
+			}(p.cmd.Process)
 		}
 		closeErr = p.pty.Close()
 	})
@@ -119,9 +126,4 @@ func (p *sshProcess) Close() error {
 
 func (p *sshProcess) Done() <-chan error {
 	return p.done
-}
-
-func BuildSSHArgs(user, host string, port int, command []string) []string {
-	args := []string{"-o", "BatchMode=yes", "-p", strconv.Itoa(port), strings.TrimSpace(user) + "@" + strings.TrimSpace(host)}
-	return append(args, command...)
 }

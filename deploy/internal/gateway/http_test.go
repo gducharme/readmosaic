@@ -186,3 +186,15 @@ func TestSessionActionExtraSegmentsRejected(t *testing.T) {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestInvalidPortRejected(t *testing.T) {
+	svc := NewService(&fakeLauncher{}, &fakeStore{})
+	h := NewHandler(svc).Routes()
+	for _, body := range []string{`{"user":"alice","host":"example.com","port":-1}`, `{"user":"alice","host":"example.com","port":70000}`} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/gateway/sessions", bytes.NewBufferString(body)))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("body=%s status=%d resp=%s", body, rec.Code, rec.Body.String())
+		}
+	}
+}
