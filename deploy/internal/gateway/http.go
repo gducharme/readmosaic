@@ -7,11 +7,11 @@ import (
 	"io"
 	"net/http"
 	"regexp"
-var validSessionIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
-
 	"strconv"
 	"strings"
 )
+
+var validSessionIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
 
 const (
 	maxOpenBodyBytes   = 16 * 1024
@@ -40,6 +40,7 @@ func (h *Handler) openSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed")
 		return
 	}
+
 	var req struct {
 		User        string            `json:"user"`
 		Host        string            `json:"host"`
@@ -47,56 +48,30 @@ func (h *Handler) openSession(w http.ResponseWriter, r *http.Request) {
 		Command     []string          `json:"command"`
 		Env         map[string]string `json:"env"`
 		CPUSeconds  int               `json:"cpu_seconds"`
-	token, ok := bearerToken(r)
-	if !ok {
-		writeErr(w, http.StatusUnauthorized, "UNAUTHORIZED", "bearer token is required")
+		MemoryBytes uint64            `json:"memory_bytes"`
+		MaxDuration int               `json:"max_duration_seconds"`
+	}
+	if err := decodeJSONBody(w, r, maxOpenBodyBytes, &req); err != nil {
 		return
 	}
-	// Keep endpoint JSON shape strict even though token moved to Authorization.
-	if err := decodeJSONBody(w, r, maxResumeBodyBytes, &struct{}{}); err != nil {
-		return
-	}
-	meta, err := h.svc.ResumeSession(token)
-	token, ok := bearerToken(r)
-	if !ok {
-		writeErr(w, http.StatusUnauthorized, "UNAUTHORIZED", "bearer token is required")
-		return
-	}
-		if err := h.svc.Close(sid, token); err != nil {
-		if err := h.svc.WriteStdin(sid, token, payload); err != nil {
-		if err := h.svc.Resize(sid, token, uint16(req.Cols), uint16(req.Rows)); err != nil {
-func bearerToken(r *http.Request) (string, bool) {
-	auth := strings.TrimSpace(r.Header.Get("Authorization"))
-	if !strings.HasPrefix(auth, "Bearer ") {
-		return "", false
-	}
-	token := strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
-	if token == "" {
-		return "", false
-	}
-	return token, true
-}
 
-	if !validSessionIDPattern.MatchString(sid) {
-		writeErr(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid session id format")
-		return
-	}
-	if errors.Is(err, ErrUnauthorized) {
-		writeErr(w, http.StatusForbidden, "FORBIDDEN", "session token does not authorize this action")
-		return
-	}
-	if errors.Is(err, ErrSessionExpired) {
-		writeErr(w, http.StatusUnauthorized, "SESSION_EXPIRED", "session token has expired")
-		return
-	}
 	meta, err := h.svc.OpenSession(r.Context(), OpenSessionRequest{
-		User: req.User, Host: req.Host, Port: req.Port, Command: req.Command, Env: req.Env,
-		Limits: SessionLimits{CPUSeconds: req.CPUSeconds, MemoryBytes: req.MemoryBytes, MaxDurationSeconds: req.MaxDuration},
+		User:    req.User,
+		Host:    req.Host,
+		Port:    req.Port,
+		Command: req.Command,
+		Env:     req.Env,
+		Limits: SessionLimits{
+			CPUSeconds:         req.CPUSeconds,
+			MemoryBytes:        req.MemoryBytes,
+			MaxDurationSeconds: req.MaxDuration,
+		},
 	})
 	if err != nil {
 		writeMappedErr(w, err)
 		return
 	}
+
 	writeJSON(w, http.StatusCreated, meta)
 }
 
@@ -105,13 +80,19 @@ func (h *Handler) resumeSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed")
 		return
 	}
-	var req struct {
-		ResumeToken string `json:"resume_token"`
-	}
-	if err := decodeJSONBody(w, r, maxResumeBodyBytes, &req); err != nil {
+
+	token, ok := bearerToken(r)
+	if !ok {
+		writeErr(w, http.StatusUnauthorized, "UNAUTHORIZED", "bearer token is required")
 		return
 	}
-	meta, err := h.svc.ResumeSession(req.ResumeToken)
+
+	// Keep endpoint JSON shape strict even though token moved to Authorization.
+	if err := decodeJSONBody(w, r, maxResumeBodyBytes, &struct{}{}); err != nil {
+		return
+	}
+
+	meta, err := h.svc.ResumeSession(token)
 	if err != nil {
 		writeMappedErr(w, err)
 		return
@@ -125,19 +106,33 @@ func (h *Handler) sessionAction(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "BAD_PATH", "session id is required")
 		return
 	}
+
 	parts := strings.Split(trimmed, "/")
 	if len(parts) > 2 {
 		writeErr(w, http.StatusNotFound, "NOT_FOUND", "endpoint not found")
 		return
 	}
+
 	sid := parts[0]
+	if !validSessionIDPattern.MatchString(sid) {
+		writeErr(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid session id format")
+		return
+	}
+
+	token, ok := bearerToken(r)
+	if !ok {
+		writeErr(w, http.StatusUnauthorized, "UNAUTHORIZED", "bearer token is required")
+		return
+	}
+
 	action := ""
 	if len(parts) == 2 {
 		action = parts[1]
 	}
+
 	switch {
 	case r.Method == http.MethodDelete && action == "":
-		if err := h.svc.Close(sid); err != nil {
+		if err := h.svc.Close(sid, token); err != nil {
 			writeMappedErr(w, err)
 			return
 		}
@@ -158,7 +153,7 @@ func (h *Handler) sessionAction(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusRequestEntityTooLarge, "STDIN_TOO_LARGE", "stdin payload exceeds max size")
 			return
 		}
-		if err := h.svc.WriteStdin(sid, payload); err != nil {
+		if err := h.svc.WriteStdin(sid, token, payload); err != nil {
 			writeMappedErr(w, err)
 			return
 		}
@@ -175,7 +170,7 @@ func (h *Handler) sessionAction(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "BAD_RESIZE", "cols and rows must be between 1 and 4096")
 			return
 		}
-		if err := h.svc.Resize(sid, uint16(req.Cols), uint16(req.Rows)); err != nil {
+		if err := h.svc.Resize(sid, token, uint16(req.Cols), uint16(req.Rows)); err != nil {
 			writeMappedErr(w, err)
 			return
 		}
@@ -189,30 +184,40 @@ func decodeJSONBody(w http.ResponseWriter, r *http.Request, maxBytes int64, targ
 	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
+
 	if err := dec.Decode(target); err != nil {
 		var syntaxErr *json.SyntaxError
-		if errors.As(err, &syntaxErr) {
+		var maxBytesErr *http.MaxBytesError
+		switch {
+		case errors.As(err, &syntaxErr):
 			writeErr(w, http.StatusBadRequest, "BAD_JSON", "request body must be valid JSON")
-			return err
-		}
-		if strings.Contains(err.Error(), "unknown field") {
-			writeErr(w, http.StatusBadRequest, "BAD_JSON", "request contains unknown fields")
-			return err
-		}
-		if friendly.Code == "STDIN_RATE_LIMITED" {
-			status = http.StatusTooManyRequests
-		} else if strings.HasPrefix(friendly.Code, "SPAWN_") || friendly.Code == "PERSISTENCE_FAILED" {
+		case errors.As(err, &maxBytesErr):
 			writeErr(w, http.StatusRequestEntityTooLarge, "BODY_TOO_LARGE", "request body exceeds max size")
-			return err
+		case strings.Contains(err.Error(), "unknown field"):
+			writeErr(w, http.StatusBadRequest, "BAD_JSON", "request contains unknown fields")
+		default:
+			writeErr(w, http.StatusBadRequest, "BAD_JSON", "request body must be valid JSON")
 		}
-		writeErr(w, http.StatusBadRequest, "BAD_JSON", "request body must be valid JSON")
 		return err
 	}
+
 	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		writeErr(w, http.StatusBadRequest, "BAD_JSON", "request body must contain exactly one JSON object")
 		return err
 	}
 	return nil
+}
+
+func bearerToken(r *http.Request) (string, bool) {
+	auth := strings.TrimSpace(r.Header.Get("Authorization"))
+	if !strings.HasPrefix(auth, "Bearer ") {
+		return "", false
+	}
+	token := strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
+	if token == "" {
+		return "", false
+	}
+	return token, true
 }
 
 func writeMappedErr(w http.ResponseWriter, err error) {
@@ -224,10 +229,20 @@ func writeMappedErr(w http.ResponseWriter, err error) {
 		writeErr(w, http.StatusBadRequest, "INVALID_REQUEST", "request is missing required fields or uses disallowed values")
 		return
 	}
+	if errors.Is(err, ErrUnauthorized) {
+		writeErr(w, http.StatusForbidden, "FORBIDDEN", "session token does not authorize this action")
+		return
+	}
+	if errors.Is(err, ErrSessionExpired) {
+		writeErr(w, http.StatusUnauthorized, "SESSION_EXPIRED", "session token has expired")
+		return
+	}
 	var friendly *FriendlyError
 	if errors.As(err, &friendly) {
 		status := http.StatusBadGateway
-		if strings.HasPrefix(friendly.Code, "SPAWN_") || friendly.Code == "PERSISTENCE_FAILED" {
+		if friendly.Code == "STDIN_RATE_LIMITED" {
+			status = http.StatusTooManyRequests
+		} else if strings.HasPrefix(friendly.Code, "SPAWN_") || friendly.Code == "PERSISTENCE_FAILED" {
 			status = http.StatusServiceUnavailable
 		}
 		writeErr(w, status, friendly.Code, friendly.Message)
