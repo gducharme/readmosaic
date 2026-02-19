@@ -27,7 +27,7 @@ func (l *SSHLauncher) Launch(ctx context.Context, meta SessionMetadata, command 
 	if sshPath == "" {
 		sshPath = "/usr/bin/ssh"
 	}
-	baseArgs := []string{"-o", "BatchMode=yes", "-p", strconv.Itoa(meta.Port), fmt.Sprintf("%s@%s", meta.User, meta.Host), "--", "bash", "-l"}
+	baseArgs := []string{"-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "ForwardAgent=no", "-o", "ClearAllForwardings=yes", "-o", "PermitLocalCommand=no", "-p", strconv.Itoa(meta.Port), fmt.Sprintf("%s@%s", meta.User, meta.Host), "--", "bash", "--noprofile", "--norc", "-i"}
 
 	cmdPath := sshPath
 	cmdArgs := baseArgs

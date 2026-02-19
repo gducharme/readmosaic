@@ -2,11 +2,14 @@ package gateway
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +18,18 @@ import (
 var (
 	ErrSessionNotFound = errors.New("session not found")
 	ErrInvalidRequest  = errors.New("invalid request")
+	ErrUnauthorized    = errors.New("unauthorized")
+	ErrSessionExpired  = errors.New("session expired")
+)
+
+var (
+	validUserPattern = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
+	validHostPattern = regexp.MustCompile(`^[a-zA-Z0-9.-]{1,255}$`)
+)
+
+const (
+	sessionTokenTTL  = 12 * time.Hour
+	sessionIdleLimit = 30 * time.Minute
 )
 
 type SessionLimits struct {
@@ -33,15 +48,17 @@ type OpenSessionRequest struct {
 }
 
 type SessionMetadata struct {
-	SessionID   string        `json:"session_id"`
-	ResumeToken string        `json:"resume_token"`
-	User        string        `json:"user"`
-	Host        string        `json:"host"`
-	Port        int           `json:"port"`
-	StartedAt   time.Time     `json:"started_at"`
-	LastSeenAt  time.Time     `json:"last_seen_at"`
-	Connected   bool          `json:"connected"`
-	Limits      SessionLimits `json:"limits"`
+	SessionID       string        `json:"session_id"`
+	ResumeToken     string        `json:"resume_token,omitempty"`
+	ResumeTokenHash string        `json:"-"`
+	User            string        `json:"user"`
+	Host            string        `json:"host"`
+	Port            int           `json:"port"`
+	StartedAt       time.Time     `json:"started_at"`
+	LastSeenAt      time.Time     `json:"last_seen_at"`
+	ExpiresAt       time.Time     `json:"expires_at"`
+	Connected       bool          `json:"connected"`
+	Limits          SessionLimits `json:"limits"`
 }
 
 type Process interface {
@@ -59,6 +76,7 @@ type Service struct {
 	launcher Launcher
 	store    MetadataStore
 	now      func() time.Time
+	secret   []byte
 
 	mu       sync.RWMutex
 	sessions map[string]*sessionState
@@ -72,15 +90,21 @@ type sessionState struct {
 }
 
 func NewService(launcher Launcher, store MetadataStore) *Service {
-	return &Service{launcher: launcher, store: store, now: time.Now, sessions: map[string]*sessionState{}, tokens: map[string]string{}}
+	return &Service{
+		launcher: launcher,
+		store:    store,
+		now:      time.Now,
+		secret:   []byte("gateway-local-dev-secret"),
+		sessions: map[string]*sessionState{},
+		tokens:   map[string]string{},
+	}
 }
 
 func (s *Service) OpenSession(ctx context.Context, req OpenSessionRequest) (SessionMetadata, error) {
-	if req.User == "" || req.Host == "" {
+	if req.User == "" || req.Host == "" || !validUserPattern.MatchString(req.User) || !validHostPattern.MatchString(req.Host) {
 		return SessionMetadata{}, ErrInvalidRequest
 	}
 	if len(req.Command) > 0 {
-		// Security boundary: command is fixed server-side to interactive shell only.
 		return SessionMetadata{}, ErrInvalidRequest
 	}
 	if err := validateInputEnv(req.Env); err != nil {
@@ -92,7 +116,8 @@ func (s *Service) OpenSession(ctx context.Context, req OpenSessionRequest) (Sess
 	if req.Port < 1 || req.Port > 65535 {
 		return SessionMetadata{}, ErrInvalidRequest
 	}
-	started := s.now().UTC()
+
+	now := s.now().UTC()
 	sessionID, err := randomID()
 	if err != nil {
 		return SessionMetadata{}, fmt.Errorf("session id: %w", err)
@@ -101,39 +126,59 @@ func (s *Service) OpenSession(ctx context.Context, req OpenSessionRequest) (Sess
 	if err != nil {
 		return SessionMetadata{}, fmt.Errorf("resume token: %w", err)
 	}
-	meta := SessionMetadata{SessionID: sessionID, ResumeToken: token, User: req.User, Host: req.Host, Port: req.Port, StartedAt: started, LastSeenAt: started, Connected: true, Limits: req.Limits}
+	tokenHash := s.tokenHash(token)
+	meta := SessionMetadata{
+		SessionID:       sessionID,
+		ResumeToken:     token,
+		ResumeTokenHash: tokenHash,
+		User:            req.User,
+		Host:            req.Host,
+		Port:            req.Port,
+		StartedAt:       now,
+		LastSeenAt:      now,
+		ExpiresAt:       now.Add(sessionTokenTTL),
+		Connected:       true,
+		Limits:          req.Limits,
+	}
+
 	procCtx, cancel := context.WithCancel(ctx)
 	proc, err := s.launcher.Launch(procCtx, meta, req.Command, req.Env)
 	if err != nil {
 		cancel()
 		return SessionMetadata{}, mapLaunchError(err)
 	}
-
 	state := &sessionState{meta: meta, proc: proc, cancel: cancel}
+
 	s.mu.Lock()
 	s.sessions[sessionID] = state
-	s.tokens[token] = sessionID
+	s.tokens[tokenHash] = sessionID
 	s.mu.Unlock()
-	if err := s.store.Upsert(meta); err != nil {
-		_ = s.Close(sessionID)
+
+	persisted := meta
+	persisted.ResumeToken = ""
+	if err := s.store.Upsert(persisted); err != nil {
+		_ = s.Close(sessionID, token)
 		return SessionMetadata{}, &FriendlyError{Code: "PERSISTENCE_FAILED", Message: "session metadata could not be persisted", Cause: err}
 	}
 	go s.watch(sessionID, proc)
 	return meta, nil
 }
 
-// ResumeSession performs metadata lookup by resume token.
-// It does not reattach stream I/O.
 func (s *Service) ResumeSession(token string) (SessionMetadata, error) {
+	tokenHash := s.tokenHash(token)
 	s.mu.Lock()
-	sid, ok := s.tokens[token]
+	sid, ok := s.tokens[tokenHash]
 	if !ok {
 		s.mu.Unlock()
-		meta, err := s.store.ByToken(token)
+		meta, err := s.store.ByTokenHash(tokenHash)
 		if err != nil {
 			return SessionMetadata{}, ErrSessionNotFound
 		}
+		if s.isExpired(meta) {
+			return SessionMetadata{}, ErrSessionExpired
+		}
 		meta.LastSeenAt = s.now().UTC()
+		meta.ResumeToken = token
 		if err := s.store.Upsert(meta); err != nil {
 			log.Printf("level=warn event=gateway_store_upsert_failed session=%s error=%v", meta.SessionID, err)
 		}
@@ -144,59 +189,56 @@ func (s *Service) ResumeSession(token string) (SessionMetadata, error) {
 		s.mu.Unlock()
 		return SessionMetadata{}, ErrSessionNotFound
 	}
+	if s.isExpired(st.meta) {
+		s.mu.Unlock()
+		_ = s.Close(sid, token)
+		return SessionMetadata{}, ErrSessionExpired
+	}
 	st.meta.LastSeenAt = s.now().UTC()
 	meta := st.meta
+	meta.ResumeToken = token
 	s.mu.Unlock()
-	if err := s.store.Upsert(meta); err != nil {
+	persisted := meta
+	persisted.ResumeToken = ""
+	if err := s.store.Upsert(persisted); err != nil {
 		log.Printf("level=warn event=gateway_store_upsert_failed session=%s error=%v", meta.SessionID, err)
 	}
 	return meta, nil
 }
 
-func (s *Service) WriteStdin(sessionID string, payload []byte) error {
-	s.mu.RLock()
-	st, ok := s.sessions[sessionID]
-	s.mu.RUnlock()
-	if !ok {
-		return ErrSessionNotFound
+func (s *Service) WriteStdin(sessionID string, token string, payload []byte) error {
+	st, err := s.authorize(sessionID, token)
+	if err != nil {
+		return err
 	}
 	if _, err := st.proc.Write(payload); err != nil {
 		return mapLaunchError(err)
 	}
-	lastSeen := s.now().UTC()
-	s.mu.Lock()
-	if current, ok := s.sessions[sessionID]; ok {
-		current.meta.LastSeenAt = lastSeen
-	}
-	s.mu.Unlock()
+	s.touchSession(sessionID)
 	return nil
 }
 
-func (s *Service) Resize(sessionID string, cols, rows uint16) error {
-	s.mu.RLock()
-	st, ok := s.sessions[sessionID]
-	s.mu.RUnlock()
-	if !ok {
-		return ErrSessionNotFound
+func (s *Service) Resize(sessionID string, token string, cols, rows uint16) error {
+	st, err := s.authorize(sessionID, token)
+	if err != nil {
+		return err
 	}
 	if err := st.proc.Resize(cols, rows); err != nil {
 		return mapLaunchError(err)
 	}
-	lastSeen := s.now().UTC()
-	s.mu.Lock()
-	if current, ok := s.sessions[sessionID]; ok {
-		current.meta.LastSeenAt = lastSeen
-	}
-	s.mu.Unlock()
+	s.touchSession(sessionID)
 	return nil
 }
 
-func (s *Service) Close(sessionID string) error {
+func (s *Service) Close(sessionID string, token string) error {
+	if _, err := s.authorize(sessionID, token); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	st, ok := s.sessions[sessionID]
 	if ok {
 		delete(s.sessions, sessionID)
-		delete(s.tokens, st.meta.ResumeToken)
+		delete(s.tokens, st.meta.ResumeTokenHash)
 	}
 	s.mu.Unlock()
 	if !ok {
@@ -208,6 +250,7 @@ func (s *Service) Close(sessionID string) error {
 	}
 	st.meta.Connected = false
 	st.meta.LastSeenAt = s.now().UTC()
+	st.meta.ResumeToken = ""
 	if err := s.store.Upsert(st.meta); err != nil {
 		log.Printf("level=warn event=gateway_store_upsert_failed session=%s error=%v", st.meta.SessionID, err)
 	}
@@ -226,11 +269,57 @@ func (s *Service) watch(sessionID string, proc Process) {
 	st.meta.LastSeenAt = s.now().UTC()
 	meta := st.meta
 	delete(s.sessions, sessionID)
-	delete(s.tokens, st.meta.ResumeToken)
+	delete(s.tokens, st.meta.ResumeTokenHash)
 	s.mu.Unlock()
+	meta.ResumeToken = ""
 	if err := s.store.Upsert(meta); err != nil {
 		log.Printf("level=warn event=gateway_store_upsert_failed session=%s error=%v", meta.SessionID, err)
 	}
+}
+
+func (s *Service) authorize(sessionID string, token string) (*sessionState, error) {
+	tokenHash := s.tokenHash(strings.TrimSpace(token))
+	s.mu.RLock()
+	sid, ok := s.tokens[tokenHash]
+	if !ok || sid != sessionID {
+		s.mu.RUnlock()
+		return nil, ErrUnauthorized
+	}
+	st, ok := s.sessions[sessionID]
+	s.mu.RUnlock()
+	if !ok {
+		return nil, ErrSessionNotFound
+	}
+	if s.isExpired(st.meta) {
+		return nil, ErrSessionExpired
+	}
+	return st, nil
+}
+
+func (s *Service) touchSession(sessionID string) {
+	lastSeen := s.now().UTC()
+	s.mu.Lock()
+	if current, ok := s.sessions[sessionID]; ok {
+		current.meta.LastSeenAt = lastSeen
+	}
+	s.mu.Unlock()
+}
+
+func (s *Service) isExpired(meta SessionMetadata) bool {
+	now := s.now().UTC()
+	if !meta.ExpiresAt.IsZero() && now.After(meta.ExpiresAt) {
+		return true
+	}
+	if !meta.LastSeenAt.IsZero() && now.After(meta.LastSeenAt.Add(sessionIdleLimit)) {
+		return true
+	}
+	return false
+}
+
+func (s *Service) tokenHash(token string) string {
+	mac := hmac.New(sha256.New, s.secret)
+	_, _ = mac.Write([]byte(token))
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
 func validateInputEnv(input map[string]string) error {

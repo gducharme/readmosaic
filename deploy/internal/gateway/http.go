@@ -44,14 +44,42 @@ func (h *Handler) openSession(w http.ResponseWriter, r *http.Request) {
 		Command     []string          `json:"command"`
 		Env         map[string]string `json:"env"`
 		CPUSeconds  int               `json:"cpu_seconds"`
-		MemoryBytes uint64            `json:"memory_bytes"`
-		MaxDuration int               `json:"max_duration_seconds"`
-	}
-	if err := decodeJSONBody(w, r, maxOpenBodyBytes, &req); err != nil {
+	token, ok := bearerToken(r)
+	if !ok {
+		writeErr(w, http.StatusUnauthorized, "UNAUTHORIZED", "bearer token is required")
 		return
 	}
-	if req.Port != 0 && (req.Port < 1 || req.Port > 65535) {
-		writeErr(w, http.StatusBadRequest, "INVALID_REQUEST", "port must be between 1 and 65535")
+	// Keep endpoint JSON shape strict even though token moved to Authorization.
+	if err := decodeJSONBody(w, r, maxResumeBodyBytes, &struct{}{}); err != nil {
+		return
+	}
+	meta, err := h.svc.ResumeSession(token)
+	token, ok := bearerToken(r)
+	if !ok {
+		writeErr(w, http.StatusUnauthorized, "UNAUTHORIZED", "bearer token is required")
+		return
+	}
+		if err := h.svc.Close(sid, token); err != nil {
+		if err := h.svc.WriteStdin(sid, token, payload); err != nil {
+		if err := h.svc.Resize(sid, token, uint16(req.Cols), uint16(req.Rows)); err != nil {
+func bearerToken(r *http.Request) (string, bool) {
+	auth := strings.TrimSpace(r.Header.Get("Authorization"))
+	if !strings.HasPrefix(auth, "Bearer ") {
+		return "", false
+	}
+	token := strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
+	if token == "" {
+		return "", false
+	}
+	return token, true
+}
+
+	if errors.Is(err, ErrUnauthorized) {
+		writeErr(w, http.StatusForbidden, "FORBIDDEN", "session token does not authorize this action")
+		return
+	}
+	if errors.Is(err, ErrSessionExpired) {
+		writeErr(w, http.StatusUnauthorized, "SESSION_EXPIRED", "session token has expired")
 		return
 	}
 	meta, err := h.svc.OpenSession(r.Context(), OpenSessionRequest{

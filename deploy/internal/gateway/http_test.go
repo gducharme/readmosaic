@@ -20,9 +20,9 @@ func (f *fakeStore) Upsert(m SessionMetadata) error {
 	f.rows[m.SessionID] = m
 	return nil
 }
-func (f *fakeStore) ByToken(token string) (SessionMetadata, error) {
+func (f *fakeStore) ByTokenHash(tokenHash string) (SessionMetadata, error) {
 	for _, m := range f.rows {
-		if m.ResumeToken == token {
+		if m.ResumeTokenHash == tokenHash {
 			return m, nil
 		}
 	}
@@ -75,7 +75,16 @@ func openSession(t *testing.T, h http.Handler) SessionMetadata {
 	if err := json.Unmarshal(rec.Body.Bytes(), &meta); err != nil {
 		t.Fatal(err)
 	}
+	if meta.ResumeToken == "" {
+		t.Fatalf("resume token must be returned on open")
+	}
 	return meta
+}
+
+func authedRequest(method, path, token, body string) *http.Request {
+	req := httptest.NewRequest(method, path, bytes.NewBufferString(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	return req
 }
 
 func TestGatewaySessionLifecycle(t *testing.T) {
@@ -91,40 +100,46 @@ func TestGatewaySessionLifecycle(t *testing.T) {
 
 	stdinPayload := base64.StdEncoding.EncodeToString([]byte("pwd\n"))
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/gateway/sessions/"+meta.SessionID+"/stdin", bytes.NewBufferString(`{"data":"`+stdinPayload+`"}`)))
+	h.ServeHTTP(rec, authedRequest(http.MethodPost, "/gateway/sessions/"+meta.SessionID+"/stdin", meta.ResumeToken, `{"data":"`+stdinPayload+`"}`))
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("stdin status=%d body=%s", rec.Code, rec.Body.String())
 	}
 
 	rec = httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/gateway/sessions/"+meta.SessionID+"/resize", bytes.NewBufferString(`{"cols":120,"rows":40}`)))
+	h.ServeHTTP(rec, authedRequest(http.MethodPost, "/gateway/sessions/"+meta.SessionID+"/resize", meta.ResumeToken, `{"cols":120,"rows":40}`))
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("resize status=%d body=%s", rec.Code, rec.Body.String())
 	}
 
 	rec = httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/gateway/sessions/"+meta.SessionID, nil))
+	h.ServeHTTP(rec, authedRequest(http.MethodDelete, "/gateway/sessions/"+meta.SessionID, meta.ResumeToken, ""))
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("close status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
 
 func TestGatewayResume(t *testing.T) {
-	store := &fakeStore{}
-	svc := NewService(&fakeLauncher{}, store)
-	h := NewHandler(svc).Routes()
+	h := NewHandler(NewService(&fakeLauncher{}, &fakeStore{})).Routes()
 	meta := openSession(t, h)
-
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/gateway/sessions/resume", bytes.NewBufferString(`{"resume_token":"`+meta.ResumeToken+`"}`)))
+	h.ServeHTTP(rec, authedRequest(http.MethodPost, "/gateway/sessions/resume", meta.ResumeToken, `{}`))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("resume status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
 
+func TestAuthRequired(t *testing.T) {
+	h := NewHandler(NewService(&fakeLauncher{}, &fakeStore{})).Routes()
+	meta := openSession(t, h)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/gateway/sessions/"+meta.SessionID+"/stdin", bytes.NewBufferString(`{"data":""}`)))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestUnknownFieldRejected(t *testing.T) {
-	svc := NewService(&fakeLauncher{}, &fakeStore{})
-	h := NewHandler(svc).Routes()
+	h := NewHandler(NewService(&fakeLauncher{}, &fakeStore{})).Routes()
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/gateway/sessions", bytes.NewBufferString(`{"user":"alice","host":"example.com","oops":1}`)))
 	if rec.Code != http.StatusBadRequest {
@@ -133,26 +148,23 @@ func TestUnknownFieldRejected(t *testing.T) {
 }
 
 func TestOversizedStdinRejected(t *testing.T) {
-	svc := NewService(&fakeLauncher{}, &fakeStore{})
-	h := NewHandler(svc).Routes()
+	h := NewHandler(NewService(&fakeLauncher{}, &fakeStore{})).Routes()
 	meta := openSession(t, h)
 	large := strings.Repeat("a", maxStdinBytes+1)
 	payload := base64.StdEncoding.EncodeToString([]byte(large))
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/gateway/sessions/"+meta.SessionID+"/stdin", bytes.NewBufferString(`{"data":"`+payload+`"}`)))
+	h.ServeHTTP(rec, authedRequest(http.MethodPost, "/gateway/sessions/"+meta.SessionID+"/stdin", meta.ResumeToken, `{"data":"`+payload+`"}`))
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
 
 func TestResizeBoundsRejected(t *testing.T) {
-	svc := NewService(&fakeLauncher{}, &fakeStore{})
-	h := NewHandler(svc).Routes()
+	h := NewHandler(NewService(&fakeLauncher{}, &fakeStore{})).Routes()
 	meta := openSession(t, h)
-
 	for _, body := range []string{`{"cols":0,"rows":10}`, `{"cols":10,"rows":5000}`} {
 		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/gateway/sessions/"+meta.SessionID+"/resize", bytes.NewBufferString(body)))
+		h.ServeHTTP(rec, authedRequest(http.MethodPost, "/gateway/sessions/"+meta.SessionID+"/resize", meta.ResumeToken, body))
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("body=%s status=%d resp=%s", body, rec.Code, rec.Body.String())
 		}
@@ -160,36 +172,32 @@ func TestResizeBoundsRejected(t *testing.T) {
 }
 
 func TestUnknownSessionAndTokenReturn404(t *testing.T) {
-	svc := NewService(&fakeLauncher{}, &fakeStore{})
-	h := NewHandler(svc).Routes()
-
+	h := NewHandler(NewService(&fakeLauncher{}, &fakeStore{})).Routes()
+	meta := openSession(t, h)
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/gateway/sessions/nope", nil))
-	if rec.Code != http.StatusNotFound {
+	h.ServeHTTP(rec, authedRequest(http.MethodDelete, "/gateway/sessions/nope", meta.ResumeToken, ""))
+	if rec.Code != http.StatusForbidden {
 		t.Fatalf("close unknown status=%d body=%s", rec.Code, rec.Body.String())
 	}
-
 	rec = httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/gateway/sessions/resume", bytes.NewBufferString(`{"resume_token":"missing"}`)))
+	h.ServeHTTP(rec, authedRequest(http.MethodPost, "/gateway/sessions/resume", "missing", `{}`))
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("resume unknown status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
 
 func TestSessionActionExtraSegmentsRejected(t *testing.T) {
-	svc := NewService(&fakeLauncher{}, &fakeStore{})
-	h := NewHandler(svc).Routes()
+	h := NewHandler(NewService(&fakeLauncher{}, &fakeStore{})).Routes()
 	meta := openSession(t, h)
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/gateway/sessions/"+meta.SessionID+"/stdin/extra", bytes.NewBufferString(`{"data":""}`)))
+	h.ServeHTTP(rec, authedRequest(http.MethodPost, "/gateway/sessions/"+meta.SessionID+"/stdin/extra", meta.ResumeToken, `{"data":""}`))
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
 
 func TestInvalidPortRejected(t *testing.T) {
-	svc := NewService(&fakeLauncher{}, &fakeStore{})
-	h := NewHandler(svc).Routes()
+	h := NewHandler(NewService(&fakeLauncher{}, &fakeStore{})).Routes()
 	for _, body := range []string{`{"user":"alice","host":"example.com","port":-1}`, `{"user":"alice","host":"example.com","port":70000}`} {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/gateway/sessions", bytes.NewBufferString(body)))

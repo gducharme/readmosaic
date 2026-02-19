@@ -10,7 +10,7 @@ import (
 
 type MetadataStore interface {
 	Upsert(SessionMetadata) error
-	ByToken(token string) (SessionMetadata, error)
+	ByTokenHash(tokenHash string) (SessionMetadata, error)
 }
 
 type FileMetadataStore struct {
@@ -36,7 +36,7 @@ func (s *FileMetadataStore) Upsert(meta SessionMetadata) error {
 	return s.writeLocked(rows)
 }
 
-func (s *FileMetadataStore) ByToken(token string) (SessionMetadata, error) {
+func (s *FileMetadataStore) ByTokenHash(tokenHash string) (SessionMetadata, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rows, err := s.readLocked()
@@ -44,7 +44,7 @@ func (s *FileMetadataStore) ByToken(token string) (SessionMetadata, error) {
 		return SessionMetadata{}, err
 	}
 	for _, meta := range rows {
-		if meta.ResumeToken == token {
+		if meta.ResumeTokenHash == tokenHash {
 			return meta, nil
 		}
 	}
