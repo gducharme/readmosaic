@@ -339,3 +339,28 @@ func TestStreamKeysDecodesUTF8AndControls(t *testing.T) {
 		}
 	}
 }
+
+func TestStreamKeysSwallowsArrowEscapeSequences(t *testing.T) {
+	input := strings.NewReader("[Ax")
+	keys := make(chan string, 8)
+	eof := make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go streamKeys(ctx, input, keys, eof)
+
+	select {
+	case key := <-keys:
+		if key != "x" {
+			t.Fatalf("expected only trailing printable key, got %q", key)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for key")
+	}
+
+	select {
+	case extra := <-keys:
+		t.Fatalf("unexpected extra key from escape sequence: %q", extra)
+	default:
+	}
+}

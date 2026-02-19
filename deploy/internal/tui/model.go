@@ -166,7 +166,7 @@ type archiveSeedLanguage struct {
 
 var archiveSeedLanguages = []archiveSeedLanguage{
 	{
-		DirName: "english",
+		DirName: "en",
 		Files: []archiveSeedFile{
 			{Name: "001-Intro", Content: "Welcome to the archive.\n"},
 			{Name: "002-The start", Content: "This is the start of the story.\n"},
@@ -174,7 +174,7 @@ var archiveSeedLanguages = []archiveSeedLanguage{
 		},
 	},
 	{
-		DirName: "french",
+		DirName: "fr",
 		Files: []archiveSeedFile{
 			{Name: "001-Intro", Content: "Bienvenue dans les archives.\n"},
 			{Name: "002-Le début", Content: "Voici le début de l'histoire.\n"},
@@ -182,7 +182,7 @@ var archiveSeedLanguages = []archiveSeedLanguage{
 		},
 	},
 	{
-		DirName: "arabic",
+		DirName: "ar",
 		Files: []archiveSeedFile{
 			{Name: "001-Intro", Content: "مرحباً بك في الأرشيف.\n"},
 			{Name: "002-البداية", Content: "هذه هي بداية القصة.\n"},
@@ -540,10 +540,36 @@ func (m *Model) loadArchiveFiles(lang archiveLanguage) {
 	m.archiveStatus = ""
 }
 
+func resolvePathWithSymlinks(path string) (string, error) {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(absPath)
+	if err == nil {
+		return filepath.Clean(resolved), nil
+	}
+	if !os.IsNotExist(err) {
+		return "", err
+	}
+	parent := filepath.Dir(absPath)
+	resolvedParent, parentErr := filepath.EvalSymlinks(parent)
+	if parentErr != nil {
+		return "", parentErr
+	}
+	return filepath.Clean(filepath.Join(resolvedParent, filepath.Base(absPath))), nil
+}
+
 func (m *Model) isPathInsideArchiveRoot(candidate string) bool {
-	rootClean := filepath.Clean(m.archiveRoot)
-	candidateClean := filepath.Clean(candidate)
-	rel, err := filepath.Rel(rootClean, candidateClean)
+	resolvedRoot, err := resolvePathWithSymlinks(filepath.Clean(m.archiveRoot))
+	if err != nil {
+		return false
+	}
+	resolvedCandidate, err := resolvePathWithSymlinks(filepath.Clean(candidate))
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(resolvedRoot, resolvedCandidate)
 	if err != nil {
 		return false
 	}

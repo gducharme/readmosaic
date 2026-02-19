@@ -254,6 +254,8 @@ func defaultHandler(s ssh.Session) {
 	case "vector":
 		model = model.Update(tui.AppendLineMsg{Line: fmt.Sprintf("VECTOR FLOW ACTIVE [%s]", identity.Username)})
 	case "triage":
+		// Archive sessions initialize directly into archive-mode screens; avoid preloading
+		// a triage banner that would immediately be replaced by archive UI content.
 		if strings.EqualFold(identity.Username, "read") {
 			model = model.Update(tui.AppendLineMsg{Line: fmt.Sprintf("TRIAGE FLOW ACTIVE [%s]", identity.Username)})
 		}
@@ -361,7 +363,24 @@ func streamKeys(ctx context.Context, r io.Reader, keys chan<- string, eof chan<-
 		case 0x7f, 0x08:
 			key = "backspace"
 		case 0x1b:
-			// NOTE: ANSI escape sequences (e.g. arrow keys) are treated as plain ESC in this decoder.
+			// Swallow common ANSI escape sequences (e.g. arrow keys: ESC [ A) so they
+			// do not inject printable fragments like '[' or 'A' into editor buffers.
+			if reader.Buffered() > 0 {
+				if next, err := reader.Peek(1); err == nil && len(next) == 1 && (next[0] == '[' || next[0] == 'O') {
+					_, _ = reader.ReadByte() // consume CSI/SS3 introducer
+					for reader.Buffered() > 0 {
+						b, err := reader.Peek(1)
+						if err != nil || len(b) != 1 {
+							break
+						}
+						_, _ = reader.ReadByte()
+						if b[0] >= '@' && b[0] <= '~' {
+							break
+						}
+					}
+					continue
+				}
+			}
 			key = "esc"
 		default:
 			if !unicode.IsControl(rn) {

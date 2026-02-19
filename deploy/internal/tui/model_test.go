@@ -888,14 +888,38 @@ func TestArchiveSeedContentCreatesDefaultLanguageDirectoriesAndFiles(t *testing.
 		dir  string
 		file string
 	}{
-		{dir: "english", file: "001-Intro"},
-		{dir: "french", file: "001-Intro"},
-		{dir: "arabic", file: "001-Intro"},
+		{dir: "en", file: "001-Intro"},
+		{dir: "fr", file: "001-Intro"},
+		{dir: "ar", file: "001-Intro"},
 	}
 	for _, check := range checks {
 		path := filepath.Join(root, check.dir, check.file)
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("expected seed file %s to exist: %v", path, err)
 		}
+	}
+}
+
+func TestArchiveContainmentRejectsSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	outsideDir := t.TempDir()
+	outsideFile := filepath.Join(outsideDir, "escape.txt")
+	if err := os.WriteFile(outsideFile, []byte("outside"), 0o600); err != nil {
+		t.Fatalf("write outside file: %v", err)
+	}
+	langDir := filepath.Join(root, "en")
+	if err := os.MkdirAll(langDir, 0o755); err != nil {
+		t.Fatalf("mkdir en: %v", err)
+	}
+	linkPath := filepath.Join(langDir, "001-Link")
+	if err := os.Symlink(outsideFile, linkPath); err != nil {
+		t.Fatalf("create symlink: %v", err)
+	}
+	t.Setenv(archiveRootEnvVar, root)
+	t.Setenv(archiveSeedEnvVar, "false")
+
+	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: "archive"})
+	if m.isPathInsideArchiveRoot(linkPath) {
+		t.Fatalf("symlink escaping archive root should be rejected")
 	}
 }
