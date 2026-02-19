@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 type fakeStore struct{ rows map[string]SessionMetadata }
@@ -213,5 +214,44 @@ func TestInvalidPortRejected(t *testing.T) {
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("body=%s status=%d resp=%s", body, rec.Code, rec.Body.String())
 		}
+	}
+}
+
+func TestWrongTokenForbidden(t *testing.T) {
+	svc := mustNewService(t, &fakeLauncher{}, &fakeStore{})
+	h := NewHandler(svc).Routes()
+	meta := openSession(t, h)
+	payload := base64.StdEncoding.EncodeToString([]byte("pwd\n"))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, authedRequest(http.MethodPost, "/gateway/sessions/"+meta.SessionID+"/stdin", "wrong-token", `{"data":"`+payload+`"}`))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestTokenFromAnotherSessionForbidden(t *testing.T) {
+	svc := mustNewService(t, &fakeLauncher{}, &fakeStore{})
+	h := NewHandler(svc).Routes()
+	first := openSession(t, h)
+	second := openSession(t, h)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, authedRequest(http.MethodDelete, "/gateway/sessions/"+first.SessionID, second.ResumeToken, ""))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestExpiredTokenUnauthorized(t *testing.T) {
+	svc := mustNewService(t, &fakeLauncher{}, &fakeStore{})
+	fixed := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return fixed }
+	h := NewHandler(svc).Routes()
+	meta := openSession(t, h)
+	svc.now = func() time.Time { return fixed.Add(sessionTokenTTL + time.Minute) }
+	payload := base64.StdEncoding.EncodeToString([]byte("pwd\n"))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, authedRequest(http.MethodPost, "/gateway/sessions/"+meta.SessionID+"/stdin", meta.ResumeToken, `{"data":"`+payload+`"}`))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
