@@ -92,6 +92,7 @@ This is intentional:
 
 - **Deploy/default base** can target host SSH port 22.
 - **Local dev** avoids privileged port surprises by defaulting to 2222.
+- Archive storage is bind-mounted from `MOSAIC_ARCHIVE_HOST_DIR` into `MOSAIC_ARCHIVE_ROOT`; point `MOSAIC_ARCHIVE_HOST_DIR` at shared/host-persistent storage if you run multiple container instances.
 
 ## Local dev flow
 
