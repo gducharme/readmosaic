@@ -85,13 +85,13 @@ Set all 3 together or leave unset:
 
 ## Ports and defaults
 
-- Base compose (`docker-compose.yml`) publishes `${MOSAIC_SSH_PUBLISH_PORT:-22}:2222`.
-- Dev override (`docker-compose.override.yml`) publishes `${MOSAIC_SSH_PUBLISH_PORT:-2222}:2222`.
+- Base compose (`docker-compose.yml`) publishes `${MOSAIC_SSH_PUBLISH_PORT:-22}:2222` and `${MOSAIC_GATEWAY_PUBLISH_PORT:-8080}:8080`.
+- Dev override (`docker-compose.override.yml`) publishes `${MOSAIC_SSH_PUBLISH_PORT:-2222}:2222` and `${MOSAIC_GATEWAY_PUBLISH_PORT:-8080}:8080`.
 
 This is intentional:
 
 - **Deploy/default base** can target host SSH port 22.
-- **Local dev** avoids privileged port surprises by defaulting to 2222.
+- **Local dev** avoids privileged SSH port surprises by defaulting to 2222 while still exposing the HTTP gateway on 8080.
 - Archive storage is bind-mounted from `MOSAIC_ARCHIVE_HOST_DIR` into `MOSAIC_ARCHIVE_ROOT`; point `MOSAIC_ARCHIVE_HOST_DIR` at shared/host-persistent storage if you run multiple container instances.
 
 ## Local dev flow
@@ -234,3 +234,4 @@ docker compose logs --tail=100 -f app
 - **Host key mount errors**: verify file exists and `chmod 600`.
 - **Neo4j unhealthy**: check `docker compose logs neo4j` and auth env.
 - **App unhealthy**: inspect `docker compose logs app` for startup/env errors.
+- **Gateway ECONNREFUSED from web terminal**: verify Compose publishes `8080` (or your configured `MOSAIC_GATEWAY_PUBLISH_PORT`) and that `GATEWAY_BASE_URL` points to that host/port.

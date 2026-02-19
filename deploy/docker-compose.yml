@@ -15,6 +15,7 @@ services:
       MOSAIC_ARCHIVE_ROOT: ${MOSAIC_ARCHIVE_ROOT:-/archive}
     ports:
       - "${MOSAIC_SSH_PUBLISH_PORT:-22}:2222"
+      - "${MOSAIC_GATEWAY_PUBLISH_PORT:-8080}:8080"
     volumes:
       - type: bind
         source: ./data/ssh/host_ed25519
