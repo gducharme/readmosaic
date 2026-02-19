@@ -1,6 +1,7 @@
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
+const childProcess = require('child_process');
 const express = require('express');
 const WebSocket = require('ws');
 const pty = require('node-pty');
@@ -166,10 +167,52 @@ async function closeGatewaySession(sessionId, resumeToken) {
     return;
   }
 
-  await fetchGateway(`/gateway/sessions/${encodeURIComponent(sessionId)}`, {
-    method: 'DELETE',
-    headers: { Authorization: `Bearer ${resumeToken}` },
-  });
+  try {
+    const response = await fetchGateway(`/gateway/sessions/${encodeURIComponent(sessionId)}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${resumeToken}` },
+    });
+
+    if (!response.ok) {
+      console.warn(`[gateway] unable to close session ${sessionId}: HTTP ${response.status}`);
+    }
+  } catch (error) {
+    const reason = error && error.message ? error.message : 'unknown error';
+    console.warn(`[gateway] unable to close session ${sessionId}: ${reason}`);
+  }
+}
+
+function collectSshCommandDiagnostics() {
+  const details = [];
+
+  try {
+    const probe = childProcess.spawnSync(sshCommand, ['-V'], {
+      encoding: 'utf8',
+      cwd: shellCwd,
+      env: process.env,
+      timeout: 3000,
+    });
+
+    if (probe.error) {
+      const code = probe.error.code ? ` code=${probe.error.code}` : '';
+      details.push(`sshVersionProbeError=${probe.error.message}${code}`);
+    } else {
+      details.push(`sshVersionProbeStatus=${probe.status}`);
+      const stderr = probe.stderr && probe.stderr.trim();
+      const stdout = probe.stdout && probe.stdout.trim();
+      if (stderr) {
+        details.push(`sshVersionProbeStderr=${stderr}`);
+      }
+      if (stdout) {
+        details.push(`sshVersionProbeStdout=${stdout}`);
+      }
+    }
+  } catch (probeError) {
+    const reason = probeError && probeError.message ? probeError.message : 'unknown error';
+    details.push(`sshVersionProbeException=${reason}`);
+  }
+
+  return details;
 }
 
 function launchSshPty(username) {
@@ -228,6 +271,20 @@ function buildSshLaunchDiagnostics(error, username) {
   if (error && error.previousError && error.previousError.message) {
     diagnostics.push(`directSpawnError=${error.previousError.message}`);
   }
+
+  if (error && error.code) {
+    diagnostics.push(`spawnCode=${error.code}`);
+  }
+
+  if (error && error.errno) {
+    diagnostics.push(`spawnErrno=${error.errno}`);
+  }
+
+  if (error && error.syscall) {
+    diagnostics.push(`spawnSyscall=${error.syscall}`);
+  }
+
+  diagnostics.push(...collectSshCommandDiagnostics());
 
   const reason = error && error.message ? error.message : 'Unable to launch ssh process.';
   return `Failed to start SSH session: ${reason}. Diagnostics: ${diagnostics.join(', ')}`;
