@@ -16,6 +16,32 @@ const sshCommand = configuredSshPath && configuredSshPath.trim()
   ? configuredSshPath.trim()
   : commonSshPaths.find((candidate) => fs.existsSync(candidate)) || 'ssh';
 
+const homeDirectory = process.env.HOME;
+const shellCwd = homeDirectory && fs.existsSync(homeDirectory)
+  ? homeDirectory
+  : process.cwd();
+
+function buildSshLaunchDiagnostics(error, username) {
+  const diagnostics = [];
+  const sshCommandIsAbsolutePath = path.isAbsolute(sshCommand);
+  const sshPathExists = sshCommandIsAbsolutePath ? fs.existsSync(sshCommand) : null;
+  const cwdExists = fs.existsSync(shellCwd);
+
+  diagnostics.push(`sshCommand=${sshCommand}`);
+  diagnostics.push(`sshCommandIsAbsolutePath=${sshCommandIsAbsolutePath}`);
+  if (sshCommandIsAbsolutePath) {
+    diagnostics.push(`sshPathExists=${sshPathExists}`);
+  }
+  diagnostics.push(`cwd=${shellCwd}`);
+  diagnostics.push(`cwdExists=${cwdExists}`);
+  diagnostics.push(`home=${homeDirectory || '(unset)'}`);
+  diagnostics.push(`path=${process.env.PATH || '(unset)'}`);
+  diagnostics.push(`username=${username}`);
+
+  const reason = error && error.message ? error.message : 'Unable to launch ssh process.';
+  return `Failed to start SSH session: ${reason}. Diagnostics: ${diagnostics.join(', ')}`;
+}
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 const server = http.createServer(app);
@@ -50,12 +76,13 @@ wss.on('connection', (ws) => {
           name: 'xterm-color',
           cols: 120,
           rows: 36,
-          cwd: process.env.HOME,
+          cwd: shellCwd,
           env: process.env,
         });
       } catch (error) {
-        const reason = error && error.message ? error.message : 'Unable to launch ssh process.';
-        ws.send(JSON.stringify({ type: 'error', payload: `Failed to start SSH session: ${reason}` }));
+        const diagnosticError = buildSshLaunchDiagnostics(error, username);
+        console.error(diagnosticError);
+        ws.send(JSON.stringify({ type: 'error', payload: diagnosticError }));
         return;
       }
 
@@ -100,4 +127,5 @@ server.listen(port, () => {
   console.log(`Web terminal listening on http://0.0.0.0:${port}`);
   console.log(`SSH target: ${sshHost}:${sshPort}`);
   console.log(`SSH binary: ${sshCommand}`);
+  console.log(`Shell cwd: ${shellCwd}`);
 });
