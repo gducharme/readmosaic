@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -125,6 +126,31 @@ func TestGatewaySessionLifecycle(t *testing.T) {
 	h.ServeHTTP(rec, authedRequest(http.MethodDelete, "/gateway/sessions/"+meta.SessionID, meta.ResumeToken, ""))
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("close status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGatewayRequestLogging(t *testing.T) {
+	store := &fakeStore{}
+	launcher := &fakeLauncher{}
+	h := NewHandler(mustNewService(t, launcher, store)).Routes()
+
+	var logBuf bytes.Buffer
+	originalWriter := log.Writer()
+	log.SetOutput(&logBuf)
+	t.Cleanup(func() { log.SetOutput(originalWriter) })
+
+	req := httptest.NewRequest(http.MethodPost, "/gateway/sessions", bytes.NewBufferString(`{"user":"alice","host":"example.com"}`))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("open status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	line := logBuf.String()
+	for _, expected := range []string{"event=gateway_http_request", "method=POST", "path=\"/gateway/sessions\"", "status=201"} {
+		if !strings.Contains(line, expected) {
+			t.Fatalf("missing %q in log line: %s", expected, line)
+		}
 	}
 }
 

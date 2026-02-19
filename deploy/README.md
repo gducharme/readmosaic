@@ -216,6 +216,20 @@ docker compose --profile neo4j down -v
 
 ## Troubleshooting
 
+### Gateway logs from Docker
+
+When `GATEWAY_HMAC_SECRET` is configured, the gateway now emits one structured log line per HTTP request with method/path/status/duration. Tail those logs from the container with:
+
+```bash
+docker logs --tail=100 -f mosaic-terminal
+```
+
+If you run through Compose service naming instead of an explicit `container_name`, use:
+
+```bash
+docker compose logs --tail=100 -f app
+```
+
 - **Port bind denied on 22**: set `MOSAIC_SSH_PUBLISH_PORT=2222`.
 - **Host key mount errors**: verify file exists and `chmod 600`.
 - **Neo4j unhealthy**: check `docker compose logs neo4j` and auth env.
