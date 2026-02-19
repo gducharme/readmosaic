@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -17,14 +18,19 @@ type SSHLauncher struct {
 	SSHPath        string
 	PrlimitPath    string
 	KnownHostsPath string
+	StrictHostKey  string
 }
 
 func NewSSHLauncher() *SSHLauncher {
 	knownHosts := os.Getenv("GATEWAY_SSH_KNOWN_HOSTS")
 	if knownHosts == "" {
-		knownHosts = "/etc/ssh/ssh_known_hosts"
+		knownHosts = "/tmp/gateway_known_hosts"
 	}
-	return &SSHLauncher{SSHPath: "/usr/bin/ssh", PrlimitPath: "/usr/bin/prlimit", KnownHostsPath: knownHosts}
+	strictHostKey := strings.TrimSpace(os.Getenv("GATEWAY_SSH_STRICT_HOST_KEY_CHECKING"))
+	if strictHostKey == "" {
+		strictHostKey = "accept-new"
+	}
+	return &SSHLauncher{SSHPath: "/usr/bin/ssh", PrlimitPath: "/usr/bin/prlimit", KnownHostsPath: knownHosts, StrictHostKey: strictHostKey}
 }
 
 func (l *SSHLauncher) Launch(ctx context.Context, meta SessionMetadata, command []string, env map[string]string) (Process, error) {
@@ -36,7 +42,8 @@ func (l *SSHLauncher) Launch(ctx context.Context, meta SessionMetadata, command 
 	if knownHosts == "" {
 		knownHosts = "/etc/ssh/ssh_known_hosts"
 	}
-	baseArgs := []string{"-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "ForwardAgent=no", "-o", "ClearAllForwardings=yes", "-o", "PermitLocalCommand=no", "-o", "UserKnownHostsFile=" + knownHosts, "-p", strconv.Itoa(meta.Port), fmt.Sprintf("%s@%s", meta.User, meta.Host), "--", "bash", "--noprofile", "--norc", "-i"}
+	strictHostKey := normalizeStrictHostKeyChecking(l.StrictHostKey)
+	baseArgs := []string{"-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=" + strictHostKey, "-o", "ForwardAgent=no", "-o", "ClearAllForwardings=yes", "-o", "PermitLocalCommand=no", "-o", "UserKnownHostsFile=" + knownHosts, "-p", strconv.Itoa(meta.Port), fmt.Sprintf("%s@%s", meta.User, meta.Host), "--", "bash", "--noprofile", "--norc", "-i"}
 
 	cmdPath := sshPath
 	cmdArgs := baseArgs
@@ -125,3 +132,12 @@ func (p *sshProcess) Close() error {
 }
 
 func (p *sshProcess) Done() <-chan error { return p.done }
+
+func normalizeStrictHostKeyChecking(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "yes", "no", "accept-new", "ask":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return "accept-new"
+	}
+}
