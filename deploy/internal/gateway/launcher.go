@@ -14,12 +14,17 @@ import (
 )
 
 type SSHLauncher struct {
-	SSHPath     string
-	PrlimitPath string
+	SSHPath        string
+	PrlimitPath    string
+	KnownHostsPath string
 }
 
 func NewSSHLauncher() *SSHLauncher {
-	return &SSHLauncher{SSHPath: "/usr/bin/ssh", PrlimitPath: "/usr/bin/prlimit"}
+	knownHosts := os.Getenv("GATEWAY_SSH_KNOWN_HOSTS")
+	if knownHosts == "" {
+		knownHosts = "/etc/ssh/ssh_known_hosts"
+	}
+	return &SSHLauncher{SSHPath: "/usr/bin/ssh", PrlimitPath: "/usr/bin/prlimit", KnownHostsPath: knownHosts}
 }
 
 func (l *SSHLauncher) Launch(ctx context.Context, meta SessionMetadata, command []string, env map[string]string) (Process, error) {
@@ -27,7 +32,11 @@ func (l *SSHLauncher) Launch(ctx context.Context, meta SessionMetadata, command 
 	if sshPath == "" {
 		sshPath = "/usr/bin/ssh"
 	}
-	baseArgs := []string{"-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "ForwardAgent=no", "-o", "ClearAllForwardings=yes", "-o", "PermitLocalCommand=no", "-p", strconv.Itoa(meta.Port), fmt.Sprintf("%s@%s", meta.User, meta.Host), "--", "bash", "--noprofile", "--norc", "-i"}
+	knownHosts := l.KnownHostsPath
+	if knownHosts == "" {
+		knownHosts = "/etc/ssh/ssh_known_hosts"
+	}
+	baseArgs := []string{"-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "ForwardAgent=no", "-o", "ClearAllForwardings=yes", "-o", "PermitLocalCommand=no", "-o", "UserKnownHostsFile=" + knownHosts, "-p", strconv.Itoa(meta.Port), fmt.Sprintf("%s@%s", meta.User, meta.Host), "--", "bash", "--noprofile", "--norc", "-i"}
 
 	cmdPath := sshPath
 	cmdArgs := baseArgs
@@ -36,7 +45,7 @@ func (l *SSHLauncher) Launch(ctx context.Context, meta SessionMetadata, command 
 		if prlimitPath == "" {
 			prlimitPath = "/usr/bin/prlimit"
 		}
-		args := make([]string, 0, 12)
+		args := make([]string, 0, 16)
 		if meta.Limits.CPUSeconds > 0 {
 			args = append(args, "--cpu="+strconv.Itoa(meta.Limits.CPUSeconds))
 		}
@@ -65,18 +74,12 @@ func (l *SSHLauncher) Launch(ctx context.Context, meta SessionMetadata, command 
 		close(proc.done)
 		_ = proc.Close()
 	}()
-	_ = command // intentionally ignored; command is server-fixed for safety.
+	_ = command
 	return proc, nil
 }
 
 func sanitizedEnv(extra map[string]string) []string {
-	env := []string{
-		"LANG=C.UTF-8",
-		"LC_ALL=C.UTF-8",
-		"TERM=xterm-256color",
-		"PATH=/usr/bin:/bin",
-		"HOME=/tmp",
-	}
+	env := []string{"LANG=C.UTF-8", "LC_ALL=C.UTF-8", "TERM=xterm-256color", "PATH=/usr/bin:/bin", "HOME=/tmp"}
 	allow := map[string]struct{}{"LANG": {}, "LC_ALL": {}, "TERM": {}}
 	for k, v := range extra {
 		if _, ok := allow[k]; ok {
@@ -94,10 +97,7 @@ type sshProcess struct {
 	once  sync.Once
 }
 
-func (p *sshProcess) Write(data []byte) (int, error) {
-	return p.pty.Write(data)
-}
-
+func (p *sshProcess) Write(data []byte) (int, error) { return p.pty.Write(data) }
 func (p *sshProcess) Resize(cols, rows uint16) error {
 	return pty.Setsize(p.pty, &pty.Winsize{Cols: cols, Rows: rows})
 }
@@ -124,6 +124,4 @@ func (p *sshProcess) Close() error {
 	return closeErr
 }
 
-func (p *sshProcess) Done() <-chan error {
-	return p.done
-}
+func (p *sshProcess) Done() <-chan error { return p.done }

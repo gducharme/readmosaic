@@ -64,6 +64,15 @@ func (f *fakeLauncher) Launch(_ context.Context, meta SessionMetadata, _ []strin
 	return f.proc, nil
 }
 
+func mustNewService(t *testing.T, launcher Launcher, store MetadataStore) *Service {
+	t.Helper()
+	svc, err := NewServiceWithSecret(launcher, store, []byte("0123456789abcdef0123456789abcdef"), nil)
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+	return svc
+}
+
 func openSession(t *testing.T, h http.Handler) SessionMetadata {
 	t.Helper()
 	rec := httptest.NewRecorder()
@@ -90,7 +99,7 @@ func authedRequest(method, path, token, body string) *http.Request {
 func TestGatewaySessionLifecycle(t *testing.T) {
 	store := &fakeStore{}
 	launcher := &fakeLauncher{}
-	svc := NewService(launcher, store)
+	svc := mustNewService(t, launcher, store)
 	h := NewHandler(svc).Routes()
 
 	meta := openSession(t, h)
@@ -119,7 +128,7 @@ func TestGatewaySessionLifecycle(t *testing.T) {
 }
 
 func TestGatewayResume(t *testing.T) {
-	h := NewHandler(NewService(&fakeLauncher{}, &fakeStore{})).Routes()
+	h := NewHandler(mustNewService(t, &fakeLauncher{}, &fakeStore{})).Routes()
 	meta := openSession(t, h)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, authedRequest(http.MethodPost, "/gateway/sessions/resume", meta.ResumeToken, `{}`))
@@ -129,7 +138,7 @@ func TestGatewayResume(t *testing.T) {
 }
 
 func TestAuthRequired(t *testing.T) {
-	h := NewHandler(NewService(&fakeLauncher{}, &fakeStore{})).Routes()
+	h := NewHandler(mustNewService(t, &fakeLauncher{}, &fakeStore{})).Routes()
 	meta := openSession(t, h)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/gateway/sessions/"+meta.SessionID+"/stdin", bytes.NewBufferString(`{"data":""}`)))
@@ -139,7 +148,7 @@ func TestAuthRequired(t *testing.T) {
 }
 
 func TestUnknownFieldRejected(t *testing.T) {
-	h := NewHandler(NewService(&fakeLauncher{}, &fakeStore{})).Routes()
+	h := NewHandler(mustNewService(t, &fakeLauncher{}, &fakeStore{})).Routes()
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/gateway/sessions", bytes.NewBufferString(`{"user":"alice","host":"example.com","oops":1}`)))
 	if rec.Code != http.StatusBadRequest {
@@ -148,7 +157,7 @@ func TestUnknownFieldRejected(t *testing.T) {
 }
 
 func TestOversizedStdinRejected(t *testing.T) {
-	h := NewHandler(NewService(&fakeLauncher{}, &fakeStore{})).Routes()
+	h := NewHandler(mustNewService(t, &fakeLauncher{}, &fakeStore{})).Routes()
 	meta := openSession(t, h)
 	large := strings.Repeat("a", maxStdinBytes+1)
 	payload := base64.StdEncoding.EncodeToString([]byte(large))
@@ -160,7 +169,7 @@ func TestOversizedStdinRejected(t *testing.T) {
 }
 
 func TestResizeBoundsRejected(t *testing.T) {
-	h := NewHandler(NewService(&fakeLauncher{}, &fakeStore{})).Routes()
+	h := NewHandler(mustNewService(t, &fakeLauncher{}, &fakeStore{})).Routes()
 	meta := openSession(t, h)
 	for _, body := range []string{`{"cols":0,"rows":10}`, `{"cols":10,"rows":5000}`} {
 		rec := httptest.NewRecorder()
@@ -172,7 +181,7 @@ func TestResizeBoundsRejected(t *testing.T) {
 }
 
 func TestUnknownSessionAndTokenReturn404(t *testing.T) {
-	h := NewHandler(NewService(&fakeLauncher{}, &fakeStore{})).Routes()
+	h := NewHandler(mustNewService(t, &fakeLauncher{}, &fakeStore{})).Routes()
 	meta := openSession(t, h)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, authedRequest(http.MethodDelete, "/gateway/sessions/nope", meta.ResumeToken, ""))
@@ -187,7 +196,7 @@ func TestUnknownSessionAndTokenReturn404(t *testing.T) {
 }
 
 func TestSessionActionExtraSegmentsRejected(t *testing.T) {
-	h := NewHandler(NewService(&fakeLauncher{}, &fakeStore{})).Routes()
+	h := NewHandler(mustNewService(t, &fakeLauncher{}, &fakeStore{})).Routes()
 	meta := openSession(t, h)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, authedRequest(http.MethodPost, "/gateway/sessions/"+meta.SessionID+"/stdin/extra", meta.ResumeToken, `{"data":""}`))
@@ -197,7 +206,7 @@ func TestSessionActionExtraSegmentsRejected(t *testing.T) {
 }
 
 func TestInvalidPortRejected(t *testing.T) {
-	h := NewHandler(NewService(&fakeLauncher{}, &fakeStore{})).Routes()
+	h := NewHandler(mustNewService(t, &fakeLauncher{}, &fakeStore{})).Routes()
 	for _, body := range []string{`{"user":"alice","host":"example.com","port":-1}`, `{"user":"alice","host":"example.com","port":70000}`} {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/gateway/sessions", bytes.NewBufferString(body)))

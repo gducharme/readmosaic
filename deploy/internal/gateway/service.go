@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -28,8 +29,11 @@ var (
 )
 
 const (
-	sessionTokenTTL  = 12 * time.Hour
-	sessionIdleLimit = 30 * time.Minute
+	sessionTokenTTL    = 12 * time.Hour
+	sessionIdleLimit   = 30 * time.Minute
+	minSecretBytes     = 32
+	envGatewayHMACKey  = "GATEWAY_HMAC_SECRET"
+	envGatewayHostList = "GATEWAY_HOST_ALLOWLIST"
 )
 
 type SessionLimits struct {
@@ -73,10 +77,11 @@ type Launcher interface {
 }
 
 type Service struct {
-	launcher Launcher
-	store    MetadataStore
-	now      func() time.Time
-	secret   []byte
+	launcher      Launcher
+	store         MetadataStore
+	now           func() time.Time
+	secret        []byte
+	hostAllowlist []string
 
 	mu       sync.RWMutex
 	sessions map[string]*sessionState
@@ -89,20 +94,36 @@ type sessionState struct {
 	cancel context.CancelFunc
 }
 
-func NewService(launcher Launcher, store MetadataStore) *Service {
-	return &Service{
-		launcher: launcher,
-		store:    store,
-		now:      time.Now,
-		secret:   []byte("gateway-local-dev-secret"),
-		sessions: map[string]*sessionState{},
-		tokens:   map[string]string{},
+func NewService(launcher Launcher, store MetadataStore) (*Service, error) {
+	secret := os.Getenv(envGatewayHMACKey)
+	if len(secret) < minSecretBytes {
+		return nil, fmt.Errorf("%s must be set to at least %d bytes", envGatewayHMACKey, minSecretBytes)
 	}
+	allow := parseHostAllowlist(os.Getenv(envGatewayHostList))
+	return NewServiceWithSecret(launcher, store, []byte(secret), allow)
+}
+
+func NewServiceWithSecret(launcher Launcher, store MetadataStore, secret []byte, hostAllowlist []string) (*Service, error) {
+	if len(secret) < minSecretBytes {
+		return nil, fmt.Errorf("gateway hmac secret must be at least %d bytes", minSecretBytes)
+	}
+	return &Service{
+		launcher:      launcher,
+		store:         store,
+		now:           time.Now,
+		secret:        append([]byte(nil), secret...),
+		hostAllowlist: hostAllowlist,
+		sessions:      map[string]*sessionState{},
+		tokens:        map[string]string{},
+	}, nil
 }
 
 func (s *Service) OpenSession(ctx context.Context, req OpenSessionRequest) (SessionMetadata, error) {
 	if req.User == "" || req.Host == "" || !validUserPattern.MatchString(req.User) || !validHostPattern.MatchString(req.Host) {
 		return SessionMetadata{}, ErrInvalidRequest
+	}
+	if !s.hostAllowed(req.Host) {
+		return SessionMetadata{}, ErrUnauthorized
 	}
 	if len(req.Command) > 0 {
 		return SessionMetadata{}, ErrInvalidRequest
@@ -127,19 +148,7 @@ func (s *Service) OpenSession(ctx context.Context, req OpenSessionRequest) (Sess
 		return SessionMetadata{}, fmt.Errorf("resume token: %w", err)
 	}
 	tokenHash := s.tokenHash(token)
-	meta := SessionMetadata{
-		SessionID:       sessionID,
-		ResumeToken:     token,
-		ResumeTokenHash: tokenHash,
-		User:            req.User,
-		Host:            req.Host,
-		Port:            req.Port,
-		StartedAt:       now,
-		LastSeenAt:      now,
-		ExpiresAt:       now.Add(sessionTokenTTL),
-		Connected:       true,
-		Limits:          req.Limits,
-	}
+	meta := SessionMetadata{SessionID: sessionID, ResumeToken: token, ResumeTokenHash: tokenHash, User: req.User, Host: req.Host, Port: req.Port, StartedAt: now, LastSeenAt: now, ExpiresAt: now.Add(sessionTokenTTL), Connected: true, Limits: req.Limits}
 
 	procCtx, cancel := context.WithCancel(ctx)
 	proc, err := s.launcher.Launch(procCtx, meta, req.Command, req.Env)
@@ -179,7 +188,9 @@ func (s *Service) ResumeSession(token string) (SessionMetadata, error) {
 		}
 		meta.LastSeenAt = s.now().UTC()
 		meta.ResumeToken = token
-		if err := s.store.Upsert(meta); err != nil {
+		persisted := meta
+		persisted.ResumeToken = ""
+		if err := s.store.Upsert(persisted); err != nil {
 			log.Printf("level=warn event=gateway_store_upsert_failed session=%s error=%v", meta.SessionID, err)
 		}
 		return meta, nil
@@ -320,6 +331,34 @@ func (s *Service) tokenHash(token string) string {
 	mac := hmac.New(sha256.New, s.secret)
 	_, _ = mac.Write([]byte(token))
 	return hex.EncodeToString(mac.Sum(nil))
+}
+
+func (s *Service) hostAllowed(host string) bool {
+	if len(s.hostAllowlist) == 0 {
+		return true
+	}
+	for _, allowed := range s.hostAllowlist {
+		if host == allowed || strings.HasSuffix(host, "."+allowed) {
+			return true
+		}
+	}
+	return false
+}
+
+func parseHostAllowlist(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		v := strings.ToLower(strings.TrimSpace(part))
+		if v == "" {
+			continue
+		}
+		out = append(out, v)
+	}
+	return out
 }
 
 func validateInputEnv(input map[string]string) error {
