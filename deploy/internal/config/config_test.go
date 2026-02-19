@@ -17,6 +17,18 @@ func setRequiredEnv(t *testing.T) {
 	t.Setenv("BTC_ANCHOR_HEIGHT", "840000")
 }
 
+func TestLoadFromEnvDefaultListenAddr(t *testing.T) {
+	setRequiredEnv(t)
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() unexpected error: %v", err)
+	}
+	if cfg.ListenAddr != "0.0.0.0:8080" {
+		t.Fatalf("expected default LISTEN_ADDR to be 0.0.0.0:8080, got %q", cfg.ListenAddr)
+	}
+}
+
 func TestLoadFromEnvInvalidPort(t *testing.T) {
 	setRequiredEnv(t)
 	t.Setenv("MOSAIC_SSH_PORT", "not-a-number")
