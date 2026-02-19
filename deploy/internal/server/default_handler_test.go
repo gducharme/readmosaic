@@ -268,7 +268,8 @@ func TestDefaultHandlerRouteSelectionByUsernamePolicy(t *testing.T) {
 		wantMarker string
 	}{
 		{name: "vector-user", user: "west", wantMarker: "VECTOR FLOW ACTIVE [west]"},
-		{name: "triage-user", user: "read", wantMarker: "TRIAGE FLOW ACTIVE [read]"},
+		{name: "triage-user-read", user: "read", wantMarker: "TRIAGE FLOW ACTIVE [read]"},
+		{name: "triage-user-archive", user: "archive", wantMarker: "TRIAGE FLOW ACTIVE [archive]"},
 	}
 
 	h := routedHandler()
@@ -307,5 +308,115 @@ func TestResolveFlowRejectsUnsupportedIdentity(t *testing.T) {
 	_, err := resolveFlow(router.Identity{Username: "unknown"})
 	if err == nil {
 		t.Fatal("expected unsupported identity to return an error")
+	}
+}
+
+func TestStreamKeysDecodesUTF8AndControls(t *testing.T) {
+	input := strings.NewReader("é\n\x7f\x04")
+	keys := make(chan string, 8)
+	eof := make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go streamKeys(ctx, input, keys, eof)
+
+	got := make([]string, 0, 4)
+	for i := 0; i < 4; i++ {
+		select {
+		case key := <-keys:
+			got = append(got, key)
+		case <-time.After(time.Second):
+			t.Fatalf("timeout waiting for key %d", i)
+		}
+	}
+
+	want := []string{"é", "enter", "backspace", "ctrl+d"}
+	if len(got) != len(want) {
+		t.Fatalf("unexpected key count: got=%d want=%d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("key[%d]=%q want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestStreamKeysSwallowsArrowEscapeSequences(t *testing.T) {
+	input := strings.NewReader("[Ax")
+	keys := make(chan string, 8)
+	eof := make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go streamKeys(ctx, input, keys, eof)
+
+	select {
+	case key := <-keys:
+		if key != "x" {
+			t.Fatalf("expected only trailing printable key, got %q", key)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for key")
+	}
+
+	select {
+	case extra := <-keys:
+		t.Fatalf("unexpected extra key from escape sequence: %q", extra)
+	default:
+	}
+}
+
+func TestStreamKeysSwallowsArrowEscapeSequencesWhenChunked(t *testing.T) {
+	r, w := io.Pipe()
+	defer r.Close()
+	keys := make(chan string, 8)
+	eof := make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go streamKeys(ctx, r, keys, eof)
+	go func() {
+		_, _ = w.Write([]byte{0x1b})
+		time.Sleep(10 * time.Millisecond)
+		_, _ = w.Write([]byte("["))
+		time.Sleep(10 * time.Millisecond)
+		_, _ = w.Write([]byte("A"))
+		time.Sleep(10 * time.Millisecond)
+		_, _ = w.Write([]byte("x"))
+		_ = w.Close()
+	}()
+
+	select {
+	case key := <-keys:
+		if key != "x" {
+			t.Fatalf("expected only trailing printable key, got %q", key)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for key")
+	}
+
+	select {
+	case extra := <-keys:
+		t.Fatalf("unexpected extra key from chunked escape sequence: %q", extra)
+	case <-time.After(30 * time.Millisecond):
+	}
+}
+
+func TestStreamKeysEmitsStandaloneEscOnEOF(t *testing.T) {
+	input := strings.NewReader("")
+	keys := make(chan string, 8)
+	eof := make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go streamKeys(ctx, input, keys, eof)
+
+	select {
+	case key := <-keys:
+		if key != "esc" {
+			t.Fatalf("expected esc key, got %q", key)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for esc key")
 	}
 }

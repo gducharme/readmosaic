@@ -14,6 +14,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode"
 
 	"github.com/charmbracelet/ssh"
 	"github.com/charmbracelet/wish"
@@ -246,6 +247,7 @@ func defaultHandler(s ssh.Session) {
 		Height:      height,
 		IsTTY:       true,
 		ThemeBundle: themeBundle,
+		Username:    identity.Username,
 	})
 
 	switch flow {
@@ -330,15 +332,29 @@ func safeTickerDuration(candidate, fallback time.Duration) time.Duration {
 
 func streamKeys(ctx context.Context, r io.Reader, keys chan<- string, eof chan<- struct{}) {
 	reader := bufio.NewReader(r)
+	escPending := false
+	ansiDiscard := false
 	for {
 		select {
 		case <-ctx.Done():
+			if escPending {
+				select {
+				case keys <- "esc":
+				default:
+				}
+			}
 			return
 		default:
 		}
 
-		b, err := reader.ReadByte()
+		rn, _, err := reader.ReadRune()
 		if err != nil {
+			if escPending {
+				select {
+				case keys <- "esc":
+				default:
+				}
+			}
 			if errors.Is(err, io.EOF) {
 				select {
 				case eof <- struct{}{}:
@@ -348,8 +364,29 @@ func streamKeys(ctx context.Context, r io.Reader, keys chan<- string, eof chan<-
 			return
 		}
 
+		if ansiDiscard {
+			if rn >= '@' && rn <= '~' {
+				ansiDiscard = false
+			}
+			continue
+		}
+
+		if escPending {
+			escPending = false
+			if rn == '[' || rn == 'O' {
+				ansiDiscard = true
+				continue
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case keys <- "esc":
+			default:
+			}
+		}
+
 		var key string
-		switch b {
+		switch rn {
 		case '\r', '\n':
 			key = "enter"
 		case 0x04:
@@ -357,11 +394,11 @@ func streamKeys(ctx context.Context, r io.Reader, keys chan<- string, eof chan<-
 		case 0x7f, 0x08:
 			key = "backspace"
 		case 0x1b:
-			// NOTE: ANSI escape sequences (e.g. arrow keys) are treated as plain ESC in this MVP decoder.
-			key = "esc"
+			escPending = true
+			continue
 		default:
-			if b >= 0x20 {
-				key = string([]byte{b})
+			if !unicode.IsControl(rn) {
+				key = string(rn)
 			}
 		}
 

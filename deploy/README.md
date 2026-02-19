@@ -49,6 +49,8 @@ These are read by `internal/config.LoadFromEnv()`:
 - `MOSAIC_SSH_IDLE_TIMEOUT` (default `120s`)
 - `MOSAIC_SSH_MAX_SESSIONS` (default `32`)
 - `MOSAIC_SSH_RATE_LIMIT_PER_SECOND` (default `20`)
+- `MOSAIC_ARCHIVE_ROOT` (default `/archive`)
+- `MOSAIC_ARCHIVE_HOST_DIR` (default `./data/archive`, bind-mounted in compose)
 
 ### Required content/indexing
 
@@ -90,16 +92,18 @@ This is intentional:
 
 - **Deploy/default base** can target host SSH port 22.
 - **Local dev** avoids privileged port surprises by defaulting to 2222.
+- Archive storage is bind-mounted from `MOSAIC_ARCHIVE_HOST_DIR` into `MOSAIC_ARCHIVE_ROOT`; point `MOSAIC_ARCHIVE_HOST_DIR` at shared/host-persistent storage if you run multiple container instances.
 
 ## Local dev flow
 
 ```bash
 cd deploy
 cp .env.example .env
-mkdir -p data/ssh
+mkdir -p data/ssh data/archive
 # provide an existing ed25519 private key:
 # data/ssh/host_ed25519
 chmod 600 data/ssh/host_ed25519
+# archive documents are persisted in data/archive and mounted at /archive in the container
 
 # uses docker-compose.yml + docker-compose.override.yml by default
 docker compose up --build -d
@@ -168,9 +172,10 @@ The `app` service does not declare `depends_on` for `neo4j`. This keeps Neo4j tr
 ```bash
 cd deploy
 cp .env.example .env
-mkdir -p data/ssh
+mkdir -p data/ssh data/archive
 # place a valid key at data/ssh/host_ed25519
 chmod 600 data/ssh/host_ed25519
+# archive documents are persisted in data/archive and mounted at /archive in the container
 
 make test
 make vet

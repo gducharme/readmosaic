@@ -8,11 +8,14 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/rivo/uniseg"
+	"golang.org/x/text/language"
 )
 
 // Architecture:
@@ -44,10 +47,14 @@ const (
 	maxViewportLines        = 512
 	defaultReadFragmentPath = "internal/content/vector_a_read_fragment.txt"
 	readFragmentPathEnvVar  = "MOSAIC_VECTOR_A_FRAGMENT_PATH"
+	archiveRootEnvVar       = "MOSAIC_ARCHIVE_ROOT"
+	archiveSeedEnvVar       = "MOSAIC_ARCHIVE_SEED_DEFAULTS"
+	defaultArchiveRoot      = "/archive"
 	typewriterTickMsEnvVar  = "MOSAIC_TUI_TYPEWRITER_TICK_MS"
 	typewriterBatchEnvVar   = "MOSAIC_TUI_TYPEWRITER_BATCH"
 	readFallbackLine        = "READ FRAGMENT UNAVAILABLE"
 	typewriterQueueDropLine = "[TYPEWRITER QUEUE TRUNCATED]"
+	maxArchiveFileBytes     = 2 * 1024 * 1024
 )
 
 // Keybindings (source of truth for tests and operators):
@@ -67,6 +74,9 @@ const (
 	ScreenMOTD Screen = iota
 	ScreenTriage
 	ScreenCommand
+	ScreenArchiveLanguage
+	ScreenArchiveFile
+	ScreenArchiveEditor
 	ScreenExit
 )
 
@@ -129,6 +139,57 @@ type Options struct {
 	Ticks          TickSource
 	ThemeBundle    *theme.Bundle
 	TypewriterStep int
+	Username       string
+}
+
+type archiveLanguage struct {
+	DirName     string
+	DisplayCode string
+	DisplayName string
+	Path        string
+	IsRTL       bool
+}
+
+type archiveDocument struct {
+	Name string
+	Path string
+}
+
+type archiveSeedFile struct {
+	Name    string
+	Content string
+}
+
+type archiveSeedLanguage struct {
+	DirName string
+	Files   []archiveSeedFile
+}
+
+var archiveSeedLanguages = []archiveSeedLanguage{
+	{
+		DirName: "en",
+		Files: []archiveSeedFile{
+			{Name: "001-Intro", Content: "Welcome to the archive.\n"},
+			{Name: "002-The start", Content: "This is the start of the story.\n"},
+			{Name: "003-The surprise", Content: "A surprise appears at the end.\n"},
+		},
+	},
+	{
+		DirName: "fr",
+		Files: []archiveSeedFile{
+			{Name: "001-Intro", Content: "Bienvenue dans les archives.\n"},
+			{Name: "002-Le début", Content: "Voici le début de l'histoire.\n"},
+			{Name: "003-La surprise", Content: "Une surprise apparaît à la fin.\n"},
+		},
+	},
+	{
+		DirName: "ar",
+		Files: []archiveSeedFile{
+			{Name: "001-Intro", Content: "مرحباً بك في الأرشيف.\n"},
+			{Name: "002-البداية", Content: "هذه هي بداية القصة.\n"},
+			{Name: "003-المفاجأة", Content: "تظهر مفاجأة في النهاية.\n"},
+		},
+	},
 }
 
 // Model represents the terminal UI state with three panes.
@@ -159,6 +220,16 @@ type Model struct {
 	typewriterCursor  int
 	typewriterLineIdx int // -1 indicates no active animated line
 	typewriterStep    int
+
+	username            string
+	archiveRoot         string
+	archiveLanguages    []archiveLanguage
+	archiveFiles        []archiveDocument
+	archiveLanguageIdx  int
+	archiveFileIdx      int
+	archiveEditPath     string
+	archiveEditorBuffer string
+	archiveStatus       string
 }
 
 // NewModel constructs the interactive TUI model from caller/session metadata.
@@ -190,6 +261,7 @@ func NewModelWithOptions(remoteAddr string, opts Options) Model {
 		ticks:          ticks,
 		viewportLines:  strings.Split(renderMOTD(), "\n"),
 		typewriterStep: resolveTypewriterStep(opts.TypewriterStep),
+		username:       strings.ToLower(strings.TrimSpace(opts.Username)),
 	}
 	if opts.ThemeBundle != nil {
 		m.themeBundle = cloneThemeBundle(*opts.ThemeBundle)
@@ -201,6 +273,9 @@ func NewModelWithOptions(remoteAddr string, opts Options) Model {
 	}
 	m.enforceBufferLimit()
 	m.clampViewportBounds()
+	if m.username == "archive" {
+		m.initArchiveMode()
+	}
 	return m
 }
 
@@ -285,7 +360,447 @@ func (m *Model) handleKey(key string) {
 		}
 	case ScreenExit:
 		// no-op
+	case ScreenArchiveLanguage:
+		m.handleArchiveLanguageKey(lower, key)
+	case ScreenArchiveFile:
+		m.handleArchiveFileKey(lower, key)
+	case ScreenArchiveEditor:
+		m.handleArchiveEditorKey(lower, key)
 	}
+}
+
+func (m *Model) initArchiveMode() {
+	m.archiveRoot = strings.TrimSpace(os.Getenv(archiveRootEnvVar))
+	if m.archiveRoot == "" {
+		m.archiveRoot = defaultArchiveRoot
+	}
+	m.screen = ScreenArchiveLanguage
+	m.promptInput = ""
+	m.selectedVector = "ARCHIVE"
+	if archiveSeedEnabled() {
+		m.ensureArchiveSeedContent()
+	}
+	m.loadArchiveLanguages()
+	m.renderArchiveLanguageMenu()
+}
+
+func archiveSeedEnabled() bool {
+	value := strings.TrimSpace(strings.ToLower(os.Getenv(archiveSeedEnvVar)))
+	if value == "" {
+		return true
+	}
+	switch value {
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return true
+	}
+}
+
+func (m *Model) ensureArchiveSeedContent() {
+	root := filepath.Clean(m.archiveRoot)
+	for _, lang := range archiveSeedLanguages {
+		langDir := filepath.Join(root, lang.DirName)
+		if err := os.MkdirAll(langDir, 0o755); err != nil {
+			m.archiveStatus = fmt.Sprintf("Failed to prepare archive directory %s: %v", lang.DirName, err)
+			continue
+		}
+		for _, seed := range lang.Files {
+			path := filepath.Join(langDir, seed.Name)
+			if _, err := os.Stat(path); err == nil {
+				continue
+			} else if !os.IsNotExist(err) {
+				m.archiveStatus = fmt.Sprintf("Failed to inspect archive file %s: %v", path, err)
+				continue
+			}
+			if err := os.WriteFile(path, []byte(seed.Content), 0o600); err != nil {
+				m.archiveStatus = fmt.Sprintf("Failed to seed archive file %s: %v", path, err)
+			}
+		}
+	}
+}
+
+func (m *Model) loadArchiveLanguages() {
+	entries, err := os.ReadDir(filepath.Clean(m.archiveRoot))
+	if err != nil {
+		m.archiveLanguages = nil
+		m.archiveStatus = fmt.Sprintf("Archive root unavailable: %v", err)
+		return
+	}
+
+	langs := make([]archiveLanguage, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		dirName := entry.Name()
+		display := archiveDirectoryToLanguageCode(dirName)
+		menuName := archiveLanguageMenuName(display, dirName)
+		langs = append(langs, archiveLanguage{DirName: dirName, DisplayCode: display, DisplayName: menuName, Path: filepath.Join(m.archiveRoot, dirName), IsRTL: isRTLLanguage(display)})
+	}
+	sort.Slice(langs, func(i, j int) bool {
+		return strings.ToLower(langs[i].DirName) < strings.ToLower(langs[j].DirName)
+	})
+	m.archiveLanguages = langs
+	m.archiveStatus = ""
+}
+
+func archiveDirectoryToLanguageCode(dirName string) string {
+	normalized := strings.TrimSpace(dirName)
+	if normalized == "" {
+		return "und"
+	}
+
+	tag, err := language.Parse(normalized)
+	if err == nil {
+		return tag.String()
+	}
+
+	fallback := map[string]string{
+		"english":  "en",
+		"francais": "fr",
+		"français": "fr",
+		"arabic":   "ar",
+	}
+	key := strings.ToLower(normalized)
+	if code, ok := fallback[key]; ok {
+		return code
+	}
+	return normalized
+}
+
+func archiveLanguageAutonym(code string) string {
+	base := strings.ToLower(strings.Split(strings.TrimSpace(code), "-")[0])
+	autonyms := map[string]string{
+		"en": "English",
+		"fr": "Français",
+		"ar": "العربية",
+	}
+	if name, ok := autonyms[base]; ok {
+		return name
+	}
+	if base == "" {
+		return code
+	}
+	return strings.ToUpper(base)
+}
+
+func archiveLanguageMenuName(code, dirName string) string {
+	autonym := archiveLanguageAutonym(code)
+	if strings.EqualFold(strings.TrimSpace(dirName), strings.TrimSpace(code)) {
+		return fmt.Sprintf("%s (%s)", autonym, code)
+	}
+	return fmt.Sprintf("%s (%s · dir: %s)", autonym, code, dirName)
+}
+
+func isRTLLanguage(code string) bool {
+	base := strings.ToLower(strings.Split(strings.TrimSpace(code), "-")[0])
+	switch base {
+	case "ar", "fa", "he", "ur", "ps", "dv", "yi", "ku", "syr":
+		return true
+	default:
+		return false
+	}
+}
+
+func (m *Model) renderArchiveLanguageMenu() {
+	lines := []string{fmt.Sprintf("ARCHIVE ROOT: %s", m.archiveRoot), "LANGUAGE MENU // USE INTERNATIONAL CODES"}
+	if m.archiveStatus != "" {
+		lines = append(lines, "", "WARNING: "+m.archiveStatus)
+	}
+	if len(m.archiveLanguages) == 0 {
+		lines = append(lines, "", "No language directories found.")
+	} else {
+		for idx, lang := range m.archiveLanguages {
+			lines = append(lines, fmt.Sprintf("%d) %s -> %s", idx+1, lang.DisplayName, filepath.Join(m.archiveRoot, lang.DirName)))
+		}
+	}
+	lines = append(lines, "", "Type language number then Enter.")
+	m.setViewportContent(strings.Join(lines, "\n"))
+}
+
+func (m *Model) handleArchiveLanguageKey(lower, raw string) {
+	switch lower {
+	case "ctrl+d":
+		m.screen = ScreenExit
+		return
+	case "backspace":
+		if len(m.promptInput) > 0 {
+			r := []rune(m.promptInput)
+			m.promptInput = string(r[:len(r)-1])
+		}
+		return
+	case "enter":
+		choice, err := strconv.Atoi(strings.TrimSpace(m.promptInput))
+		m.promptInput = ""
+		if err != nil || choice <= 0 || choice > len(m.archiveLanguages) {
+			return
+		}
+		m.archiveLanguageIdx = choice - 1
+		m.loadArchiveFiles(m.archiveLanguages[m.archiveLanguageIdx])
+		m.screen = ScreenArchiveFile
+		m.renderArchiveFileMenu()
+		return
+	}
+	if len([]rune(raw)) == 1 && unicode.IsDigit([]rune(raw)[0]) {
+		m.promptInput += raw
+	}
+}
+
+func (m *Model) loadArchiveFiles(lang archiveLanguage) {
+	entries, err := os.ReadDir(filepath.Clean(lang.Path))
+	if err != nil {
+		m.archiveFiles = nil
+		m.archiveStatus = fmt.Sprintf("Cannot read language directory: %v", err)
+		return
+	}
+	files := make([]archiveDocument, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		files = append(files, archiveDocument{Name: entry.Name(), Path: filepath.Join(lang.Path, entry.Name())})
+	}
+	sort.Slice(files, func(i, j int) bool { return strings.ToLower(files[i].Name) < strings.ToLower(files[j].Name) })
+	m.archiveFiles = files
+	m.archiveStatus = ""
+}
+
+func resolvePathWithSymlinks(path string) (string, error) {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(absPath)
+	if err == nil {
+		return filepath.Clean(resolved), nil
+	}
+	if !os.IsNotExist(err) {
+		return "", err
+	}
+	parent := filepath.Dir(absPath)
+	resolvedParent, parentErr := filepath.EvalSymlinks(parent)
+	if parentErr != nil {
+		return "", parentErr
+	}
+	return filepath.Clean(filepath.Join(resolvedParent, filepath.Base(absPath))), nil
+}
+
+// NOTE: Path resolution reduces traversal/symlink escapes but cannot fully eliminate
+// TOCTOU races on a concurrently mutating filesystem. Deployments assume archive
+// root write access is trusted and controlled by operators.
+func (m *Model) isPathInsideArchiveRoot(candidate string) bool {
+	resolvedRoot, err := resolvePathWithSymlinks(filepath.Clean(m.archiveRoot))
+	if err != nil {
+		return false
+	}
+	resolvedCandidate, err := resolvePathWithSymlinks(filepath.Clean(candidate))
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(resolvedRoot, resolvedCandidate)
+	if err != nil {
+		return false
+	}
+	if rel == "." {
+		return true
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
+}
+
+func (m *Model) renderArchiveFileMenu() {
+	lang := m.archiveLanguages[m.archiveLanguageIdx]
+	lines := []string{fmt.Sprintf("ARCHIVE LANGUAGE: %s", lang.DisplayName)}
+	if m.archiveStatus != "" {
+		lines = append(lines, "WARNING: "+m.archiveStatus)
+	}
+	if len(m.archiveFiles) == 0 {
+		lines = append(lines, "", "No files found for this language.")
+	} else {
+		for idx, file := range m.archiveFiles {
+			lines = append(lines, fmt.Sprintf("%d) %s", idx+1, file.Name))
+		}
+	}
+	lines = append(lines, "", "Type file number then Enter. Esc returns to languages.")
+	m.setViewportContent(strings.Join(lines, "\n"))
+}
+
+func (m *Model) handleArchiveFileKey(lower, raw string) {
+	switch lower {
+	case "ctrl+d":
+		m.screen = ScreenExit
+		return
+	case "esc":
+		m.promptInput = ""
+		m.screen = ScreenArchiveLanguage
+		m.renderArchiveLanguageMenu()
+		return
+	case "backspace":
+		if len(m.promptInput) > 0 {
+			r := []rune(m.promptInput)
+			m.promptInput = string(r[:len(r)-1])
+		}
+		return
+	case "enter":
+		choice, err := strconv.Atoi(strings.TrimSpace(m.promptInput))
+		m.promptInput = ""
+		if err != nil || choice <= 0 || choice > len(m.archiveFiles) {
+			return
+		}
+		m.archiveFileIdx = choice - 1
+		m.openArchiveFile(m.archiveFiles[m.archiveFileIdx])
+		m.screen = ScreenArchiveEditor
+		m.renderArchiveEditor()
+		return
+	}
+	if len([]rune(raw)) == 1 && unicode.IsDigit([]rune(raw)[0]) {
+		m.promptInput += raw
+	}
+}
+
+func sanitizeArchiveLoadedContent(content string) string {
+	builder := strings.Builder{}
+	for _, r := range content {
+		if r == '\n' || r == '\t' {
+			builder.WriteRune(r)
+			continue
+		}
+		if unicode.IsControl(r) {
+			continue
+		}
+		builder.WriteRune(r)
+	}
+	return builder.String()
+}
+
+func (m *Model) openArchiveFile(file archiveDocument) {
+	clean := filepath.Clean(file.Path)
+	if !m.isPathInsideArchiveRoot(clean) {
+		m.archiveEditorBuffer = ""
+		m.archiveStatus = "Refusing to open file outside archive root"
+		return
+	}
+	info, err := os.Stat(clean)
+	if err != nil {
+		m.archiveEditorBuffer = ""
+		m.archiveStatus = fmt.Sprintf("Unable to stat %s: %v", file.Name, err)
+		return
+	}
+	if info.Size() > maxArchiveFileBytes {
+		m.archiveEditorBuffer = ""
+		m.archiveStatus = fmt.Sprintf("Refusing to open %s: file too large (%d bytes > %d)", file.Name, info.Size(), maxArchiveFileBytes)
+		return
+	}
+	data, err := os.ReadFile(clean)
+	if err != nil {
+		m.archiveEditorBuffer = ""
+		m.archiveStatus = fmt.Sprintf("Unable to open %s: %v", file.Name, err)
+		return
+	}
+	m.archiveEditPath = clean
+	m.archiveEditorBuffer = sanitizeArchiveLoadedContent(string(data))
+	m.archiveStatus = ""
+}
+
+func (m *Model) renderArchiveEditor() {
+	lang := m.archiveLanguages[m.archiveLanguageIdx]
+	file := m.archiveFiles[m.archiveFileIdx]
+	dir := "LTR"
+	if lang.IsRTL {
+		dir = "RTL"
+	}
+	lines := []string{fmt.Sprintf("ARCHIVE EDITOR // %s", file.Name), fmt.Sprintf("Language: %s [%s]", lang.DisplayName, dir), "Append/backspace/newline editing only. No cursor navigation.", "Edits save immediately.", "Esc returns to file list.", ""}
+	if m.archiveStatus != "" {
+		lines = append(lines, "WARNING: "+m.archiveStatus, "")
+	}
+	lines = append(lines, strings.Split(m.archiveEditorBuffer, "\n")...)
+	m.setViewportContent(strings.Join(lines, "\n"))
+}
+
+func (m *Model) handleArchiveEditorKey(lower, raw string) {
+	switch lower {
+	case "ctrl+d":
+		m.screen = ScreenExit
+		return
+	case "esc":
+		m.promptInput = ""
+		m.screen = ScreenArchiveFile
+		m.renderArchiveFileMenu()
+		return
+	case "backspace":
+		runes := []rune(m.archiveEditorBuffer)
+		if len(runes) > 0 {
+			m.archiveEditorBuffer = string(runes[:len(runes)-1])
+			m.persistArchiveEdit()
+		}
+		m.renderArchiveEditor()
+		return
+	case "enter":
+		m.archiveEditorBuffer += "\n"
+		m.persistArchiveEdit()
+		m.renderArchiveEditor()
+		return
+	}
+	if raw != "" {
+		filtered := strings.Builder{}
+		for _, r := range raw {
+			if unicode.IsControl(r) {
+				continue
+			}
+			filtered.WriteRune(r)
+		}
+		if filtered.Len() == 0 {
+			return
+		}
+		m.archiveEditorBuffer += filtered.String()
+		m.persistArchiveEdit()
+		m.renderArchiveEditor()
+	}
+}
+
+func (m *Model) persistArchiveEdit() {
+	if m.archiveEditPath == "" {
+		return
+	}
+	clean := filepath.Clean(m.archiveEditPath)
+	if !m.isPathInsideArchiveRoot(clean) {
+		m.archiveStatus = "Save failed: refusing to write outside archive root"
+		return
+	}
+	payload := []byte(m.archiveEditorBuffer)
+	if len(payload) > maxArchiveFileBytes {
+		m.archiveStatus = fmt.Sprintf("Save failed: content exceeds max size (%d bytes > %d)", len(payload), maxArchiveFileBytes)
+		return
+	}
+	info, err := os.Stat(clean)
+	if err != nil {
+		m.archiveStatus = fmt.Sprintf("Save failed: %v", err)
+		return
+	}
+	tmpFile, err := os.CreateTemp(filepath.Dir(clean), filepath.Base(clean)+".tmp-*")
+	if err != nil {
+		m.archiveStatus = fmt.Sprintf("Save failed: %v", err)
+		return
+	}
+	_ = tmpFile.Chmod(info.Mode().Perm())
+	tmpPath := tmpFile.Name()
+	if _, err := tmpFile.Write(payload); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+		m.archiveStatus = fmt.Sprintf("Save failed: %v", err)
+		return
+	}
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		m.archiveStatus = fmt.Sprintf("Save failed: %v", err)
+		return
+	}
+	if err := os.Rename(tmpPath, clean); err != nil {
+		_ = os.Remove(tmpPath)
+		m.archiveStatus = fmt.Sprintf("Save failed: %v", err)
+		return
+	}
+	m.archiveStatus = "Saved at " + time.Now().Format("15:04:05")
 }
 
 func (m *Model) selectVectorByKey(key string) {
@@ -500,6 +1015,16 @@ func renderPrompt(m Model) string {
 			cursor = "█"
 		}
 		prompt = promptPrefix + m.promptInput + cursor
+	case ScreenArchiveLanguage:
+		prompt = promptPrefix + "[ARCHIVE LANGUAGE #] " + m.promptInput
+	case ScreenArchiveFile:
+		prompt = promptPrefix + "[ARCHIVE FILE #] " + m.promptInput
+	case ScreenArchiveEditor:
+		cursor := " "
+		if m.cursorBlink {
+			cursor = "█"
+		}
+		prompt = promptPrefix + "[EDITING LIVE]" + cursor
 	default:
 		prompt = promptPrefix
 	}

@@ -693,3 +693,290 @@ func BenchmarkRenderPerTick(b *testing.B) {
 		_ = Render(m)
 	}
 }
+
+func TestArchiveUserStartsInLanguageMenu(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "en"), 0o755); err != nil {
+		t.Fatalf("mkdir en: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "ar"), 0o755); err != nil {
+		t.Fatalf("mkdir ar: %v", err)
+	}
+	t.Setenv(archiveRootEnvVar, root)
+	t.Setenv(archiveSeedEnvVar, "false")
+
+	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: "archive"})
+	if m.screen != ScreenArchiveLanguage {
+		t.Fatalf("expected archive language screen, got %v", m.screen)
+	}
+	view := renderViewport(m)
+	if !strings.Contains(view, "English (en)") || !strings.Contains(view, "العربية (ar)") {
+		t.Fatalf("expected autonym + code labels, got: %q", view)
+	}
+	expectedLine := "1) العربية (ar) -> " + filepath.Join(root, "ar")
+	if !strings.Contains(view, expectedLine) {
+		t.Fatalf("expected explicit menu line %q, got: %q", expectedLine, view)
+	}
+}
+
+func TestArchiveEditorPersistsEditsImmediately(t *testing.T) {
+	root := t.TempDir()
+	langDir := filepath.Join(root, "en")
+	if err := os.Mkdir(langDir, 0o755); err != nil {
+		t.Fatalf("mkdir en: %v", err)
+	}
+	filePath := filepath.Join(langDir, "001-Intro")
+	if err := os.WriteFile(filePath, []byte("Hello"), 0o600); err != nil {
+		t.Fatalf("write initial file: %v", err)
+	}
+	t.Setenv(archiveRootEnvVar, root)
+	t.Setenv(archiveSeedEnvVar, "false")
+
+	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: "archive"})
+	m = m.Update(KeyMsg{Key: "1"})
+	m = m.Update(KeyMsg{Key: "enter"})
+	if m.screen != ScreenArchiveFile {
+		t.Fatalf("expected archive file screen, got %v", m.screen)
+	}
+	m = m.Update(KeyMsg{Key: "1"})
+	m = m.Update(KeyMsg{Key: "enter"})
+	if m.screen != ScreenArchiveEditor {
+		t.Fatalf("expected archive editor screen, got %v", m.screen)
+	}
+
+	m = m.Update(KeyMsg{Key: "!"})
+	updated, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read updated file: %v", err)
+	}
+	if string(updated) != "Hello!" {
+		t.Fatalf("expected immediate persistence, got %q", string(updated))
+	}
+
+	m = m.Update(KeyMsg{Key: "backspace"})
+	updated, err = os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read updated file after backspace: %v", err)
+	}
+	if string(updated) != "Hello" {
+		t.Fatalf("expected persisted backspace edit, got %q", string(updated))
+	}
+}
+
+func TestArchiveEditorMarksRTLDirection(t *testing.T) {
+	root := t.TempDir()
+	langDir := filepath.Join(root, "ar")
+	if err := os.Mkdir(langDir, 0o755); err != nil {
+		t.Fatalf("mkdir ar: %v", err)
+	}
+	filePath := filepath.Join(langDir, "001-Intro")
+	if err := os.WriteFile(filePath, []byte("مرحبا"), 0o600); err != nil {
+		t.Fatalf("write initial file: %v", err)
+	}
+	t.Setenv(archiveRootEnvVar, root)
+	t.Setenv(archiveSeedEnvVar, "false")
+
+	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: "archive"})
+	m = m.Update(KeyMsg{Key: "1"})
+	m = m.Update(KeyMsg{Key: "enter"})
+	m = m.Update(KeyMsg{Key: "1"})
+	m = m.Update(KeyMsg{Key: "enter"})
+
+	if !strings.Contains(renderViewport(m), "[RTL]") {
+		t.Fatalf("expected RTL marker in editor header")
+	}
+}
+
+func TestArchivePersistenceRejectsPathOutsideRoot(t *testing.T) {
+	root := t.TempDir()
+	langDir := filepath.Join(root, "en")
+	if err := os.Mkdir(langDir, 0o755); err != nil {
+		t.Fatalf("mkdir en: %v", err)
+	}
+	inside := filepath.Join(langDir, "001-Intro")
+	if err := os.WriteFile(inside, []byte("Hello"), 0o600); err != nil {
+		t.Fatalf("write inside file: %v", err)
+	}
+	outside := filepath.Join(t.TempDir(), "evil.txt")
+	if err := os.WriteFile(outside, []byte("bad"), 0o600); err != nil {
+		t.Fatalf("write outside file: %v", err)
+	}
+	t.Setenv(archiveRootEnvVar, root)
+	t.Setenv(archiveSeedEnvVar, "false")
+
+	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: "archive"})
+	m.archiveEditPath = outside
+	m.archiveEditorBuffer = "changed"
+	m.persistArchiveEdit()
+	if got := m.archiveStatus; !strings.Contains(got, "outside archive root") {
+		t.Fatalf("expected containment warning, got %q", got)
+	}
+	content, err := os.ReadFile(outside)
+	if err != nil {
+		t.Fatalf("read outside file: %v", err)
+	}
+	if string(content) != "bad" {
+		t.Fatalf("outside file must stay unchanged, got %q", string(content))
+	}
+}
+
+func TestArchiveEditorFiltersControlRunesFromInputChunk(t *testing.T) {
+	root := t.TempDir()
+	langDir := filepath.Join(root, "en")
+	if err := os.Mkdir(langDir, 0o755); err != nil {
+		t.Fatalf("mkdir en: %v", err)
+	}
+	filePath := filepath.Join(langDir, "001-Intro")
+	if err := os.WriteFile(filePath, []byte("Hi"), 0o600); err != nil {
+		t.Fatalf("write initial file: %v", err)
+	}
+	t.Setenv(archiveRootEnvVar, root)
+	t.Setenv(archiveSeedEnvVar, "false")
+
+	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: "archive"})
+	m = m.Update(KeyMsg{Key: "1"})
+	m = m.Update(KeyMsg{Key: "enter"})
+	m = m.Update(KeyMsg{Key: "1"})
+	m = m.Update(KeyMsg{Key: "enter"})
+
+	m = m.Update(KeyMsg{Key: "A" + string(rune(0)) + "B"})
+	updated, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read updated file: %v", err)
+	}
+	if string(updated) != "HiAB" {
+		t.Fatalf("expected control rune filtered but printable runes kept, got %q", string(updated))
+	}
+}
+
+func TestArchiveOpenRejectsLargeFiles(t *testing.T) {
+	root := t.TempDir()
+	langDir := filepath.Join(root, "en")
+	if err := os.Mkdir(langDir, 0o755); err != nil {
+		t.Fatalf("mkdir en: %v", err)
+	}
+	filePath := filepath.Join(langDir, "001-Intro")
+	large := strings.Repeat("x", maxArchiveFileBytes+1)
+	if err := os.WriteFile(filePath, []byte(large), 0o600); err != nil {
+		t.Fatalf("write large file: %v", err)
+	}
+	t.Setenv(archiveRootEnvVar, root)
+	t.Setenv(archiveSeedEnvVar, "false")
+
+	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: "archive"})
+	m = m.Update(KeyMsg{Key: "1"})
+	m = m.Update(KeyMsg{Key: "enter"})
+	m = m.Update(KeyMsg{Key: "1"})
+	m = m.Update(KeyMsg{Key: "enter"})
+
+	if !strings.Contains(m.archiveStatus, "file too large") {
+		t.Fatalf("expected file too large warning, got %q", m.archiveStatus)
+	}
+	if m.archiveEditorBuffer != "" {
+		t.Fatalf("large file should not be loaded into editor buffer")
+	}
+}
+
+func TestArchiveSeedContentCreatesDefaultLanguageDirectoriesAndFiles(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv(archiveRootEnvVar, root)
+	t.Setenv(archiveSeedEnvVar, "true")
+
+	_ = NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: "archive"})
+
+	checks := []struct {
+		dir  string
+		file string
+	}{
+		{dir: "en", file: "001-Intro"},
+		{dir: "fr", file: "001-Intro"},
+		{dir: "ar", file: "001-Intro"},
+	}
+	for _, check := range checks {
+		path := filepath.Join(root, check.dir, check.file)
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected seed file %s to exist: %v", path, err)
+		}
+	}
+}
+
+func TestArchiveContainmentRejectsSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	outsideDir := t.TempDir()
+	outsideFile := filepath.Join(outsideDir, "escape.txt")
+	if err := os.WriteFile(outsideFile, []byte("outside"), 0o600); err != nil {
+		t.Fatalf("write outside file: %v", err)
+	}
+	langDir := filepath.Join(root, "en")
+	if err := os.MkdirAll(langDir, 0o755); err != nil {
+		t.Fatalf("mkdir en: %v", err)
+	}
+	linkPath := filepath.Join(langDir, "001-Link")
+	if err := os.Symlink(outsideFile, linkPath); err != nil {
+		t.Fatalf("create symlink: %v", err)
+	}
+	t.Setenv(archiveRootEnvVar, root)
+	t.Setenv(archiveSeedEnvVar, "false")
+
+	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: "archive"})
+	if m.isPathInsideArchiveRoot(linkPath) {
+		t.Fatalf("symlink escaping archive root should be rejected")
+	}
+}
+
+func TestArchivePersistRejectsOversizedBuffer(t *testing.T) {
+	root := t.TempDir()
+	langDir := filepath.Join(root, "en")
+	if err := os.MkdirAll(langDir, 0o755); err != nil {
+		t.Fatalf("mkdir en: %v", err)
+	}
+	filePath := filepath.Join(langDir, "001-Intro")
+	if err := os.WriteFile(filePath, []byte("seed"), 0o600); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	t.Setenv(archiveRootEnvVar, root)
+	t.Setenv(archiveSeedEnvVar, "false")
+
+	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: "archive"})
+	m.archiveEditPath = filePath
+	m.archiveEditorBuffer = strings.Repeat("x", maxArchiveFileBytes+1)
+	m.persistArchiveEdit()
+	if !strings.Contains(m.archiveStatus, "exceeds max size") {
+		t.Fatalf("expected oversize error, got %q", m.archiveStatus)
+	}
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	if string(content) != "seed" {
+		t.Fatalf("oversize write should not mutate file, got %q", string(content))
+	}
+}
+
+func TestArchiveOpenSanitizesControlRunesFromFileContent(t *testing.T) {
+	root := t.TempDir()
+	langDir := filepath.Join(root, "en")
+	if err := os.MkdirAll(langDir, 0o755); err != nil {
+		t.Fatalf("mkdir en: %v", err)
+	}
+	filePath := filepath.Join(langDir, "001-Intro")
+	content := "ok" + string(rune(0x1b)) + "bad\nline\tkeep"
+	if err := os.WriteFile(filePath, []byte(content), 0o600); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	t.Setenv(archiveRootEnvVar, root)
+	t.Setenv(archiveSeedEnvVar, "false")
+
+	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: "archive"})
+	m = m.Update(KeyMsg{Key: "1"})
+	m = m.Update(KeyMsg{Key: "enter"})
+	m = m.Update(KeyMsg{Key: "1"})
+	m = m.Update(KeyMsg{Key: "enter"})
+
+	if strings.ContainsRune(m.archiveEditorBuffer, rune(0x1b)) {
+		t.Fatalf("expected escape rune to be sanitized from loaded content")
+	}
+	if !strings.Contains(m.archiveEditorBuffer, "line\tkeep") {
+		t.Fatalf("expected newline/tab-preserved content, got %q", m.archiveEditorBuffer)
+	}
+}

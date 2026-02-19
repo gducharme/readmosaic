@@ -12,6 +12,7 @@ services:
       MOSAIC_SSH_HOST: ${MOSAIC_SSH_HOST:-0.0.0.0}
       MOSAIC_SSH_PORT: ${MOSAIC_SSH_PORT:-2222}
       MOSAIC_SSH_HOST_KEY_PATH: ${MOSAIC_SSH_HOST_KEY_PATH:-/run/keys/ssh_host_ed25519}
+      MOSAIC_ARCHIVE_ROOT: ${MOSAIC_ARCHIVE_ROOT:-/archive}
     ports:
       - "${MOSAIC_SSH_PUBLISH_PORT:-22}:2222"
     volumes:
@@ -19,6 +20,9 @@ services:
         source: ./data/ssh/host_ed25519
         target: /run/keys/ssh_host_ed25519
         read_only: true
+      - type: bind
+        source: ${MOSAIC_ARCHIVE_HOST_DIR:-./data/archive}
+        target: ${MOSAIC_ARCHIVE_ROOT:-/archive}
     healthcheck:
       test:
         - CMD-SHELL
