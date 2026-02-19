@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -59,5 +60,32 @@ func TestNewSSHLauncherFromEnv(t *testing.T) {
 	}
 	if launcher.StrictHostKey != customStrictHost {
 		t.Fatalf("StrictHostKey = %q, want %q", launcher.StrictHostKey, customStrictHost)
+	}
+}
+
+func TestCommandSpecIncludesForcedTTY(t *testing.T) {
+	launcher := &SSHLauncher{SSHPath: "/custom/ssh", KnownHostsPath: "/custom/known_hosts", StrictHostKey: "accept-new"}
+	meta := SessionMetadata{User: "reader", Host: "example.internal", Port: 2222}
+
+	cmdPath, cmdArgs := launcher.commandSpec(meta)
+	if cmdPath != "/custom/ssh" {
+		t.Fatalf("cmdPath = %q, want %q", cmdPath, "/custom/ssh")
+	}
+	if len(cmdArgs) == 0 || cmdArgs[0] != "-tt" {
+		t.Fatalf("expected forced tty flag as first arg, got %v", cmdArgs)
+	}
+}
+
+func TestCommandSpecWithLimitsUsesPrlimit(t *testing.T) {
+	launcher := &SSHLauncher{SSHPath: "/custom/ssh", PrlimitPath: "/custom/prlimit", KnownHostsPath: "/custom/known_hosts", StrictHostKey: "accept-new"}
+	meta := SessionMetadata{User: "reader", Host: "example.internal", Port: 2222, Limits: SessionLimits{CPUSeconds: 5, MemoryBytes: 1024}}
+
+	cmdPath, cmdArgs := launcher.commandSpec(meta)
+	if cmdPath != "/custom/prlimit" {
+		t.Fatalf("cmdPath = %q, want %q", cmdPath, "/custom/prlimit")
+	}
+	joined := strings.Join(cmdArgs, " ")
+	if !strings.Contains(joined, "-- /custom/ssh -tt") {
+		t.Fatalf("expected prlimit invocation to wrap ssh with forced tty, args=%v", cmdArgs)
 	}
 }

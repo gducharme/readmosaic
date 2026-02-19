@@ -34,6 +34,29 @@ func NewSSHLauncher() *SSHLauncher {
 }
 
 func (l *SSHLauncher) Launch(ctx context.Context, meta SessionMetadata, command []string, env map[string]string) (Process, error) {
+	cmdPath, cmdArgs := l.commandSpec(meta)
+	cmd := exec.CommandContext(ctx, cmdPath, cmdArgs...)
+	cmd.Env = sanitizedEnv(env)
+	ptmx, err := pty.Start(cmd)
+	if err != nil {
+		return nil, err
+	}
+	proc := &sshProcess{cmd: cmd, pty: ptmx, done: make(chan error, 1)}
+	if meta.Limits.MaxDurationSeconds > 0 {
+		proc.timer = time.AfterFunc(time.Duration(meta.Limits.MaxDurationSeconds)*time.Second, func() {
+			_ = proc.Close()
+		})
+	}
+	go func() {
+		proc.done <- cmd.Wait()
+		close(proc.done)
+		_ = proc.Close()
+	}()
+	_ = command
+	return proc, nil
+}
+
+func (l *SSHLauncher) commandSpec(meta SessionMetadata) (string, []string) {
 	sshPath := l.SSHPath
 	if sshPath == "" {
 		sshPath = "/usr/bin/ssh"
@@ -43,7 +66,7 @@ func (l *SSHLauncher) Launch(ctx context.Context, meta SessionMetadata, command 
 		knownHosts = "/etc/ssh/ssh_known_hosts"
 	}
 	strictHostKey := normalizeStrictHostKeyChecking(l.StrictHostKey)
-	baseArgs := []string{"-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=" + strictHostKey, "-o", "ForwardAgent=no", "-o", "ClearAllForwardings=yes", "-o", "PermitLocalCommand=no", "-o", "UserKnownHostsFile=" + knownHosts, "-p", strconv.Itoa(meta.Port), fmt.Sprintf("%s@%s", meta.User, meta.Host), "--", "bash", "--noprofile", "--norc", "-i"}
+	baseArgs := []string{"-tt", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=" + strictHostKey, "-o", "ForwardAgent=no", "-o", "ClearAllForwardings=yes", "-o", "PermitLocalCommand=no", "-o", "UserKnownHostsFile=" + knownHosts, "-p", strconv.Itoa(meta.Port), fmt.Sprintf("%s@%s", meta.User, meta.Host), "--", "bash", "--noprofile", "--norc", "-i"}
 
 	cmdPath := sshPath
 	cmdArgs := baseArgs
@@ -64,25 +87,7 @@ func (l *SSHLauncher) Launch(ctx context.Context, meta SessionMetadata, command 
 		cmdPath = prlimitPath
 		cmdArgs = args
 	}
-	cmd := exec.CommandContext(ctx, cmdPath, cmdArgs...)
-	cmd.Env = sanitizedEnv(env)
-	ptmx, err := pty.Start(cmd)
-	if err != nil {
-		return nil, err
-	}
-	proc := &sshProcess{cmd: cmd, pty: ptmx, done: make(chan error, 1)}
-	if meta.Limits.MaxDurationSeconds > 0 {
-		proc.timer = time.AfterFunc(time.Duration(meta.Limits.MaxDurationSeconds)*time.Second, func() {
-			_ = proc.Close()
-		})
-	}
-	go func() {
-		proc.done <- cmd.Wait()
-		close(proc.done)
-		_ = proc.Close()
-	}()
-	_ = command
-	return proc, nil
+	return cmdPath, cmdArgs
 }
 
 func sanitizedEnv(extra map[string]string) []string {
