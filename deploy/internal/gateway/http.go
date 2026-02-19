@@ -65,6 +65,7 @@ func (o *statusObserver) WriteHeader(status int) {
 
 func (h *Handler) openSession(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
+		logGatewayRejection(r, "open_session", "method_not_allowed", "")
 		writeErr(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed")
 		return
 	}
@@ -80,6 +81,7 @@ func (h *Handler) openSession(w http.ResponseWriter, r *http.Request) {
 		MaxDuration int               `json:"max_duration_seconds"`
 	}
 	if err := decodeJSONBody(w, r, maxOpenBodyBytes, &req); err != nil {
+		logGatewayRejection(r, "open_session", "bad_json", err.Error())
 		return
 	}
 
@@ -96,6 +98,7 @@ func (h *Handler) openSession(w http.ResponseWriter, r *http.Request) {
 		},
 	})
 	if err != nil {
+		logGatewayRejection(r, "open_session", "open_failed", err.Error())
 		writeMappedErr(w, err)
 		return
 	}
@@ -105,23 +108,27 @@ func (h *Handler) openSession(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) resumeSession(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
+		logGatewayRejection(r, "resume_session", "method_not_allowed", "")
 		writeErr(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed")
 		return
 	}
 
 	token, ok := bearerToken(r)
 	if !ok {
+		logGatewayRejection(r, "resume_session", "missing_bearer_token", "")
 		writeErr(w, http.StatusUnauthorized, "UNAUTHORIZED", "bearer token is required")
 		return
 	}
 
 	// Keep endpoint JSON shape strict even though token moved to Authorization.
 	if err := decodeJSONBody(w, r, maxResumeBodyBytes, &struct{}{}); err != nil {
+		logGatewayRejection(r, "resume_session", "bad_json", err.Error())
 		return
 	}
 
 	meta, err := h.svc.ResumeSession(token)
 	if err != nil {
+		logGatewayRejection(r, "resume_session", "resume_failed", err.Error())
 		writeMappedErr(w, err)
 		return
 	}
@@ -131,24 +138,28 @@ func (h *Handler) resumeSession(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) sessionAction(w http.ResponseWriter, r *http.Request) {
 	trimmed := strings.Trim(strings.TrimPrefix(r.URL.Path, "/gateway/sessions/"), "/")
 	if trimmed == "" {
+		logGatewayRejection(r, "session_action", "missing_session_id", "")
 		writeErr(w, http.StatusBadRequest, "BAD_PATH", "session id is required")
 		return
 	}
 
 	parts := strings.Split(trimmed, "/")
 	if len(parts) > 2 {
+		logGatewayRejection(r, "session_action", "too_many_path_parts", "")
 		writeErr(w, http.StatusNotFound, "NOT_FOUND", "endpoint not found")
 		return
 	}
 
 	sid := parts[0]
 	if !validSessionIDPattern.MatchString(sid) {
+		logGatewayRejection(r, "session_action", "invalid_session_id", sid)
 		writeErr(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid session id format")
 		return
 	}
 
 	token, ok := bearerToken(r)
 	if !ok {
+		logGatewayRejection(r, "session_action", "missing_bearer_token", sid)
 		writeErr(w, http.StatusUnauthorized, "UNAUTHORIZED", "bearer token is required")
 		return
 	}
@@ -161,6 +172,7 @@ func (h *Handler) sessionAction(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodDelete && action == "":
 		if err := h.svc.Close(sid, token); err != nil {
+			logGatewayRejection(r, "session_action", "close_failed", err.Error())
 			writeMappedErr(w, err)
 			return
 		}
@@ -170,18 +182,22 @@ func (h *Handler) sessionAction(w http.ResponseWriter, r *http.Request) {
 			Data string `json:"data"`
 		}
 		if err := decodeJSONBody(w, r, maxStdinBodyBytes, &req); err != nil {
+			logGatewayRejection(r, "session_action", "stdin_bad_json", sid)
 			return
 		}
 		payload, err := base64.StdEncoding.DecodeString(req.Data)
 		if err != nil {
+			logGatewayRejection(r, "session_action", "stdin_bad_base64", sid)
 			writeErr(w, http.StatusBadRequest, "BAD_STDIN", "stdin data must be base64 encoded")
 			return
 		}
 		if len(payload) > maxStdinBytes {
+			logGatewayRejection(r, "session_action", "stdin_payload_too_large", sid)
 			writeErr(w, http.StatusRequestEntityTooLarge, "STDIN_TOO_LARGE", "stdin payload exceeds max size")
 			return
 		}
 		if err := h.svc.WriteStdin(sid, token, payload); err != nil {
+			logGatewayRejection(r, "session_action", "stdin_write_failed", err.Error())
 			writeMappedErr(w, err)
 			return
 		}
@@ -192,20 +208,28 @@ func (h *Handler) sessionAction(w http.ResponseWriter, r *http.Request) {
 			Rows int `json:"rows"`
 		}
 		if err := decodeJSONBody(w, r, maxResizeBodyBytes, &req); err != nil {
+			logGatewayRejection(r, "session_action", "resize_bad_json", sid)
 			return
 		}
 		if req.Cols < 1 || req.Rows < 1 || req.Cols > 4096 || req.Rows > 4096 {
+			logGatewayRejection(r, "session_action", "resize_out_of_range", sid)
 			writeErr(w, http.StatusBadRequest, "BAD_RESIZE", "cols and rows must be between 1 and 4096")
 			return
 		}
 		if err := h.svc.Resize(sid, token, uint16(req.Cols), uint16(req.Rows)); err != nil {
+			logGatewayRejection(r, "session_action", "resize_failed", err.Error())
 			writeMappedErr(w, err)
 			return
 		}
 		w.WriteHeader(http.StatusAccepted)
 	default:
+		logGatewayRejection(r, "session_action", "unknown_route", trimmed)
 		writeErr(w, http.StatusNotFound, "NOT_FOUND", "endpoint not found")
 	}
+}
+
+func logGatewayRejection(r *http.Request, operation string, reason string, details string) {
+	log.Printf("level=warn event=gateway_request_rejected operation=%s method=%s path=%q reason=%s details=%q remote=%q", operation, r.Method, r.URL.Path, reason, details, r.RemoteAddr)
 }
 
 func decodeJSONBody(w http.ResponseWriter, r *http.Request, maxBytes int64, target any) error {
