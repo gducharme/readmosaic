@@ -55,6 +55,8 @@ const (
 	readFallbackLine        = "READ FRAGMENT UNAVAILABLE"
 	typewriterQueueDropLine = "[TYPEWRITER QUEUE TRUNCATED]"
 	maxArchiveFileBytes     = 2 * 1024 * 1024
+	flowArchive             = "archive"
+	flowDefault             = "default"
 )
 
 // Keybindings (source of truth for tests and operators):
@@ -140,6 +142,7 @@ type Options struct {
 	ThemeBundle    *theme.Bundle
 	TypewriterStep int
 	Username       string
+	// Flow selects the startup UI flow (e.g. "archive").
 	Flow           string
 }
 
@@ -264,7 +267,7 @@ func NewModelWithOptions(remoteAddr string, opts Options) Model {
 		typewriterStep: resolveTypewriterStep(opts.TypewriterStep),
 		username:       strings.ToLower(strings.TrimSpace(opts.Username)),
 	}
-	flow := strings.ToLower(strings.TrimSpace(opts.Flow))
+	flow := normalizeFlow(opts.Flow)
 	if opts.ThemeBundle != nil {
 		m.themeBundle = cloneThemeBundle(*opts.ThemeBundle)
 		m.hasThemeBundle = true
@@ -275,10 +278,33 @@ func NewModelWithOptions(remoteAddr string, opts Options) Model {
 	}
 	m.enforceBufferLimit()
 	m.clampViewportBounds()
-	if m.username == "archive" || flow == "archive" {
+	if isArchiveMode(m.username, flow) {
 		m.initArchiveMode()
 	}
 	return m
+}
+
+func normalizeFlow(flow string) string {
+	normalized := strings.ToLower(strings.TrimSpace(flow))
+	switch normalized {
+	case "", flowDefault:
+		return ""
+	case flowArchive:
+		return flowArchive
+	default:
+		return ""
+	}
+}
+
+// isArchiveMode resolves startup precedence for archive UX.
+//
+// Explicit archive flow takes precedence, then username fallback preserves
+// backward compatibility for archive user sessions when flow is unset/default.
+func isArchiveMode(username, flow string) bool {
+	if normalizeFlow(flow) == flowArchive {
+		return true
+	}
+	return strings.ToLower(strings.TrimSpace(username)) == "archive"
 }
 
 // NextStatusTick returns blink cadence.
