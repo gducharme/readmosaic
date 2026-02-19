@@ -719,6 +719,23 @@ func TestArchiveUserStartsInLanguageMenu(t *testing.T) {
 	}
 }
 
+func TestArchiveFlowStartsInLanguageMenuForReadUser(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "en"), 0o755); err != nil {
+		t.Fatalf("mkdir en: %v", err)
+	}
+	t.Setenv(archiveRootEnvVar, root)
+	t.Setenv(archiveSeedEnvVar, "false")
+
+	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: "read", Flow: "archive"})
+	if m.screen != ScreenArchiveLanguage {
+		t.Fatalf("expected archive language screen for archive flow, got %v", m.screen)
+	}
+	if !strings.Contains(renderPrompt(m), "[ARCHIVE LANGUAGE #]") {
+		t.Fatalf("expected archive language prompt, got %q", renderPrompt(m))
+	}
+}
+
 func TestArchiveEditorPersistsEditsImmediately(t *testing.T) {
 	root := t.TempDir()
 	langDir := filepath.Join(root, "en")

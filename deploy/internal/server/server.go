@@ -248,6 +248,7 @@ func defaultHandler(s ssh.Session) {
 		IsTTY:       true,
 		ThemeBundle: themeBundle,
 		Username:    identity.Username,
+		Flow:        flow,
 	})
 
 	switch flow {

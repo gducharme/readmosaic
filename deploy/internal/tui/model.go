@@ -140,6 +140,7 @@ type Options struct {
 	ThemeBundle    *theme.Bundle
 	TypewriterStep int
 	Username       string
+	Flow           string
 }
 
 type archiveLanguage struct {
@@ -263,6 +264,7 @@ func NewModelWithOptions(remoteAddr string, opts Options) Model {
 		typewriterStep: resolveTypewriterStep(opts.TypewriterStep),
 		username:       strings.ToLower(strings.TrimSpace(opts.Username)),
 	}
+	flow := strings.ToLower(strings.TrimSpace(opts.Flow))
 	if opts.ThemeBundle != nil {
 		m.themeBundle = cloneThemeBundle(*opts.ThemeBundle)
 		m.hasThemeBundle = true
@@ -273,7 +275,7 @@ func NewModelWithOptions(remoteAddr string, opts Options) Model {
 	}
 	m.enforceBufferLimit()
 	m.clampViewportBounds()
-	if m.username == "archive" {
+	if m.username == "archive" || flow == "archive" {
 		m.initArchiveMode()
 	}
 	return m
