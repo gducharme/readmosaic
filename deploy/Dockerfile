@@ -23,7 +23,12 @@ FROM alpine:3.20.6 AS runtime
 WORKDIR /app
 
 RUN addgroup -S -g 65532 mosaic && adduser -S -D -H -u 65532 -G mosaic mosaic \
-    && apk add --no-cache ca-certificates netcat-openbsd \
+    && apk add --no-cache \
+        bash \
+        ca-certificates \
+        netcat-openbsd \
+        openssh-client \
+        util-linux \
     && mkdir -p /run/keys \
     && chown -R mosaic:mosaic /run/keys /app
 
