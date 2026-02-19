@@ -21,6 +21,46 @@ const shellCwd = homeDirectory && fs.existsSync(homeDirectory)
   ? homeDirectory
   : process.cwd();
 
+function shellEscape(value) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
+function launchSshPty(username) {
+  const sshArgs = [`${username}@${sshHost}`, '-p', `${sshPort}`];
+
+  try {
+    return {
+      shell: pty.spawn(sshCommand, sshArgs, {
+        name: 'xterm-color',
+        cols: 120,
+        rows: 36,
+        cwd: shellCwd,
+        env: process.env,
+      }),
+      mode: 'direct',
+    };
+  } catch (directError) {
+    const shellBinary = process.env.SHELL || '/bin/sh';
+    const shellCommand = `exec ${shellEscape(sshCommand)} ${sshArgs.map(shellEscape).join(' ')}`;
+
+    try {
+      return {
+        shell: pty.spawn(shellBinary, ['-lc', shellCommand], {
+          name: 'xterm-color',
+          cols: 120,
+          rows: 36,
+          cwd: shellCwd,
+          env: process.env,
+        }),
+        mode: 'shell-fallback',
+      };
+    } catch (fallbackError) {
+      fallbackError.previousError = directError;
+      throw fallbackError;
+    }
+  }
+}
+
 function buildSshLaunchDiagnostics(error, username) {
   const diagnostics = [];
   const sshCommandIsAbsolutePath = path.isAbsolute(sshCommand);
@@ -37,6 +77,10 @@ function buildSshLaunchDiagnostics(error, username) {
   diagnostics.push(`home=${homeDirectory || '(unset)'}`);
   diagnostics.push(`path=${process.env.PATH || '(unset)'}`);
   diagnostics.push(`username=${username}`);
+
+  if (error && error.previousError && error.previousError.message) {
+    diagnostics.push(`directSpawnError=${error.previousError.message}`);
+  }
 
   const reason = error && error.message ? error.message : 'Unable to launch ssh process.';
   return `Failed to start SSH session: ${reason}. Diagnostics: ${diagnostics.join(', ')}`;
@@ -72,13 +116,15 @@ wss.on('connection', (ws) => {
       }
 
       try {
-        shell = pty.spawn(sshCommand, [`${username}@${sshHost}`, '-p', `${sshPort}`], {
-          name: 'xterm-color',
-          cols: 120,
-          rows: 36,
-          cwd: shellCwd,
-          env: process.env,
-        });
+        const launchResult = launchSshPty(username);
+        shell = launchResult.shell;
+
+        if (launchResult.mode === 'shell-fallback') {
+          ws.send(JSON.stringify({
+            type: 'output',
+            payload: '[Direct PTY launch failed; using shell fallback]\r\n',
+          }));
+        }
       } catch (error) {
         const diagnosticError = buildSshLaunchDiagnostics(error, username);
         console.error(diagnosticError);
