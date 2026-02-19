@@ -1,10 +1,6 @@
-const path = require('path');
-const fs = require('fs');
 const http = require('http');
-const childProcess = require('child_process');
 const express = require('express');
 const WebSocket = require('ws');
-const pty = require('node-pty');
 
 const app = express();
 const port = Number(process.env.WEB_PORT || 3000);
@@ -13,21 +9,6 @@ const sshPort = process.env.SSH_PORT || '2222';
 const gatewayBaseUrl = (process.env.GATEWAY_BASE_URL || 'http://127.0.0.1:8080').replace(/\/$/, '');
 const gatewayTargetHost = process.env.GATEWAY_TARGET_HOST || sshHost;
 const gatewayTargetPort = Number(process.env.GATEWAY_TARGET_PORT || sshPort || 22);
-
-const commonSshPaths = ['/usr/bin/ssh', '/bin/ssh', '/usr/local/bin/ssh'];
-const configuredSshPath = process.env.SSH_BIN;
-const sshCommand = configuredSshPath && configuredSshPath.trim()
-  ? configuredSshPath.trim()
-  : commonSshPaths.find((candidate) => fs.existsSync(candidate)) || 'ssh';
-
-const homeDirectory = process.env.HOME;
-const shellCwd = homeDirectory && fs.existsSync(homeDirectory)
-  ? homeDirectory
-  : process.cwd();
-
-function shellEscape(value) {
-  return `'${String(value).replace(/'/g, `'\\''`)}'`;
-}
 
 function buildGatewayBaseUrlCandidates(baseUrl) {
   const candidates = [baseUrl];
@@ -182,98 +163,15 @@ async function closeGatewaySession(sessionId, resumeToken) {
   }
 }
 
-function collectSshCommandDiagnostics() {
-  const details = [];
-
-  try {
-    const probe = childProcess.spawnSync(sshCommand, ['-V'], {
-      encoding: 'utf8',
-      cwd: shellCwd,
-      env: process.env,
-      timeout: 3000,
-    });
-
-    if (probe.error) {
-      const code = probe.error.code ? ` code=${probe.error.code}` : '';
-      details.push(`sshVersionProbeError=${probe.error.message}${code}`);
-    } else {
-      details.push(`sshVersionProbeStatus=${probe.status}`);
-      const stderr = probe.stderr && probe.stderr.trim();
-      const stdout = probe.stdout && probe.stdout.trim();
-      if (stderr) {
-        details.push(`sshVersionProbeStderr=${stderr}`);
-      }
-      if (stdout) {
-        details.push(`sshVersionProbeStdout=${stdout}`);
-      }
-    }
-  } catch (probeError) {
-    const reason = probeError && probeError.message ? probeError.message : 'unknown error';
-    details.push(`sshVersionProbeException=${reason}`);
-  }
-
-  return details;
-}
-
-function launchSshPty(username) {
-  const sshArgs = [`${username}@${sshHost}`, '-p', `${sshPort}`];
-
-  try {
-    return {
-      shell: pty.spawn(sshCommand, sshArgs, {
-        name: 'xterm-color',
-        cols: 120,
-        rows: 36,
-        cwd: shellCwd,
-        env: process.env,
-      }),
-      mode: 'direct',
-    };
-  } catch (directError) {
-    const shellBinary = process.env.SHELL || '/bin/sh';
-    const shellCommand = `exec ${shellEscape(sshCommand)} ${sshArgs.map(shellEscape).join(' ')}`;
-
-    try {
-      return {
-        shell: pty.spawn(shellBinary, ['-lc', shellCommand], {
-          name: 'xterm-color',
-          cols: 120,
-          rows: 36,
-          cwd: shellCwd,
-          env: process.env,
-        }),
-        mode: 'shell-fallback',
-      };
-    } catch (fallbackError) {
-      fallbackError.previousError = directError;
-      throw fallbackError;
-    }
-  }
-}
-
-function buildSshLaunchDiagnostics(error, username) {
+function buildGatewayIoDiagnostics(error, username) {
   const diagnostics = [];
-  const sshCommandIsAbsolutePath = path.isAbsolute(sshCommand);
-  const sshPathExists = sshCommandIsAbsolutePath ? fs.existsSync(sshCommand) : null;
-  const cwdExists = fs.existsSync(shellCwd);
-
-  diagnostics.push(`sshCommand=${sshCommand}`);
-  diagnostics.push(`sshCommandIsAbsolutePath=${sshCommandIsAbsolutePath}`);
-  if (sshCommandIsAbsolutePath) {
-    diagnostics.push(`sshPathExists=${sshPathExists}`);
-  }
-  diagnostics.push(`cwd=${shellCwd}`);
-  diagnostics.push(`cwdExists=${cwdExists}`);
-  diagnostics.push(`home=${homeDirectory || '(unset)'}`);
-  diagnostics.push(`path=${process.env.PATH || '(unset)'}`);
+  diagnostics.push(`gatewayBaseUrl=${gatewayBaseUrl}`);
+  diagnostics.push(`targetHost=${gatewayTargetHost}`);
+  diagnostics.push(`targetPort=${gatewayTargetPort}`);
   diagnostics.push(`username=${username}`);
 
-  if (error && error.previousError && error.previousError.message) {
-    diagnostics.push(`directSpawnError=${error.previousError.message}`);
-  }
-
   if (error && error.code) {
-    diagnostics.push(`spawnCode=${error.code}`);
+    diagnostics.push(`errorCode=${error.code}`);
   }
 
   if (error && error.errno) {
@@ -284,19 +182,16 @@ function buildSshLaunchDiagnostics(error, username) {
     diagnostics.push(`spawnSyscall=${error.syscall}`);
   }
 
-  diagnostics.push(...collectSshCommandDiagnostics());
-
-  const reason = error && error.message ? error.message : 'Unable to launch ssh process.';
-  return `Failed to start SSH session: ${reason}. Diagnostics: ${diagnostics.join(', ')}`;
+  const reason = error && error.message ? error.message : 'Unable to send terminal data through gateway.';
+  return `Gateway terminal I/O failed: ${reason}. Diagnostics: ${diagnostics.join(', ')}`;
 }
 
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(`${__dirname}/public`));
 
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server, path: '/terminal' });
 
 wss.on('connection', (ws) => {
-  let shell;
   let gatewaySession;
 
   async function finalizeGatewaySession() {
@@ -327,7 +222,7 @@ wss.on('connection', (ws) => {
         return;
       }
 
-      if (shell) {
+      if (gatewaySession) {
         return;
       }
 
@@ -341,72 +236,66 @@ wss.on('connection', (ws) => {
         return;
       }
 
-      try {
-        const launchResult = launchSshPty(username);
-        shell = launchResult.shell;
+      ws.send(JSON.stringify({
+        type: 'output',
+        payload: `[Gateway session ${gatewaySession.session_id || 'created'}]\\r\\n`,
+      }));
 
+      if (gatewaySession.gateway_diagnostics && gatewaySession.gateway_diagnostics.attempts) {
         ws.send(JSON.stringify({
           type: 'output',
-          payload: `[Gateway session ${gatewaySession.session_id || 'created'}]\\r\\n`,
+          payload: `[Gateway diagnostics: ${formatGatewayAttemptDiagnostics(gatewaySession.gateway_diagnostics.attempts)}]\\r\\n`,
         }));
-
-        if (gatewaySession.gateway_diagnostics && gatewaySession.gateway_diagnostics.attempts) {
-          ws.send(JSON.stringify({
-            type: 'output',
-            payload: `[Gateway diagnostics: ${formatGatewayAttemptDiagnostics(gatewaySession.gateway_diagnostics.attempts)}]\\r\\n`,
-          }));
-        }
-
-        if (launchResult.mode === 'shell-fallback') {
-          ws.send(JSON.stringify({
-            type: 'output',
-            payload: '[Direct PTY launch failed; using shell fallback]\\r\\n',
-          }));
-        }
-      } catch (error) {
-        const diagnosticError = buildSshLaunchDiagnostics(error, username);
-        console.error(diagnosticError);
-        ws.send(JSON.stringify({ type: 'error', payload: diagnosticError }));
-        await finalizeGatewaySession();
-        return;
       }
 
-      shell.onData((data) => {
-        ws.send(JSON.stringify({ type: 'output', payload: data }));
-      });
-
-      shell.onExit(async ({ exitCode }) => {
-        ws.send(JSON.stringify({
-          type: 'output',
-          payload: `\\r\\n\\r\\n[SSH session ended with code ${exitCode}]\\r\\n`,
-        }));
-        await finalizeGatewaySession();
-        ws.close();
-      });
+      ws.send(JSON.stringify({
+        type: 'output',
+        payload: '[SSH is managed by the gateway; local SSH spawning is disabled.]\\r\\n',
+      }));
 
       return;
     }
 
-    if (message.type === 'input' && shell) {
-      shell.write(message.payload);
+    if (message.type === 'input' && gatewaySession) {
+      const payload = Buffer.from(String(message.payload || ''), 'utf8').toString('base64');
+      try {
+        await fetchGateway(`/gateway/sessions/${encodeURIComponent(gatewaySession.session_id)}/stdin`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${gatewaySession.resume_token}`,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({ data: payload }),
+        });
+      } catch (error) {
+        const diagnosticError = buildGatewayIoDiagnostics(error, gatewaySession.user || 'unknown');
+        ws.send(JSON.stringify({ type: 'error', payload: diagnosticError }));
+      }
       return;
     }
 
-    if (message.type === 'resize' && shell) {
+    if (message.type === 'resize' && gatewaySession) {
       const cols = Number(message.cols);
       const rows = Number(message.rows);
       if (Number.isInteger(cols) && Number.isInteger(rows) && cols > 0 && rows > 0) {
-        shell.resize(cols, rows);
+        try {
+          await fetchGateway(`/gateway/sessions/${encodeURIComponent(gatewaySession.session_id)}/resize`, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${gatewaySession.resume_token}`,
+              'content-type': 'application/json',
+            },
+            body: JSON.stringify({ cols, rows }),
+          });
+        } catch (error) {
+          const diagnosticError = buildGatewayIoDiagnostics(error, gatewaySession.user || 'unknown');
+          ws.send(JSON.stringify({ type: 'error', payload: diagnosticError }));
+        }
       }
     }
   });
 
   ws.on('close', async () => {
-    if (shell) {
-      shell.kill();
-      shell = null;
-    }
-
     await finalizeGatewaySession();
   });
 });
@@ -416,6 +305,5 @@ server.listen(port, () => {
   console.log(`SSH target: ${sshHost}:${sshPort}`);
   console.log(`Gateway API: ${gatewayBaseUrl}`);
   console.log(`Gateway SSH target: ${gatewayTargetHost}:${gatewayTargetPort}`);
-  console.log(`SSH binary: ${sshCommand}`);
-  console.log(`Shell cwd: ${shellCwd}`);
+  console.log('Local SSH spawning: disabled (gateway-managed)');
 });
