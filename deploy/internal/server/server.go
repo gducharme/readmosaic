@@ -332,15 +332,29 @@ func safeTickerDuration(candidate, fallback time.Duration) time.Duration {
 
 func streamKeys(ctx context.Context, r io.Reader, keys chan<- string, eof chan<- struct{}) {
 	reader := bufio.NewReader(r)
+	escPending := false
+	ansiDiscard := false
 	for {
 		select {
 		case <-ctx.Done():
+			if escPending {
+				select {
+				case keys <- "esc":
+				default:
+				}
+			}
 			return
 		default:
 		}
 
 		rn, _, err := reader.ReadRune()
 		if err != nil {
+			if escPending {
+				select {
+				case keys <- "esc":
+				default:
+				}
+			}
 			if errors.Is(err, io.EOF) {
 				select {
 				case eof <- struct{}{}:
@@ -348,6 +362,27 @@ func streamKeys(ctx context.Context, r io.Reader, keys chan<- string, eof chan<-
 				}
 			}
 			return
+		}
+
+		if ansiDiscard {
+			if rn >= '@' && rn <= '~' {
+				ansiDiscard = false
+			}
+			continue
+		}
+
+		if escPending {
+			escPending = false
+			if rn == '[' || rn == 'O' {
+				ansiDiscard = true
+				continue
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case keys <- "esc":
+			default:
+			}
 		}
 
 		var key string
@@ -359,25 +394,8 @@ func streamKeys(ctx context.Context, r io.Reader, keys chan<- string, eof chan<-
 		case 0x7f, 0x08:
 			key = "backspace"
 		case 0x1b:
-			// Swallow common ANSI escape sequences (e.g. arrow keys: ESC [ A) so they
-			// do not inject printable fragments like '[' or 'A' into editor buffers.
-			if reader.Buffered() > 0 {
-				if next, err := reader.Peek(1); err == nil && len(next) == 1 && (next[0] == '[' || next[0] == 'O') {
-					_, _ = reader.ReadByte() // consume CSI/SS3 introducer
-					for reader.Buffered() > 0 {
-						b, err := reader.Peek(1)
-						if err != nil || len(b) != 1 {
-							break
-						}
-						_, _ = reader.ReadByte()
-						if b[0] >= '@' && b[0] <= '~' {
-							break
-						}
-					}
-					continue
-				}
-			}
-			key = "esc"
+			escPending = true
+			continue
 		default:
 			if !unicode.IsControl(rn) {
 				key = string(rn)

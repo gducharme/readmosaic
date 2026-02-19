@@ -952,3 +952,31 @@ func TestArchivePersistRejectsOversizedBuffer(t *testing.T) {
 		t.Fatalf("oversize write should not mutate file, got %q", string(content))
 	}
 }
+
+func TestArchiveOpenSanitizesControlRunesFromFileContent(t *testing.T) {
+	root := t.TempDir()
+	langDir := filepath.Join(root, "en")
+	if err := os.MkdirAll(langDir, 0o755); err != nil {
+		t.Fatalf("mkdir en: %v", err)
+	}
+	filePath := filepath.Join(langDir, "001-Intro")
+	content := "ok" + string(rune(0x1b)) + "bad\nline\tkeep"
+	if err := os.WriteFile(filePath, []byte(content), 0o600); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	t.Setenv(archiveRootEnvVar, root)
+	t.Setenv(archiveSeedEnvVar, "false")
+
+	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: "archive"})
+	m = m.Update(KeyMsg{Key: "1"})
+	m = m.Update(KeyMsg{Key: "enter"})
+	m = m.Update(KeyMsg{Key: "1"})
+	m = m.Update(KeyMsg{Key: "enter"})
+
+	if strings.ContainsRune(m.archiveEditorBuffer, rune(0x1b)) {
+		t.Fatalf("expected escape rune to be sanitized from loaded content")
+	}
+	if !strings.Contains(m.archiveEditorBuffer, "line\tkeep") {
+		t.Fatalf("expected newline/tab-preserved content, got %q", m.archiveEditorBuffer)
+	}
+}

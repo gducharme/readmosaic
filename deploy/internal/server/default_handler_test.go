@@ -365,3 +365,58 @@ func TestStreamKeysSwallowsArrowEscapeSequences(t *testing.T) {
 	default:
 	}
 }
+
+func TestStreamKeysSwallowsArrowEscapeSequencesWhenChunked(t *testing.T) {
+	r, w := io.Pipe()
+	defer r.Close()
+	keys := make(chan string, 8)
+	eof := make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go streamKeys(ctx, r, keys, eof)
+	go func() {
+		_, _ = w.Write([]byte{0x1b})
+		time.Sleep(10 * time.Millisecond)
+		_, _ = w.Write([]byte("["))
+		time.Sleep(10 * time.Millisecond)
+		_, _ = w.Write([]byte("A"))
+		time.Sleep(10 * time.Millisecond)
+		_, _ = w.Write([]byte("x"))
+		_ = w.Close()
+	}()
+
+	select {
+	case key := <-keys:
+		if key != "x" {
+			t.Fatalf("expected only trailing printable key, got %q", key)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for key")
+	}
+
+	select {
+	case extra := <-keys:
+		t.Fatalf("unexpected extra key from chunked escape sequence: %q", extra)
+	case <-time.After(30 * time.Millisecond):
+	}
+}
+
+func TestStreamKeysEmitsStandaloneEscOnEOF(t *testing.T) {
+	input := strings.NewReader("")
+	keys := make(chan string, 8)
+	eof := make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go streamKeys(ctx, input, keys, eof)
+
+	select {
+	case key := <-keys:
+		if key != "esc" {
+			t.Fatalf("expected esc key, got %q", key)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for esc key")
+	}
+}

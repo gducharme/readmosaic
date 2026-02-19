@@ -586,6 +586,9 @@ func resolvePathWithSymlinks(path string) (string, error) {
 	return filepath.Clean(filepath.Join(resolvedParent, filepath.Base(absPath))), nil
 }
 
+// NOTE: Path resolution reduces traversal/symlink escapes but cannot fully eliminate
+// TOCTOU races on a concurrently mutating filesystem. Deployments assume archive
+// root write access is trusted and controlled by operators.
 func (m *Model) isPathInsideArchiveRoot(candidate string) bool {
 	resolvedRoot, err := resolvePathWithSymlinks(filepath.Clean(m.archiveRoot))
 	if err != nil {
@@ -655,6 +658,21 @@ func (m *Model) handleArchiveFileKey(lower, raw string) {
 	}
 }
 
+func sanitizeArchiveLoadedContent(content string) string {
+	builder := strings.Builder{}
+	for _, r := range content {
+		if r == '\n' || r == '\t' {
+			builder.WriteRune(r)
+			continue
+		}
+		if unicode.IsControl(r) {
+			continue
+		}
+		builder.WriteRune(r)
+	}
+	return builder.String()
+}
+
 func (m *Model) openArchiveFile(file archiveDocument) {
 	clean := filepath.Clean(file.Path)
 	if !m.isPathInsideArchiveRoot(clean) {
@@ -680,7 +698,7 @@ func (m *Model) openArchiveFile(file archiveDocument) {
 		return
 	}
 	m.archiveEditPath = clean
-	m.archiveEditorBuffer = string(data)
+	m.archiveEditorBuffer = sanitizeArchiveLoadedContent(string(data))
 	m.archiveStatus = ""
 }
 
