@@ -1,4 +1,5 @@
 const path = require('path');
+const fs = require('fs');
 const http = require('http');
 const express = require('express');
 const WebSocket = require('ws');
@@ -8,6 +9,12 @@ const app = express();
 const port = Number(process.env.WEB_PORT || 3000);
 const sshHost = process.env.SSH_HOST || '127.0.0.1';
 const sshPort = process.env.SSH_PORT || '2222';
+
+const commonSshPaths = ['/usr/bin/ssh', '/bin/ssh', '/usr/local/bin/ssh'];
+const configuredSshPath = process.env.SSH_BIN;
+const sshCommand = configuredSshPath && configuredSshPath.trim()
+  ? configuredSshPath.trim()
+  : commonSshPaths.find((candidate) => fs.existsSync(candidate)) || 'ssh';
 
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -38,13 +45,19 @@ wss.on('connection', (ws) => {
         return;
       }
 
-      shell = pty.spawn('ssh', [`${username}@${sshHost}`, '-p', `${sshPort}`], {
-        name: 'xterm-color',
-        cols: 120,
-        rows: 36,
-        cwd: process.env.HOME,
-        env: process.env,
-      });
+      try {
+        shell = pty.spawn(sshCommand, [`${username}@${sshHost}`, '-p', `${sshPort}`], {
+          name: 'xterm-color',
+          cols: 120,
+          rows: 36,
+          cwd: process.env.HOME,
+          env: process.env,
+        });
+      } catch (error) {
+        const reason = error && error.message ? error.message : 'Unable to launch ssh process.';
+        ws.send(JSON.stringify({ type: 'error', payload: `Failed to start SSH session: ${reason}` }));
+        return;
+      }
 
       shell.onData((data) => {
         ws.send(JSON.stringify({ type: 'output', payload: data }));
@@ -86,4 +99,5 @@ wss.on('connection', (ws) => {
 server.listen(port, () => {
   console.log(`Web terminal listening on http://0.0.0.0:${port}`);
   console.log(`SSH target: ${sshHost}:${sshPort}`);
+  console.log(`SSH binary: ${sshCommand}`);
 });
