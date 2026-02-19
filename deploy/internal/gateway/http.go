@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 var validSessionIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
@@ -32,7 +34,33 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("/gateway/sessions", h.openSession)
 	mux.HandleFunc("/gateway/sessions/resume", h.resumeSession)
 	mux.HandleFunc("/gateway/sessions/", h.sessionAction)
-	return mux
+	return instrumentGatewayRequests(mux)
+}
+
+func instrumentGatewayRequests(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started := time.Now()
+		observer := &statusObserver{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(observer, r)
+		log.Printf(
+			"level=info event=gateway_http_request method=%s path=%q status=%d duration_ms=%d remote=%q",
+			r.Method,
+			r.URL.Path,
+			observer.status,
+			time.Since(started).Milliseconds(),
+			r.RemoteAddr,
+		)
+	})
+}
+
+type statusObserver struct {
+	http.ResponseWriter
+	status int
+}
+
+func (o *statusObserver) WriteHeader(status int) {
+	o.status = status
+	o.ResponseWriter.WriteHeader(status)
 }
 
 func (h *Handler) openSession(w http.ResponseWriter, r *http.Request) {
