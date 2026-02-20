@@ -333,6 +333,26 @@ func TestStdinRateLimited(t *testing.T) {
 	}
 }
 
+func TestClosedSessionReturnsGone(t *testing.T) {
+	h := NewHandler(mustNewService(t, &fakeLauncher{}, &fakeStore{})).Routes()
+	meta := openSession(t, h)
+
+	closeRec := httptest.NewRecorder()
+	h.ServeHTTP(closeRec, authedRequest(http.MethodDelete, "/gateway/sessions/"+meta.SessionID, meta.ResumeToken, ""))
+	if closeRec.Code != http.StatusNoContent {
+		t.Fatalf("close status=%d body=%s", closeRec.Code, closeRec.Body.String())
+	}
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, authedRequest(http.MethodGet, "/gateway/sessions/"+meta.SessionID+"/output", meta.ResumeToken, ""))
+	if rec.Code != http.StatusGone {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "SESSION_CLOSED") {
+		t.Fatalf("expected SESSION_CLOSED body=%s", rec.Body.String())
+	}
+}
+
 func TestOutputStreamAuthorized(t *testing.T) {
 	launcher := &fakeLauncher{}
 	handler := NewHandler(mustNewService(t, launcher, &fakeStore{})).Routes()
