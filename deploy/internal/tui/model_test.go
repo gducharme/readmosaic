@@ -794,6 +794,62 @@ func TestDefaultBehaviorUnchangedWithoutFlowForNonArchiveUser(t *testing.T) {
 	}
 }
 
+func TestTriageMenuDeduplicatesImmediateRepeatedSelectionKey(t *testing.T) {
+	now := time.Unix(1700000000, 0)
+	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: "read"})
+	m.now = func() time.Time { return now }
+	m = m.Update(KeyMsg{Key: "enter"})
+	if m.screen != ScreenTriage {
+		t.Fatalf("expected triage screen, got %v", m.screen)
+	}
+	m = m.Update(KeyMsg{Key: "b"})
+	if m.screen != ScreenCommand {
+		t.Fatalf("expected command screen after first selection, got %v", m.screen)
+	}
+	m = m.Update(KeyMsg{Key: "b"})
+	if m.promptInput != "" {
+		t.Fatalf("expected duplicate triage selection key not to leak into command input, got %q", m.promptInput)
+	}
+}
+
+func TestArchiveMenuDeduplicatesImmediateRepeatedDigitInput(t *testing.T) {
+	root := t.TempDir()
+	langDir := filepath.Join(root, "en")
+	if err := os.Mkdir(langDir, 0o755); err != nil {
+		t.Fatalf("mkdir en: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(langDir, "001-Intro"), []byte("Hello"), 0o600); err != nil {
+		t.Fatalf("write sample file: %v", err)
+	}
+	t.Setenv(archiveRootEnvVar, root)
+	t.Setenv(archiveSeedEnvVar, "false")
+
+	now := time.Unix(1700000000, 0)
+	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: "archive"})
+	m.now = func() time.Time { return now }
+
+	m = m.Update(KeyMsg{Key: "1"})
+	m = m.Update(KeyMsg{Key: "1"})
+	if m.promptInput != "1" {
+		t.Fatalf("expected immediate duplicate digit to be ignored, got %q", m.promptInput)
+	}
+	m = m.Update(KeyMsg{Key: "enter"})
+	if m.screen != ScreenArchiveFile {
+		t.Fatalf("expected to enter archive file menu, got %v", m.screen)
+	}
+
+	m = m.Update(KeyMsg{Key: "1"})
+	m = m.Update(KeyMsg{Key: "1"})
+	if m.promptInput != "1" {
+		t.Fatalf("expected duplicate file digit to be ignored, got %q", m.promptInput)
+	}
+	now = now.Add(menuSelectionDebounce + time.Millisecond)
+	m = m.Update(KeyMsg{Key: "1"})
+	if m.promptInput != "11" {
+		t.Fatalf("expected delayed repeated digit to be accepted, got %q", m.promptInput)
+	}
+}
+
 func TestArchiveEditorPersistsEditsImmediately(t *testing.T) {
 	root := t.TempDir()
 	langDir := filepath.Join(root, "en")
