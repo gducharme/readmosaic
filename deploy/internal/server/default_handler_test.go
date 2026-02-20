@@ -342,7 +342,7 @@ func TestStreamKeysDecodesUTF8AndControls(t *testing.T) {
 }
 
 func TestStreamKeysMapsArrowEscapeSequences(t *testing.T) {
-	input := strings.NewReader("[Ax")
+	input := strings.NewReader("[A[B[C[Dx")
 	keys := make(chan string, 8)
 	eof := make(chan struct{}, 1)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -350,13 +350,12 @@ func TestStreamKeysMapsArrowEscapeSequences(t *testing.T) {
 
 	go streamKeys(ctx, input, keys, eof)
 
-	first := <-keys
-	if first != "up" {
-		t.Fatalf("expected arrow key to map to up, got %q", first)
-	}
-	second := <-keys
-	if second != "x" {
-		t.Fatalf("expected trailing printable key, got %q", second)
+	got := []string{<-keys, <-keys, <-keys, <-keys, <-keys}
+	want := []string{"up", "down", "right", "left", "x"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("key[%d]=%q want %q", i, got[i], want[i])
+		}
 	}
 }
 
@@ -387,6 +386,113 @@ func TestStreamKeysMapsArrowEscapeSequencesWhenChunked(t *testing.T) {
 	second := <-keys
 	if second != "x" {
 		t.Fatalf("expected trailing printable key, got %q", second)
+	}
+}
+
+func TestStreamKeysMapsSS3ArrowEscapeSequences(t *testing.T) {
+	input := strings.NewReader("\x1bOA\x1bOB\x1bOC\x1bOD")
+	keys := make(chan string, 8)
+	eof := make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go streamKeys(ctx, input, keys, eof)
+
+	got := []string{<-keys, <-keys, <-keys, <-keys}
+	want := []string{"up", "down", "right", "left"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("key[%d]=%q want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestStreamKeysMapsHomeEndVariants(t *testing.T) {
+	input := strings.NewReader("\x1b[H\x1b[F\x1b[1~\x1b[4~\x1b[7~\x1b[8~")
+	keys := make(chan string, 12)
+	eof := make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go streamKeys(ctx, input, keys, eof)
+
+	got := []string{<-keys, <-keys, <-keys, <-keys, <-keys, <-keys}
+	want := []string{"home", "end", "home", "end", "home", "end"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("key[%d]=%q want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestStreamKeysConsumesParameterizedCSIWithoutLeakingParams(t *testing.T) {
+	input := strings.NewReader("\x1b[1;5Ax")
+	keys := make(chan string, 8)
+	eof := make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go streamKeys(ctx, input, keys, eof)
+
+	if got := <-keys; got != "up" {
+		t.Fatalf("expected parameterized CSI up mapping, got %q", got)
+	}
+	if got := <-keys; got != "x" {
+		t.Fatalf("expected trailing printable key, got %q", got)
+	}
+	select {
+	case extra := <-keys:
+		t.Fatalf("unexpected leaked key from parameter bytes: %q", extra)
+	default:
+	}
+}
+
+func TestStreamKeysTruncatedEscapeRecoversPrintableInput(t *testing.T) {
+	input := strings.NewReader("\x1b[x")
+	keys := make(chan string, 8)
+	eof := make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go streamKeys(ctx, input, keys, eof)
+
+	if got := <-keys; got != "x" {
+		t.Fatalf("expected recovery to emit printable key x, got %q", got)
+	}
+	select {
+	case extra := <-keys:
+		t.Fatalf("unexpected extra key: %q", extra)
+	default:
+	}
+}
+
+func TestDecodeANSIKeyMappings(t *testing.T) {
+	cases := []struct {
+		name   string
+		prefix rune
+		seq    string
+		want   string
+		ok     bool
+	}{
+		{name: "csi up", prefix: '[', seq: "A", want: "up", ok: true},
+		{name: "csi down", prefix: '[', seq: "B", want: "down", ok: true},
+		{name: "csi right", prefix: '[', seq: "C", want: "right", ok: true},
+		{name: "csi left", prefix: '[', seq: "D", want: "left", ok: true},
+		{name: "csi home", prefix: '[', seq: "H", want: "home", ok: true},
+		{name: "csi end", prefix: '[', seq: "F", want: "end", ok: true},
+		{name: "csi home tilde", prefix: '[', seq: "1~", want: "home", ok: true},
+		{name: "csi end tilde", prefix: '[', seq: "4~", want: "end", ok: true},
+		{name: "ss3 up", prefix: 'O', seq: "A", want: "up", ok: true},
+		{name: "unknown final", prefix: '[', seq: "Z", want: "", ok: false},
+		{name: "unknown tilde", prefix: '[', seq: "2~", want: "", ok: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := decodeANSIKey(tc.prefix, tc.seq)
+			if ok != tc.ok || got != tc.want {
+				t.Fatalf("decodeANSIKey(%q,%q)=(%q,%v) want (%q,%v)", string(tc.prefix), tc.seq, got, ok, tc.want, tc.ok)
+			}
+		})
 	}
 }
 

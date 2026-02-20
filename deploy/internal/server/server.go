@@ -339,15 +339,25 @@ func safeTickerDuration(candidate, fallback time.Duration) time.Duration {
 func streamKeys(ctx context.Context, r io.Reader, keys chan<- string, eof chan<- struct{}) {
 	reader := bufio.NewReader(r)
 	escPending := false
-	ansiDiscard := false
+	ansiActive := false
+	ansiPrefix := rune(0)
+	ansiSeq := make([]rune, 0, 8)
+	sendKey := func(key string) bool {
+		if key == "" {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case keys <- key:
+			return true
+		}
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			if escPending {
-				select {
-				case keys <- "esc":
-				default:
-				}
+				_ = sendKey("esc")
 			}
 			return
 		default:
@@ -356,10 +366,7 @@ func streamKeys(ctx context.Context, r io.Reader, keys chan<- string, eof chan<-
 		rn, _, err := reader.ReadRune()
 		if err != nil {
 			if escPending {
-				select {
-				case keys <- "esc":
-				default:
-				}
+				_ = sendKey("esc")
 			}
 			if errors.Is(err, io.EOF) {
 				select {
@@ -370,19 +377,45 @@ func streamKeys(ctx context.Context, r io.Reader, keys chan<- string, eof chan<-
 			return
 		}
 
-		if ansiDiscard {
-			if mapped, ok := ansiFinalKey(rn); ok {
-				ansiDiscard = false
-				select {
-				case <-ctx.Done():
-					return
-				case keys <- mapped:
-				default:
+		if ansiActive {
+			if isANSIFinalByte(rn) {
+				ansiSeq = append(ansiSeq, rn)
+				if mapped, ok := decodeANSIKey(ansiPrefix, string(ansiSeq)); ok {
+					if !sendKey(mapped) {
+						return
+					}
+				} else if recovered, ok := recoverTruncatedANSIPrintable(ansiPrefix, ansiSeq); ok {
+					if !sendKey(recovered) {
+						return
+					}
 				}
+				ansiActive = false
+				ansiPrefix = rune(0)
+				ansiSeq = ansiSeq[:0]
 				continue
 			}
-			if rn >= '@' && rn <= '~' {
-				ansiDiscard = false
+
+			if isANSIIntermediateByte(rn) {
+				if len(ansiSeq) < 32 {
+					ansiSeq = append(ansiSeq, rn)
+					continue
+				}
+				// Defensive reset on malformed/overlong escape fragments.
+				ansiActive = false
+				ansiPrefix = rune(0)
+				ansiSeq = ansiSeq[:0]
+				continue
+			}
+
+			// Not a valid ANSI continuation; recover this rune as normal input.
+			ansiActive = false
+			ansiPrefix = rune(0)
+			ansiSeq = ansiSeq[:0]
+			escPending = false
+			if !unicode.IsControl(rn) {
+				if !sendKey(string(rn)) {
+					return
+				}
 			}
 			continue
 		}
@@ -390,14 +423,13 @@ func streamKeys(ctx context.Context, r io.Reader, keys chan<- string, eof chan<-
 		if escPending {
 			escPending = false
 			if rn == '[' || rn == 'O' {
-				ansiDiscard = true
+				ansiActive = true
+				ansiPrefix = rn
+				ansiSeq = ansiSeq[:0]
 				continue
 			}
-			select {
-			case <-ctx.Done():
+			if !sendKey("esc") {
 				return
-			case keys <- "esc":
-			default:
 			}
 		}
 
@@ -422,30 +454,92 @@ func streamKeys(ctx context.Context, r io.Reader, keys chan<- string, eof chan<-
 			continue
 		}
 
-		select {
-		case <-ctx.Done():
+		if !sendKey(key) {
 			return
-		case keys <- key:
-		default:
 		}
 	}
 }
 
-func ansiFinalKey(rn rune) (string, bool) {
-	switch rn {
-	case 'A':
-		return "up", true
-	case 'B':
-		return "down", true
-	case 'C':
-		return "right", true
-	case 'D':
-		return "left", true
-	case 'F':
-		return "end", true
-	case 'H':
-		return "home", true
+func isANSIFinalByte(rn rune) bool {
+	return rn >= '@' && rn <= '~'
+}
+
+func isANSIIntermediateByte(rn rune) bool {
+	return rn >= ' ' && rn <= '?'
+}
+
+func decodeANSIKey(prefix rune, seq string) (string, bool) {
+	if seq == "" {
+		return "", false
+	}
+	final := rune(seq[len(seq)-1])
+	params := seq[:len(seq)-1]
+
+	switch prefix {
+	case 'O':
+		if params != "" {
+			return "", false
+		}
+		switch final {
+		case 'A':
+			return "up", true
+		case 'B':
+			return "down", true
+		case 'C':
+			return "right", true
+		case 'D':
+			return "left", true
+		case 'F':
+			return "end", true
+		case 'H':
+			return "home", true
+		default:
+			return "", false
+		}
+	case '[':
+		switch final {
+		case 'A':
+			return "up", true
+		case 'B':
+			return "down", true
+		case 'C':
+			return "right", true
+		case 'D':
+			return "left", true
+		case 'F':
+			return "end", true
+		case 'H':
+			return "home", true
+		case '~':
+			switch params {
+			case "1", "7":
+				return "home", true
+			case "4", "8":
+				return "end", true
+			default:
+				return "", false
+			}
+		default:
+			return "", false
+		}
 	default:
 		return "", false
 	}
+}
+
+func recoverTruncatedANSIPrintable(prefix rune, seq []rune) (string, bool) {
+	if prefix != '[' || len(seq) != 1 {
+		return "", false
+	}
+	r := seq[0]
+	if unicode.IsControl(r) {
+		return "", false
+	}
+	if !unicode.IsLetter(r) {
+		return "", false
+	}
+	if unicode.IsUpper(r) {
+		return "", false
+	}
+	return string(r), true
 }
