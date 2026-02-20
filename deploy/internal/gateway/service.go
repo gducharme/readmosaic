@@ -21,6 +21,7 @@ var (
 	ErrInvalidRequest  = errors.New("invalid request")
 	ErrUnauthorized    = errors.New("unauthorized")
 	ErrSessionExpired  = errors.New("session expired")
+	ErrSessionClosed   = errors.New("session closed")
 )
 
 var (
@@ -400,7 +401,12 @@ func (s *Service) authorize(sessionID string, token string) (*sessionState, erro
 	s.mu.RLock()
 	sid, ok := s.tokens[tokenHash]
 	if !ok {
+		_, sessionActive := s.sessions[sessionID]
 		s.mu.RUnlock()
+		if !sessionActive {
+			log.Printf("level=warn event=gateway_authorize_failed reason=session_not_active session=%s token_hash_prefix=%s", sessionID, tokenHashPrefix)
+			return nil, ErrSessionClosed
+		}
 		log.Printf("level=warn event=gateway_authorize_failed reason=token_not_found session=%s token_hash_prefix=%s", sessionID, tokenHashPrefix)
 		return nil, ErrUnauthorized
 	}
