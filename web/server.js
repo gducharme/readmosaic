@@ -48,10 +48,16 @@ function describeGatewayFetchError(error) {
 }
 
 function summarizeGatewayRequest(init) {
+  const headerNames = init && init.headers ? Object.keys(init.headers) : [];
+  const authHeader = init && init.headers
+    ? init.headers.Authorization || init.headers.authorization
+    : null;
+
   return {
     method: (init && init.method) || 'GET',
     hasBody: Boolean(init && init.body),
-    headers: init && init.headers ? Object.keys(init.headers) : [],
+    headers: headerNames,
+    hasAuthorizationBearer: typeof authHeader === 'string' && authHeader.startsWith('Bearer '),
   };
 }
 
@@ -74,7 +80,7 @@ async function fetchGateway(pathname, init) {
   const baseUrlCandidates = buildGatewayBaseUrlCandidates(gatewayBaseUrl);
   const requestSummary = summarizeGatewayRequest(init);
 
-  console.log(`[gateway] request ${requestSummary.method} ${pathname} candidates=${baseUrlCandidates.join(',')} body=${requestSummary.hasBody} headers=${requestSummary.headers.join(',') || '(none)'}`);
+  console.log(`[gateway] request ${requestSummary.method} ${pathname} candidates=${baseUrlCandidates.join(',')} body=${requestSummary.hasBody} headers=${requestSummary.headers.join(',') || '(none)'} bearer=${requestSummary.hasAuthorizationBearer}`);
 
   for (const baseUrlCandidate of baseUrlCandidates) {
     const url = `${baseUrlCandidate}${pathname}`;
@@ -129,6 +135,11 @@ async function openGatewaySession(username) {
     payload.gateway_diagnostics = response.gatewayDiagnostics;
   }
 
+  const hasResumeToken = Boolean(payload && typeof payload.resume_token === 'string' && payload.resume_token.length > 0);
+  const sessionId = payload && payload.session_id ? payload.session_id : '(missing)';
+  const tokenFingerprint = hasResumeToken ? payload.resume_token.slice(0, 8) : '(none)';
+  console.log(`[gateway] open session response session_id=${sessionId} resume_token_present=${hasResumeToken} token_prefix=${tokenFingerprint}`);
+
   return payload;
 }
 
@@ -154,6 +165,9 @@ async function streamGatewayOutput(session, ws) {
     return;
   }
 
+  const tokenFingerprint = session.resume_token.slice(0, 8);
+  console.log(`[gateway] opening output stream session_id=${session.session_id} token_prefix=${tokenFingerprint}`);
+
   let response;
   try {
     response = await fetchGateway(`/gateway/sessions/${encodeURIComponent(session.session_id)}/output`, {
@@ -168,8 +182,10 @@ async function streamGatewayOutput(session, ws) {
   }
 
   if (!response.ok || !response.body) {
+    const details = await parseGatewayErrorResponse(response, 'gateway rejected output stream request');
+    console.warn(`[gateway] output stream rejected session_id=${session.session_id} status=${response.status} token_prefix=${tokenFingerprint} details=${details}`);
     if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'error', payload: `Unable to stream gateway output: HTTP ${response.status}` }));
+      ws.send(JSON.stringify({ type: 'error', payload: `Unable to stream gateway output: HTTP ${response.status} (${details})` }));
     }
     return;
   }
