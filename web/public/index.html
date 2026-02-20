@@ -75,6 +75,12 @@
     const minimumTerminalRows = 8;
     let ws;
 
+    terminal.onData((data) => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'input', payload: data }));
+      }
+    });
+
     function sendResize() {
       fitAddon.fit();
       if (ws && ws.readyState === WebSocket.OPEN) {
@@ -90,6 +96,11 @@
       const username = usernameInput.value.trim();
       if (!username) {
         status.textContent = 'Username is required';
+        return;
+      }
+
+      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+        status.textContent = 'Terminal is already connecting/connected';
         return;
       }
 
@@ -126,13 +137,9 @@
 
       ws.addEventListener('close', () => {
         status.textContent = 'Disconnected';
+        ws = null;
       });
 
-      terminal.onData((data) => {
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'input', payload: data }));
-        }
-      });
     }
 
     connectButton.addEventListener('click', connect);
