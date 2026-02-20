@@ -211,8 +211,8 @@ func TestResizeClampViewportBounds(t *testing.T) {
 	m.viewportTop = 999
 
 	m = m.Update(ResizeMsg{Width: 0, Height: 0})
-	if m.viewportH < 0 {
-		t.Fatalf("viewportH must be >= 0")
+	if m.viewportH < 1 {
+		t.Fatalf("viewportH must be >= 1")
 	}
 	maxTop := max(len(m.viewportLines)-m.viewportH, 0)
 	if m.viewportTop < 0 || m.viewportTop > maxTop {
@@ -227,8 +227,8 @@ func TestViewportHeightReservesHeaderAndPromptChrome(t *testing.T) {
 		t.Fatalf("expected viewportH=17 for height=24, got %d", m.viewportH)
 	}
 	m = m.Update(ResizeMsg{Width: 80, Height: 7})
-	if m.viewportH != 0 {
-		t.Fatalf("expected viewportH=0 for height=7, got %d", m.viewportH)
+	if m.viewportH != 1 {
+		t.Fatalf("expected viewportH=1 for height=7, got %d", m.viewportH)
 	}
 }
 

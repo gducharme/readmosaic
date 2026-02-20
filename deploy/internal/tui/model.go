@@ -255,7 +255,7 @@ func NewModelWithOptions(remoteAddr string, opts Options) Model {
 	m := Model{
 		width:          max(opts.Width, 1),
 		height:         max(opts.Height, 1),
-		viewportH:      max(opts.Height-7, 0),
+		viewportH:      computeViewportHeight(opts.Height),
 		isTTY:          opts.IsTTY,
 		statusBlink:    true,
 		cursorBlink:    true,
@@ -324,7 +324,7 @@ func (m Model) Update(msg any) Model {
 	case ResizeMsg:
 		m.width = max(msg.Width, 1)
 		m.height = max(msg.Height, 1)
-		m.viewportH = max(m.height-7, 0)
+		m.viewportH = computeViewportHeight(m.height)
 		m.clampViewportBounds()
 	case TickMsg:
 		if m.isTTY {
@@ -1243,6 +1243,11 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func computeViewportHeight(totalHeight int) int {
+	// Keep the body pane visible even in very small PTYs so MOTD/menus never fully disappear.
+	return max(totalHeight-7, 1)
 }
 
 func clamp(v, low, high int) int {
