@@ -828,13 +828,139 @@ func TestArchiveEditorPersistsEditsImmediately(t *testing.T) {
 		t.Fatalf("expected immediate persistence, got %q", string(updated))
 	}
 
+	m = m.Update(KeyMsg{Key: "left"})
+	m = m.Update(KeyMsg{Key: "X"})
+	updated, err = os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read updated file after cursor insert: %v", err)
+	}
+	if string(updated) != "HelloX!" {
+		t.Fatalf("expected cursor-aware insertion, got %q", string(updated))
+	}
+
 	m = m.Update(KeyMsg{Key: "backspace"})
 	updated, err = os.ReadFile(filePath)
 	if err != nil {
 		t.Fatalf("read updated file after backspace: %v", err)
 	}
-	if string(updated) != "Hello" {
+	if string(updated) != "Hello!" {
 		t.Fatalf("expected persisted backspace edit, got %q", string(updated))
+	}
+}
+
+func TestArchiveEditorVerticalNavigationAndPromptBlinkMarker(t *testing.T) {
+	root := t.TempDir()
+	langDir := filepath.Join(root, "en")
+	if err := os.Mkdir(langDir, 0o755); err != nil {
+		t.Fatalf("mkdir en: %v", err)
+	}
+	filePath := filepath.Join(langDir, "001-Intro")
+	if err := os.WriteFile(filePath, []byte("A\nBBBB"), 0o600); err != nil {
+		t.Fatalf("write initial file: %v", err)
+	}
+	t.Setenv(archiveRootEnvVar, root)
+	t.Setenv(archiveSeedEnvVar, "false")
+
+	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: "archive"})
+	m = m.Update(KeyMsg{Key: "1"})
+	m = m.Update(KeyMsg{Key: "enter"})
+	m = m.Update(KeyMsg{Key: "1"})
+	m = m.Update(KeyMsg{Key: "enter"})
+
+	m = m.Update(KeyMsg{Key: "home"})
+	m = m.Update(KeyMsg{Key: "down"})
+	m = m.Update(KeyMsg{Key: "right"})
+	m = m.Update(KeyMsg{Key: "Z"})
+
+	updated, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read updated file after navigation insert: %v", err)
+	}
+	if string(updated) != "A\nBZBBB" {
+		t.Fatalf("expected vertical navigation insertion, got %q", string(updated))
+	}
+
+	prompt := renderPrompt(m)
+	if !strings.Contains(prompt, "[EDITING LIVE") || (!strings.Contains(prompt, "◉") && !strings.Contains(prompt, "◌")) {
+		t.Fatalf("expected blinking editing marker in prompt, got %q", prompt)
+	}
+}
+
+func TestArchiveEditorCursorNewlineBoundarySemantics(t *testing.T) {
+	root := t.TempDir()
+	langDir := filepath.Join(root, "en")
+	if err := os.Mkdir(langDir, 0o755); err != nil {
+		t.Fatalf("mkdir en: %v", err)
+	}
+	filePath := filepath.Join(langDir, "001-Intro")
+	if err := os.WriteFile(filePath, []byte("AB\nCD"), 0o600); err != nil {
+		t.Fatalf("write initial file: %v", err)
+	}
+	t.Setenv(archiveRootEnvVar, root)
+	t.Setenv(archiveSeedEnvVar, "false")
+
+	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: "archive"})
+	m = m.Update(KeyMsg{Key: "1"})
+	m = m.Update(KeyMsg{Key: "enter"})
+	m = m.Update(KeyMsg{Key: "1"})
+	m = m.Update(KeyMsg{Key: "enter"})
+	m.archiveCursor = 2                // AB|\nCD
+	m = m.Update(KeyMsg{Key: "right"}) // next line start
+	line, col := archiveCursorLineCol(m.archiveEditorBuffer, m.archiveCursor)
+	if line != 2 || col != 1 {
+		t.Fatalf("expected cursor at line 2 col 1 after crossing newline, got line=%d col=%d", line, col)
+	}
+	m = m.Update(KeyMsg{Key: "right"})
+	line, col = archiveCursorLineCol(m.archiveEditorBuffer, m.archiveCursor)
+	if line != 2 || col != 2 {
+		t.Fatalf("expected cursor at line 2 col 2 after moving right, got line=%d col=%d", line, col)
+	}
+
+	m = m.Update(KeyMsg{Key: "up"})
+	line, col = archiveCursorLineCol(m.archiveEditorBuffer, m.archiveCursor)
+	if line != 1 || col != 2 {
+		t.Fatalf("expected up to preserve visual column on previous line, got line=%d col=%d", line, col)
+	}
+}
+
+func TestArchiveEditorVerticalNavigationShorterLineClamp(t *testing.T) {
+	root := t.TempDir()
+	langDir := filepath.Join(root, "en")
+	if err := os.Mkdir(langDir, 0o755); err != nil {
+		t.Fatalf("mkdir en: %v", err)
+	}
+	filePath := filepath.Join(langDir, "001-Intro")
+	if err := os.WriteFile(filePath, []byte("LONG\nS"), 0o600); err != nil {
+		t.Fatalf("write initial file: %v", err)
+	}
+	t.Setenv(archiveRootEnvVar, root)
+	t.Setenv(archiveSeedEnvVar, "false")
+
+	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: "archive"})
+	m = m.Update(KeyMsg{Key: "1"})
+	m = m.Update(KeyMsg{Key: "enter"})
+	m = m.Update(KeyMsg{Key: "1"})
+	m = m.Update(KeyMsg{Key: "enter"})
+	m = m.Update(KeyMsg{Key: "home"})
+	for i := 0; i < 4; i++ {
+		m = m.Update(KeyMsg{Key: "right"})
+	}
+	m = m.Update(KeyMsg{Key: "down"})
+	line, col := archiveCursorLineCol(m.archiveEditorBuffer, m.archiveCursor)
+	if line != 2 || col != 2 { // after single rune "S", cursor clamps to end-of-line
+		t.Fatalf("expected clamp to line2 col2, got line=%d col=%d", line, col)
+	}
+}
+
+func TestRenderArchiveBufferWithCursorInvariants(t *testing.T) {
+	buf := "AB\nCD"
+	lines := renderArchiveBufferWithCursor(buf, 2, true)
+	joined := strings.Join(lines, "\n")
+	if strings.Count(joined, "█") != 1 {
+		t.Fatalf("expected exactly one cursor glyph, got %q", joined)
+	}
+	if len(lines) != len(strings.Split(buf, "\n")) {
+		t.Fatalf("expected same rendered line count, got=%d want=%d", len(lines), len(strings.Split(buf, "\n")))
 	}
 }
 

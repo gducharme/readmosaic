@@ -233,6 +233,7 @@ type Model struct {
 	archiveFileIdx      int
 	archiveEditPath     string
 	archiveEditorBuffer string
+	archiveCursor       int
 	archiveStatus       string
 }
 
@@ -727,6 +728,7 @@ func (m *Model) openArchiveFile(file archiveDocument) {
 	}
 	m.archiveEditPath = clean
 	m.archiveEditorBuffer = sanitizeArchiveLoadedContent(string(data))
+	m.archiveCursor = len([]rune(m.archiveEditorBuffer))
 	m.archiveStatus = ""
 }
 
@@ -737,15 +739,17 @@ func (m *Model) renderArchiveEditor() {
 	if lang.IsRTL {
 		dir = "RTL"
 	}
-	lines := []string{fmt.Sprintf("ARCHIVE EDITOR // %s", file.Name), fmt.Sprintf("Language: %s [%s]", lang.DisplayName, dir), "Append/backspace/newline editing only. No cursor navigation.", "Edits save immediately.", "Esc returns to file list.", ""}
+	line, col := archiveCursorLineCol(m.archiveEditorBuffer, m.archiveCursor)
+	lines := []string{fmt.Sprintf("ARCHIVE EDITOR // %s", file.Name), fmt.Sprintf("Language: %s [%s]", lang.DisplayName, dir), "Arrow/Home/End navigation enabled. Edits save immediately.", fmt.Sprintf("Cursor: Ln %d, Col %d", line, col), "Esc returns to file list.", ""}
 	if m.archiveStatus != "" {
 		lines = append(lines, "WARNING: "+m.archiveStatus, "")
 	}
-	lines = append(lines, strings.Split(m.archiveEditorBuffer, "\n")...)
+	lines = append(lines, renderArchiveBufferWithCursor(m.archiveEditorBuffer, m.archiveCursor, m.cursorBlink)...)
 	m.setViewportContent(strings.Join(lines, "\n"))
 }
 
 func (m *Model) handleArchiveEditorKey(lower, raw string) {
+	m.archiveCursor = clamp(m.archiveCursor, 0, len([]rune(m.archiveEditorBuffer)))
 	switch lower {
 	case "ctrl+d":
 		m.screen = ScreenExit
@@ -757,15 +761,47 @@ func (m *Model) handleArchiveEditorKey(lower, raw string) {
 		return
 	case "backspace":
 		runes := []rune(m.archiveEditorBuffer)
-		if len(runes) > 0 {
-			m.archiveEditorBuffer = string(runes[:len(runes)-1])
+		if m.archiveCursor > 0 && len(runes) > 0 {
+			start := runes[:m.archiveCursor-1]
+			end := runes[m.archiveCursor:]
+			m.archiveEditorBuffer = string(append(start, end...))
+			m.archiveCursor--
 			m.persistArchiveEdit()
 		}
 		m.renderArchiveEditor()
 		return
 	case "enter":
-		m.archiveEditorBuffer += "\n"
+		m.archiveEditorBuffer = insertArchiveRunesAtCursor(m.archiveEditorBuffer, m.archiveCursor, []rune("\n"))
+		m.archiveCursor++
 		m.persistArchiveEdit()
+		m.renderArchiveEditor()
+		return
+	case "left":
+		if m.archiveCursor > 0 {
+			m.archiveCursor--
+		}
+		m.renderArchiveEditor()
+		return
+	case "right":
+		if m.archiveCursor < len([]rune(m.archiveEditorBuffer)) {
+			m.archiveCursor++
+		}
+		m.renderArchiveEditor()
+		return
+	case "up":
+		m.archiveCursor = moveArchiveCursorVertical(m.archiveEditorBuffer, m.archiveCursor, -1)
+		m.renderArchiveEditor()
+		return
+	case "down":
+		m.archiveCursor = moveArchiveCursorVertical(m.archiveEditorBuffer, m.archiveCursor, 1)
+		m.renderArchiveEditor()
+		return
+	case "home":
+		m.archiveCursor = moveArchiveCursorHome(m.archiveEditorBuffer, m.archiveCursor)
+		m.renderArchiveEditor()
+		return
+	case "end":
+		m.archiveCursor = moveArchiveCursorEnd(m.archiveEditorBuffer, m.archiveCursor)
 		m.renderArchiveEditor()
 		return
 	}
@@ -780,10 +816,103 @@ func (m *Model) handleArchiveEditorKey(lower, raw string) {
 		if filtered.Len() == 0 {
 			return
 		}
-		m.archiveEditorBuffer += filtered.String()
+		payload := []rune(filtered.String())
+		m.archiveEditorBuffer = insertArchiveRunesAtCursor(m.archiveEditorBuffer, m.archiveCursor, payload)
+		m.archiveCursor += len(payload)
 		m.persistArchiveEdit()
 		m.renderArchiveEditor()
 	}
+}
+
+func insertArchiveRunesAtCursor(buffer string, cursor int, insert []rune) string {
+	runes := []rune(buffer)
+	cursor = clamp(cursor, 0, len(runes))
+	merged := make([]rune, 0, len(runes)+len(insert))
+	merged = append(merged, runes[:cursor]...)
+	merged = append(merged, insert...)
+	merged = append(merged, runes[cursor:]...)
+	return string(merged)
+}
+
+func archiveLineStarts(runes []rune) []int {
+	starts := []int{0}
+	for i, r := range runes {
+		if r == '\n' {
+			starts = append(starts, i+1)
+		}
+	}
+	return starts
+}
+
+func archiveLineForCursor(starts []int, cursor int) int {
+	line := 0
+	for i := 1; i < len(starts); i++ {
+		if starts[i] > cursor {
+			break
+		}
+		line = i
+	}
+	return line
+}
+
+func archiveLineEnd(runes []rune, starts []int, line int) int {
+	if line+1 < len(starts) {
+		return starts[line+1] - 1
+	}
+	return len(runes)
+}
+
+func moveArchiveCursorVertical(buffer string, cursor, delta int) int {
+	runes := []rune(buffer)
+	cursor = clamp(cursor, 0, len(runes))
+	starts := archiveLineStarts(runes)
+	line := archiveLineForCursor(starts, cursor)
+	col := cursor - starts[line]
+	target := clamp(line+delta, 0, len(starts)-1)
+	targetEnd := archiveLineEnd(runes, starts, target)
+	targetLen := targetEnd - starts[target]
+	if targetLen < 0 {
+		targetLen = 0
+	}
+	return starts[target] + min(col, targetLen)
+}
+
+func moveArchiveCursorHome(buffer string, cursor int) int {
+	runes := []rune(buffer)
+	cursor = clamp(cursor, 0, len(runes))
+	starts := archiveLineStarts(runes)
+	line := archiveLineForCursor(starts, cursor)
+	return starts[line]
+}
+
+func moveArchiveCursorEnd(buffer string, cursor int) int {
+	runes := []rune(buffer)
+	cursor = clamp(cursor, 0, len(runes))
+	starts := archiveLineStarts(runes)
+	line := archiveLineForCursor(starts, cursor)
+	return archiveLineEnd(runes, starts, line)
+}
+
+func archiveCursorLineCol(buffer string, cursor int) (int, int) {
+	runes := []rune(buffer)
+	cursor = clamp(cursor, 0, len(runes))
+	starts := archiveLineStarts(runes)
+	line := archiveLineForCursor(starts, cursor)
+	return line + 1, cursor - starts[line] + 1
+}
+
+func renderArchiveBufferWithCursor(buffer string, cursor int, blinkOn bool) []string {
+	runes := []rune(buffer)
+	cursor = clamp(cursor, 0, len(runes))
+	glyph := "░"
+	if blinkOn {
+		glyph = "█"
+	}
+	decorated := make([]rune, 0, len(runes)+1)
+	decorated = append(decorated, runes[:cursor]...)
+	decorated = append(decorated, []rune(glyph)...)
+	decorated = append(decorated, runes[cursor:]...)
+	return strings.Split(string(decorated), "\n")
 }
 
 func (m *Model) persistArchiveEdit() {
@@ -1052,7 +1181,11 @@ func renderPrompt(m Model) string {
 		if m.cursorBlink {
 			cursor = "█"
 		}
-		prompt = promptPrefix + "[EDITING LIVE]" + cursor
+		marker := "◌"
+		if m.cursorBlink {
+			marker = "◉"
+		}
+		prompt = promptPrefix + "[EDITING LIVE " + marker + "]" + cursor
 	default:
 		prompt = promptPrefix
 	}
