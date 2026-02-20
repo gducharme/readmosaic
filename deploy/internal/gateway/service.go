@@ -169,7 +169,7 @@ func (s *Service) OpenSession(ctx context.Context, req OpenSessionRequest) (Sess
 	tokenHash := s.tokenHash(token)
 	meta := SessionMetadata{SessionID: sessionID, ResumeToken: token, ResumeTokenHash: tokenHash, User: req.User, Host: req.Host, Port: req.Port, StartedAt: now, LastSeenAt: now, ExpiresAt: now.Add(sessionTokenTTL), Connected: true, Limits: req.Limits}
 
-	procCtx, cancel := context.WithCancel(ctx)
+	procCtx, cancel := context.WithCancel(context.Background())
 	proc, err := s.launcher.Launch(procCtx, meta, req.Command, req.Env)
 	if err != nil {
 		cancel()

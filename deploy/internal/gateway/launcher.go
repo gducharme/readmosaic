@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"strconv"
@@ -35,20 +36,30 @@ func NewSSHLauncher() *SSHLauncher {
 
 func (l *SSHLauncher) Launch(ctx context.Context, meta SessionMetadata, command []string, env map[string]string) (Process, error) {
 	cmdPath, cmdArgs := l.commandSpec(meta)
+	log.Printf("level=info event=gateway_process_launch_attempt session=%s user=%s host=%s port=%d command_path=%q args_count=%d", meta.SessionID, meta.User, meta.Host, meta.Port, cmdPath, len(cmdArgs))
 	cmd := exec.CommandContext(ctx, cmdPath, cmdArgs...)
 	cmd.Env = sanitizedEnv(env)
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
+		log.Printf("level=warn event=gateway_process_launch_failed session=%s user=%s host=%s port=%d error=%v", meta.SessionID, meta.User, meta.Host, meta.Port, err)
 		return nil, err
 	}
+	log.Printf("level=info event=gateway_process_launch_started session=%s pid=%d", meta.SessionID, cmd.Process.Pid)
 	proc := &sshProcess{cmd: cmd, pty: ptmx, done: make(chan error, 1)}
 	if meta.Limits.MaxDurationSeconds > 0 {
 		proc.timer = time.AfterFunc(time.Duration(meta.Limits.MaxDurationSeconds)*time.Second, func() {
+			log.Printf("level=warn event=gateway_process_timeout session=%s max_duration_seconds=%d", meta.SessionID, meta.Limits.MaxDurationSeconds)
 			_ = proc.Close()
 		})
 	}
 	go func() {
-		proc.done <- cmd.Wait()
+		waitErr := cmd.Wait()
+		if waitErr != nil {
+			log.Printf("level=warn event=gateway_process_wait_done session=%s pid=%d error=%v", meta.SessionID, cmd.Process.Pid, waitErr)
+		} else {
+			log.Printf("level=info event=gateway_process_wait_done session=%s pid=%d", meta.SessionID, cmd.Process.Pid)
+		}
+		proc.done <- waitErr
 		close(proc.done)
 		_ = proc.Close()
 	}()
