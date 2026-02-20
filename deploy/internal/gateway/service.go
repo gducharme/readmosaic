@@ -392,18 +392,31 @@ func (s *Service) closeSubscribers(sessionID string) {
 
 func (s *Service) authorize(sessionID string, token string) (*sessionState, error) {
 	tokenHash := s.tokenHash(strings.TrimSpace(token))
+	tokenHashPrefix := tokenHash
+	if len(tokenHashPrefix) > 12 {
+		tokenHashPrefix = tokenHashPrefix[:12]
+	}
+
 	s.mu.RLock()
 	sid, ok := s.tokens[tokenHash]
-	if !ok || sid != sessionID {
+	if !ok {
 		s.mu.RUnlock()
+		log.Printf("level=warn event=gateway_authorize_failed reason=token_not_found session=%s token_hash_prefix=%s", sessionID, tokenHashPrefix)
+		return nil, ErrUnauthorized
+	}
+	if sid != sessionID {
+		s.mu.RUnlock()
+		log.Printf("level=warn event=gateway_authorize_failed reason=session_mismatch session=%s mapped_session=%s token_hash_prefix=%s", sessionID, sid, tokenHashPrefix)
 		return nil, ErrUnauthorized
 	}
 	st, ok := s.sessions[sessionID]
 	s.mu.RUnlock()
 	if !ok {
+		log.Printf("level=warn event=gateway_authorize_failed reason=session_not_active session=%s token_hash_prefix=%s", sessionID, tokenHashPrefix)
 		return nil, ErrSessionNotFound
 	}
 	if s.isExpired(st.meta) {
+		log.Printf("level=warn event=gateway_authorize_failed reason=session_expired session=%s token_hash_prefix=%s", sessionID, tokenHashPrefix)
 		return nil, ErrSessionExpired
 	}
 	return st, nil
