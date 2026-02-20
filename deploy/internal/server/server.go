@@ -371,6 +371,16 @@ func streamKeys(ctx context.Context, r io.Reader, keys chan<- string, eof chan<-
 		}
 
 		if ansiDiscard {
+			if mapped, ok := ansiFinalKey(rn); ok {
+				ansiDiscard = false
+				select {
+				case <-ctx.Done():
+					return
+				case keys <- mapped:
+				default:
+				}
+				continue
+			}
 			if rn >= '@' && rn <= '~' {
 				ansiDiscard = false
 			}
@@ -418,5 +428,24 @@ func streamKeys(ctx context.Context, r io.Reader, keys chan<- string, eof chan<-
 		case keys <- key:
 		default:
 		}
+	}
+}
+
+func ansiFinalKey(rn rune) (string, bool) {
+	switch rn {
+	case 'A':
+		return "up", true
+	case 'B':
+		return "down", true
+	case 'C':
+		return "right", true
+	case 'D':
+		return "left", true
+	case 'F':
+		return "end", true
+	case 'H':
+		return "home", true
+	default:
+		return "", false
 	}
 }

@@ -341,7 +341,7 @@ func TestStreamKeysDecodesUTF8AndControls(t *testing.T) {
 	}
 }
 
-func TestStreamKeysSwallowsArrowEscapeSequences(t *testing.T) {
+func TestStreamKeysMapsArrowEscapeSequences(t *testing.T) {
 	input := strings.NewReader("[Ax")
 	keys := make(chan string, 8)
 	eof := make(chan struct{}, 1)
@@ -350,23 +350,17 @@ func TestStreamKeysSwallowsArrowEscapeSequences(t *testing.T) {
 
 	go streamKeys(ctx, input, keys, eof)
 
-	select {
-	case key := <-keys:
-		if key != "x" {
-			t.Fatalf("expected only trailing printable key, got %q", key)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timeout waiting for key")
+	first := <-keys
+	if first != "up" {
+		t.Fatalf("expected arrow key to map to up, got %q", first)
 	}
-
-	select {
-	case extra := <-keys:
-		t.Fatalf("unexpected extra key from escape sequence: %q", extra)
-	default:
+	second := <-keys
+	if second != "x" {
+		t.Fatalf("expected trailing printable key, got %q", second)
 	}
 }
 
-func TestStreamKeysSwallowsArrowEscapeSequencesWhenChunked(t *testing.T) {
+func TestStreamKeysMapsArrowEscapeSequencesWhenChunked(t *testing.T) {
 	r, w := io.Pipe()
 	defer r.Close()
 	keys := make(chan string, 8)
@@ -386,19 +380,13 @@ func TestStreamKeysSwallowsArrowEscapeSequencesWhenChunked(t *testing.T) {
 		_ = w.Close()
 	}()
 
-	select {
-	case key := <-keys:
-		if key != "x" {
-			t.Fatalf("expected only trailing printable key, got %q", key)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timeout waiting for key")
+	first := <-keys
+	if first != "up" {
+		t.Fatalf("expected arrow key to map to up, got %q", first)
 	}
-
-	select {
-	case extra := <-keys:
-		t.Fatalf("unexpected extra key from chunked escape sequence: %q", extra)
-	case <-time.After(30 * time.Millisecond):
+	second := <-keys
+	if second != "x" {
+		t.Fatalf("expected trailing printable key, got %q", second)
 	}
 }
 
