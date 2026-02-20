@@ -55,6 +55,7 @@ const (
 	readFallbackLine        = "READ FRAGMENT UNAVAILABLE"
 	typewriterQueueDropLine = "[TYPEWRITER QUEUE TRUNCATED]"
 	maxArchiveFileBytes     = 2 * 1024 * 1024
+	menuSelectionDebounce   = 75 * time.Millisecond
 	flowArchive             = "archive"
 	flowDefault             = "default"
 )
@@ -225,16 +226,20 @@ type Model struct {
 	typewriterLineIdx int // -1 indicates no active animated line
 	typewriterStep    int
 
-	username            string
-	archiveRoot         string
-	archiveLanguages    []archiveLanguage
-	archiveFiles        []archiveDocument
-	archiveLanguageIdx  int
-	archiveFileIdx      int
-	archiveEditPath     string
-	archiveEditorBuffer string
-	archiveCursor       int
-	archiveStatus       string
+	username                string
+	archiveRoot             string
+	archiveLanguages        []archiveLanguage
+	archiveFiles            []archiveDocument
+	archiveLanguageIdx      int
+	archiveFileIdx          int
+	archiveEditPath         string
+	archiveEditorBuffer     string
+	archiveCursor           int
+	archiveStatus           string
+	menuLastSelectionKey    string
+	menuLastSelectionAt     time.Time
+	menuLastSelectionScreen Screen
+	now                     func() time.Time
 }
 
 // NewModel constructs the interactive TUI model from caller/session metadata.
@@ -267,6 +272,7 @@ func NewModelWithOptions(remoteAddr string, opts Options) Model {
 		viewportLines:  strings.Split(renderMOTD(), "\n"),
 		typewriterStep: resolveTypewriterStep(opts.TypewriterStep),
 		username:       strings.ToLower(strings.TrimSpace(opts.Username)),
+		now:            time.Now,
 	}
 	flow := normalizeFlow(opts.Flow)
 	if opts.ThemeBundle != nil {
@@ -349,6 +355,9 @@ func (m Model) Update(msg any) Model {
 
 func (m *Model) handleKey(key string) {
 	lower := strings.ToLower(key)
+	if m.shouldSuppressPostMenuDuplicate(lower) {
+		return
+	}
 	switch m.screen {
 	case ScreenMOTD:
 		if lower == "enter" {
@@ -359,6 +368,9 @@ func (m *Model) handleKey(key string) {
 		if lower == "esc" && !m.hasEnteredCommand {
 			m.screen = ScreenMOTD
 			m.setViewportContent(renderMOTD())
+			return
+		}
+		if m.shouldSuppressMenuSelectionKey(lower) {
 			return
 		}
 		m.selectVectorByKey(lower)
@@ -548,18 +560,41 @@ func (m *Model) renderArchiveLanguageMenu() {
 	m.setViewportContent(strings.Join(lines, "\n"))
 }
 
+func (m *Model) shouldSuppressPostMenuDuplicate(key string) bool {
+	if m.menuLastSelectionScreen == m.screen {
+		return false
+	}
+	if !isMenuSelectionKeyForScreen(m.menuLastSelectionScreen, key) {
+		return false
+	}
+	now := time.Now()
+	if m.now != nil {
+		now = m.now()
+	}
+	if key != m.menuLastSelectionKey || m.menuLastSelectionAt.IsZero() {
+		return false
+	}
+	if now.Sub(m.menuLastSelectionAt) > menuSelectionDebounce {
+		return false
+	}
+	m.menuLastSelectionAt = now
+	return true
+}
+
 func (m *Model) handleArchiveLanguageKey(lower, raw string) {
 	switch lower {
 	case "ctrl+d":
 		m.screen = ScreenExit
 		return
 	case "backspace":
+		m.clearMenuSelectionDebounceState()
 		if len(m.promptInput) > 0 {
 			r := []rune(m.promptInput)
 			m.promptInput = string(r[:len(r)-1])
 		}
 		return
 	case "enter":
+		m.clearMenuSelectionDebounceState()
 		choice, err := strconv.Atoi(strings.TrimSpace(m.promptInput))
 		m.promptInput = ""
 		if err != nil || choice <= 0 || choice > len(m.archiveLanguages) {
@@ -571,9 +606,7 @@ func (m *Model) handleArchiveLanguageKey(lower, raw string) {
 		m.renderArchiveFileMenu()
 		return
 	}
-	if len([]rune(raw)) == 1 && unicode.IsDigit([]rune(raw)[0]) {
-		m.promptInput += raw
-	}
+	m.appendMenuSelectionDigit(raw)
 }
 
 func (m *Model) loadArchiveFiles(lang archiveLanguage) {
@@ -660,17 +693,20 @@ func (m *Model) handleArchiveFileKey(lower, raw string) {
 		m.screen = ScreenExit
 		return
 	case "esc":
+		m.clearMenuSelectionDebounceState()
 		m.promptInput = ""
 		m.screen = ScreenArchiveLanguage
 		m.renderArchiveLanguageMenu()
 		return
 	case "backspace":
+		m.clearMenuSelectionDebounceState()
 		if len(m.promptInput) > 0 {
 			r := []rune(m.promptInput)
 			m.promptInput = string(r[:len(r)-1])
 		}
 		return
 	case "enter":
+		m.clearMenuSelectionDebounceState()
 		choice, err := strconv.Atoi(strings.TrimSpace(m.promptInput))
 		m.promptInput = ""
 		if err != nil || choice <= 0 || choice > len(m.archiveFiles) {
@@ -682,9 +718,58 @@ func (m *Model) handleArchiveFileKey(lower, raw string) {
 		m.renderArchiveEditor()
 		return
 	}
-	if len([]rune(raw)) == 1 && unicode.IsDigit([]rune(raw)[0]) {
-		m.promptInput += raw
+	m.appendMenuSelectionDigit(raw)
+}
+
+func (m *Model) shouldSuppressMenuSelectionKey(key string) bool {
+	if !isMenuSelectionKeyForScreen(m.screen, key) {
+		return false
 	}
+	now := time.Now()
+	if m.now != nil {
+		now = m.now()
+	}
+	if m.menuLastSelectionScreen != m.screen {
+		m.clearMenuSelectionDebounceState()
+	}
+	if key == m.menuLastSelectionKey && !m.menuLastSelectionAt.IsZero() && now.Sub(m.menuLastSelectionAt) <= menuSelectionDebounce {
+		m.menuLastSelectionAt = now
+		m.menuLastSelectionScreen = m.screen
+		return true
+	}
+	m.menuLastSelectionKey = key
+	m.menuLastSelectionAt = now
+	m.menuLastSelectionScreen = m.screen
+	return false
+}
+
+func isMenuSelectionKeyForScreen(screen Screen, key string) bool {
+	switch screen {
+	case ScreenTriage:
+		return key == "a" || key == "b" || key == "c"
+	case ScreenArchiveLanguage, ScreenArchiveFile:
+		r := []rune(key)
+		return len(r) == 1 && unicode.IsDigit(r[0])
+	default:
+		return false
+	}
+}
+
+func (m *Model) appendMenuSelectionDigit(raw string) {
+	runes := []rune(raw)
+	if len(runes) != 1 || !unicode.IsDigit(runes[0]) {
+		return
+	}
+	if m.shouldSuppressMenuSelectionKey(raw) {
+		return
+	}
+	m.promptInput += raw
+}
+
+func (m *Model) clearMenuSelectionDebounceState() {
+	m.menuLastSelectionKey = ""
+	m.menuLastSelectionAt = time.Time{}
+	m.menuLastSelectionScreen = m.screen
 }
 
 func sanitizeArchiveLoadedContent(content string) string {
