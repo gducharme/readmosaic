@@ -30,14 +30,15 @@ var (
 )
 
 const (
-	sessionTokenTTL        = 12 * time.Hour
-	sessionIdleLimit       = 30 * time.Minute
-	minSecretBytes         = 32
-	envGatewayHMACKey      = "GATEWAY_HMAC_SECRET"
-	envGatewayHostList     = "GATEWAY_HOST_ALLOWLIST"
-	envGatewayEnv          = "GATEWAY_ENV"
-	defaultGatewayEnv      = "development"
-	maxStdinBytesPerSecond = 256 * 1024
+	sessionTokenTTL         = 12 * time.Hour
+	sessionIdleLimit        = 30 * time.Minute
+	minSecretBytes          = 32
+	envGatewayHMACKey       = "GATEWAY_HMAC_SECRET"
+	envGatewayHostList      = "GATEWAY_HOST_ALLOWLIST"
+	envGatewayEnv           = "GATEWAY_ENV"
+	defaultGatewayEnv       = "development"
+	maxStdinBytesPerSecond  = 256 * 1024
+	processStartGraceWindow = 200 * time.Millisecond
 )
 
 type SessionLimits struct {
@@ -173,6 +174,17 @@ func (s *Service) OpenSession(ctx context.Context, req OpenSessionRequest) (Sess
 	if err != nil {
 		cancel()
 		return SessionMetadata{}, mapLaunchError(err)
+	}
+	select {
+	case procErr, ok := <-proc.Done():
+		cancel()
+		_ = proc.Close()
+		if !ok || procErr == nil {
+			procErr = errors.New("process exited before session became ready")
+		}
+		log.Printf("level=warn event=gateway_session_open_failed reason=process_exited_early session=%s error=%v", sessionID, procErr)
+		return SessionMetadata{}, &FriendlyError{Code: "SPAWN_EXITED_EARLY", Message: "terminal process exited before session became ready", Cause: procErr}
+	case <-time.After(processStartGraceWindow):
 	}
 	state := &sessionState{meta: meta, proc: proc, cancel: cancel, writeWindowStart: now, subscribers: map[int]chan []byte{}}
 
@@ -326,7 +338,12 @@ func (s *Service) Close(sessionID string, token string) error {
 }
 
 func (s *Service) watch(sessionID string, proc Process) {
-	<-proc.Done()
+	procErr, ok := <-proc.Done()
+	if ok && procErr != nil {
+		log.Printf("level=warn event=gateway_process_terminated session=%s error=%v", sessionID, procErr)
+	} else {
+		log.Printf("level=info event=gateway_process_terminated session=%s", sessionID)
+	}
 	s.closeSubscribers(sessionID)
 	s.mu.Lock()
 	st, ok := s.sessions[sessionID]

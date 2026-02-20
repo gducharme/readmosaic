@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -63,6 +64,23 @@ func (f *fakeProc) Close() error {
 }
 func (f *fakeProc) Done() <-chan error { return f.done }
 
+type exitedProc struct{ done chan error }
+
+func (p *exitedProc) Read(_ []byte) (int, error)     { return 0, io.EOF }
+func (p *exitedProc) Write(data []byte) (int, error) { return len(data), nil }
+func (p *exitedProc) Resize(_, _ uint16) error       { return nil }
+func (p *exitedProc) Close() error                   { return nil }
+func (p *exitedProc) Done() <-chan error             { return p.done }
+
+type fakeExitLauncher struct{}
+
+func (f *fakeExitLauncher) Launch(_ context.Context, _ SessionMetadata, _ []string, _ map[string]string) (Process, error) {
+	done := make(chan error, 1)
+	done <- errors.New("ssh exited")
+	close(done)
+	return &exitedProc{done: done}, nil
+}
+
 type fakeLauncher struct {
 	lastMeta SessionMetadata
 	proc     *fakeProc
@@ -106,6 +124,18 @@ func authedRequest(method, path, token, body string) *http.Request {
 	req := httptest.NewRequest(method, path, bytes.NewBufferString(body))
 	req.Header.Set("Authorization", "Bearer "+token)
 	return req
+}
+
+func TestOpenSessionProcessExitsEarly(t *testing.T) {
+	h := NewHandler(mustNewService(t, &fakeExitLauncher{}, &fakeStore{})).Routes()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/gateway/sessions", bytes.NewBufferString(`{"user":"alice","host":"example.com"}`)))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "SPAWN_EXITED_EARLY") {
+		t.Fatalf("expected SPAWN_EXITED_EARLY body=%s", rec.Body.String())
+	}
 }
 
 func TestGatewaySessionLifecycle(t *testing.T) {
