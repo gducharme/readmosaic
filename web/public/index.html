@@ -58,7 +58,11 @@
   <script src="https://cdn.jsdelivr.net/npm/xterm/lib/xterm.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit/lib/xterm-addon-fit.js"></script>
   <script>
-    const terminal = new Terminal({ cursorBlink: true, fontFamily: 'Menlo, Consolas, monospace' });
+    const terminal = new Terminal({
+      cursorBlink: true,
+      convertEol: true,
+      fontFamily: 'Menlo, Consolas, monospace',
+    });
     const fitAddon = new FitAddon.FitAddon();
     terminal.loadAddon(fitAddon);
     terminal.open(document.getElementById('terminal'));
@@ -68,7 +72,25 @@
     const usernameInput = document.getElementById('username');
     const connectButton = document.getElementById('connect');
     const status = document.getElementById('status');
+    const minimumTerminalRows = 8;
     let ws;
+
+    terminal.onData((data) => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'input', payload: data }));
+      }
+    });
+
+    function sendResize() {
+      fitAddon.fit();
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          type: 'resize',
+          cols: terminal.cols,
+          rows: Math.max(terminal.rows, minimumTerminalRows),
+        }));
+      }
+    }
 
     function connect() {
       const username = usernameInput.value.trim();
@@ -77,15 +99,19 @@
         return;
       }
 
+      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+        status.textContent = 'Terminal is already connecting/connected';
+        return;
+      }
+
       ws = new WebSocket(`${window.location.origin.replace('http', 'ws')}/terminal`);
 
       ws.addEventListener('open', () => {
         status.textContent = `Connecting as ${username}...`;
         ws.send(JSON.stringify({ type: 'start', username }));
-        setTimeout(() => {
-          fitAddon.fit();
-          ws.send(JSON.stringify({ type: 'resize', cols: terminal.cols, rows: terminal.rows }));
-        }, 20);
+        [20, 100, 300].forEach((delayMs) => {
+          setTimeout(sendResize, delayMs);
+        });
         terminal.focus();
       });
 
@@ -111,13 +137,9 @@
 
       ws.addEventListener('close', () => {
         status.textContent = 'Disconnected';
+        ws = null;
       });
 
-      terminal.onData((data) => {
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'input', payload: data }));
-        }
-      });
     }
 
     connectButton.addEventListener('click', connect);
@@ -125,12 +147,7 @@
       if (event.key === 'Enter') connect();
     });
 
-    window.addEventListener('resize', () => {
-      fitAddon.fit();
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'resize', cols: terminal.cols, rows: terminal.rows }));
-      }
-    });
+    window.addEventListener('resize', sendResize);
   </script>
 </body>
 </html>
