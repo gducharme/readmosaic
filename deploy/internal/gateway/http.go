@@ -320,6 +320,10 @@ func writeMappedErr(w http.ResponseWriter, err error) {
 		writeErr(w, http.StatusNotFound, "SESSION_NOT_FOUND", "session could not be found or already closed")
 		return
 	}
+	if errors.Is(err, ErrSessionClosed) {
+		writeErr(w, http.StatusGone, "SESSION_CLOSED", "terminal session is no longer active")
+		return
+	}
 	if errors.Is(err, ErrInvalidRequest) {
 		writeErr(w, http.StatusBadRequest, "INVALID_REQUEST", "request is missing required fields or uses disallowed values")
 		return

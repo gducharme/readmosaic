@@ -21,6 +21,7 @@ var (
 	ErrInvalidRequest  = errors.New("invalid request")
 	ErrUnauthorized    = errors.New("unauthorized")
 	ErrSessionExpired  = errors.New("session expired")
+	ErrSessionClosed   = errors.New("session closed")
 )
 
 var (
@@ -29,14 +30,15 @@ var (
 )
 
 const (
-	sessionTokenTTL        = 12 * time.Hour
-	sessionIdleLimit       = 30 * time.Minute
-	minSecretBytes         = 32
-	envGatewayHMACKey      = "GATEWAY_HMAC_SECRET"
-	envGatewayHostList     = "GATEWAY_HOST_ALLOWLIST"
-	envGatewayEnv          = "GATEWAY_ENV"
-	defaultGatewayEnv      = "development"
-	maxStdinBytesPerSecond = 256 * 1024
+	sessionTokenTTL         = 12 * time.Hour
+	sessionIdleLimit        = 30 * time.Minute
+	minSecretBytes          = 32
+	envGatewayHMACKey       = "GATEWAY_HMAC_SECRET"
+	envGatewayHostList      = "GATEWAY_HOST_ALLOWLIST"
+	envGatewayEnv           = "GATEWAY_ENV"
+	defaultGatewayEnv       = "development"
+	maxStdinBytesPerSecond  = 256 * 1024
+	processStartGraceWindow = 200 * time.Millisecond
 )
 
 type SessionLimits struct {
@@ -167,11 +169,22 @@ func (s *Service) OpenSession(ctx context.Context, req OpenSessionRequest) (Sess
 	tokenHash := s.tokenHash(token)
 	meta := SessionMetadata{SessionID: sessionID, ResumeToken: token, ResumeTokenHash: tokenHash, User: req.User, Host: req.Host, Port: req.Port, StartedAt: now, LastSeenAt: now, ExpiresAt: now.Add(sessionTokenTTL), Connected: true, Limits: req.Limits}
 
-	procCtx, cancel := context.WithCancel(ctx)
+	procCtx, cancel := context.WithCancel(context.Background())
 	proc, err := s.launcher.Launch(procCtx, meta, req.Command, req.Env)
 	if err != nil {
 		cancel()
 		return SessionMetadata{}, mapLaunchError(err)
+	}
+	select {
+	case procErr, ok := <-proc.Done():
+		cancel()
+		_ = proc.Close()
+		if !ok || procErr == nil {
+			procErr = errors.New("process exited before session became ready")
+		}
+		log.Printf("level=warn event=gateway_session_open_failed reason=process_exited_early session=%s error=%v", sessionID, procErr)
+		return SessionMetadata{}, &FriendlyError{Code: "SPAWN_EXITED_EARLY", Message: "terminal process exited before session became ready", Cause: procErr}
+	case <-time.After(processStartGraceWindow):
 	}
 	state := &sessionState{meta: meta, proc: proc, cancel: cancel, writeWindowStart: now, subscribers: map[int]chan []byte{}}
 
@@ -325,7 +338,12 @@ func (s *Service) Close(sessionID string, token string) error {
 }
 
 func (s *Service) watch(sessionID string, proc Process) {
-	<-proc.Done()
+	procErr, ok := <-proc.Done()
+	if ok && procErr != nil {
+		log.Printf("level=warn event=gateway_process_terminated session=%s error=%v", sessionID, procErr)
+	} else {
+		log.Printf("level=info event=gateway_process_terminated session=%s", sessionID)
+	}
 	s.closeSubscribers(sessionID)
 	s.mu.Lock()
 	st, ok := s.sessions[sessionID]
@@ -392,18 +410,36 @@ func (s *Service) closeSubscribers(sessionID string) {
 
 func (s *Service) authorize(sessionID string, token string) (*sessionState, error) {
 	tokenHash := s.tokenHash(strings.TrimSpace(token))
+	tokenHashPrefix := tokenHash
+	if len(tokenHashPrefix) > 12 {
+		tokenHashPrefix = tokenHashPrefix[:12]
+	}
+
 	s.mu.RLock()
 	sid, ok := s.tokens[tokenHash]
-	if !ok || sid != sessionID {
+	if !ok {
+		_, sessionActive := s.sessions[sessionID]
 		s.mu.RUnlock()
+		if !sessionActive {
+			log.Printf("level=warn event=gateway_authorize_failed reason=session_not_active session=%s token_hash_prefix=%s", sessionID, tokenHashPrefix)
+			return nil, ErrSessionClosed
+		}
+		log.Printf("level=warn event=gateway_authorize_failed reason=token_not_found session=%s token_hash_prefix=%s", sessionID, tokenHashPrefix)
+		return nil, ErrUnauthorized
+	}
+	if sid != sessionID {
+		s.mu.RUnlock()
+		log.Printf("level=warn event=gateway_authorize_failed reason=session_mismatch session=%s mapped_session=%s token_hash_prefix=%s", sessionID, sid, tokenHashPrefix)
 		return nil, ErrUnauthorized
 	}
 	st, ok := s.sessions[sessionID]
 	s.mu.RUnlock()
 	if !ok {
+		log.Printf("level=warn event=gateway_authorize_failed reason=session_not_active session=%s token_hash_prefix=%s", sessionID, tokenHashPrefix)
 		return nil, ErrSessionNotFound
 	}
 	if s.isExpired(st.meta) {
+		log.Printf("level=warn event=gateway_authorize_failed reason=session_expired session=%s token_hash_prefix=%s", sessionID, tokenHashPrefix)
 		return nil, ErrSessionExpired
 	}
 	return st, nil
