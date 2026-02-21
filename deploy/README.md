@@ -52,6 +52,7 @@ These are read by `internal/config.LoadFromEnv()`:
 - `MOSAIC_SSH_RATE_LIMIT_PER_SECOND` (default `20`)
 - `MOSAIC_ARCHIVE_ROOT` (default `/archive`)
 - `MOSAIC_ARCHIVE_HOST_DIR` (default `./data/archive`, bind-mounted in compose)
+- `MOSAIC_TUI_TYPEWRITER_ENABLED` (default `false`; when `true`, pane output is animated)
 
 ### Required content/indexing
 
