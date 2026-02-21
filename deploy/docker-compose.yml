@@ -40,6 +40,42 @@ services:
     networks:
       - mosaic-app
 
+  web:
+    build:
+      context: ../web
+      dockerfile: Dockerfile
+    image: mosaic-web:local
+    restart: unless-stopped
+    depends_on:
+      - app
+    environment:
+      WEB_PORT: 3000
+      PORT: 3000
+      SSH_HOST: app
+      SSH_PORT: 2222
+      GATEWAY_BASE_URL: http://app:8080
+      GATEWAY_TARGET_HOST: app
+      GATEWAY_TARGET_PORT: 2222
+    ports:
+      - "${MOSAIC_WEB_BIND_HOST:-0.0.0.0}:${MOSAIC_WEB_PUBLISH_PORT:-3000}:3000"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000').then((response)=>process.exit(response.ok ? 0 : 1)).catch(()=>process.exit(1))"
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - mosaic-app
+
   neo4j:
     image: neo4j:5.24.2-community
     container_name: mosaic-neo4j

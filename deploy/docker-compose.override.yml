@@ -5,3 +5,18 @@ services:
     ports:
       - "${MOSAIC_SSH_PUBLISH_PORT:-2222}:2222"
       - "${MOSAIC_GATEWAY_PUBLISH_PORT:-8080}:8080"
+
+  web:
+    volumes:
+      - type: bind
+        source: ../web
+        target: /app
+      - type: volume
+        source: web-node-modules
+        target: /app/node_modules
+    command: >-
+      sh -lc "if [ ! -d node_modules ] || [ -z \"$(ls -A node_modules 2>/dev/null)\" ];
+      then npm ci; fi; npm start"
+
+volumes:
+  web-node-modules:
