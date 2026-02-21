@@ -1199,6 +1199,8 @@ func toGraphemeClusters(line string) []string {
 
 func lineHasRTLScript(line string) bool {
 	for _, r := range line {
+		// LookupRune always returns a Unicode BiDi class; the width return value is
+		// not needed for rune-based iteration.
 		props, _ := bidi.LookupRune(r)
 		switch props.Class() {
 		case bidi.R, bidi.AL:
