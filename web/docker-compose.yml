@@ -1,0 +1,15 @@
+version: '3.9'
+services:
+  mosaic-terminal:
+    build: .
+    container_name: mosaic-terminal
+    ports:
+      - '127.0.0.1:3000:3000'
+    environment:
+      - PORT=3000
+      - DATA_DIR=/data
+      - ROOT_CODE=root
+      - ARCHIVIST_CODE=archivist
+      - TRUST_PROXY=0
+    volumes:
+      - ./data:/data
