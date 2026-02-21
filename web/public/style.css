@@ -182,11 +182,28 @@ button:hover,
 
 
 .terminal-screen.is-rtl {
+  direction: rtl;
   text-align: right;
+  unicode-bidi: plaintext;
+  font-family: 'Noto Naskh Arabic', 'Amiri', 'Tahoma', 'Arial', sans-serif;
+}
+
+.terminal-screen.is-rtl h1,
+.terminal-screen.is-rtl h2,
+.terminal-screen.is-rtl h3,
+.terminal-screen.is-rtl h4,
+.terminal-screen.is-rtl h5,
+.terminal-screen.is-rtl h6,
+.terminal-screen.is-rtl p,
+.terminal-screen.is-rtl li,
+.terminal-screen.is-rtl blockquote {
+  direction: rtl;
+  unicode-bidi: plaintext;
 }
 
 .EasyMDEContainer[dir='rtl'] .CodeMirror,
 .EasyMDEContainer[dir='rtl'] .CodeMirror pre {
   direction: rtl;
   text-align: right;
+  unicode-bidi: plaintext;
 }
