@@ -16,6 +16,7 @@ import (
 
 	"github.com/rivo/uniseg"
 	"golang.org/x/text/language"
+	"golang.org/x/text/unicode/bidi"
 )
 
 // Architecture:
@@ -225,6 +226,9 @@ type Model struct {
 	typewriterTarget  []string
 	typewriterCursor  int
 	typewriterLineIdx int // -1 indicates no active animated line
+	// typewriterRTL records detected paragraph direction for renderer fallback behavior.
+	// In terminals without BiDi support, RTL lines reveal from the logical suffix so the head appears on the right.
+	typewriterRTL     bool
 	typewriterStep    int
 
 	username                string
@@ -1195,6 +1199,31 @@ func toGraphemeClusters(line string) []string {
 	return clusters
 }
 
+func lineHasRTLScript(clusters []string) bool {
+	for _, cluster := range clusters {
+		for _, r := range cluster {
+			// LookupRune always returns a Unicode BiDi class; the width return value is
+			// not needed for rune-based iteration.
+			props, _ := bidi.LookupRune(r)
+			switch props.Class() {
+			case bidi.R, bidi.AL:
+				return true
+			case bidi.L:
+				return false
+			}
+		}
+	}
+	return false
+}
+
+func (m *Model) resetTypewriterState() {
+	m.typewriterActive = false
+	m.typewriterTarget = nil
+	m.typewriterCursor = 0
+	m.typewriterLineIdx = -1
+	m.typewriterRTL = false
+}
+
 func (m *Model) flushTypewriter() {
 	if m.typewriterActive && m.typewriterLineIdx >= 0 && m.typewriterLineIdx < len(m.viewportLines) {
 		m.viewportLines[m.typewriterLineIdx] = strings.Join(m.typewriterTarget, "")
@@ -1203,18 +1232,12 @@ func (m *Model) flushTypewriter() {
 		m.appendViewportLineNow(m.typewriterQueue[0])
 		m.typewriterQueue = m.typewriterQueue[1:]
 	}
-	m.typewriterActive = false
-	m.typewriterTarget = nil
-	m.typewriterCursor = 0
-	m.typewriterLineIdx = -1
+	m.resetTypewriterState()
 }
 
 func (m *Model) beginNextTypewriterLine() {
 	if len(m.typewriterQueue) == 0 {
-		m.typewriterActive = false
-		m.typewriterTarget = nil
-		m.typewriterCursor = 0
-		m.typewriterLineIdx = -1
+		m.resetTypewriterState()
 		return
 	}
 
@@ -1225,6 +1248,7 @@ func (m *Model) beginNextTypewriterLine() {
 	m.typewriterTarget = toGraphemeClusters(line)
 	m.typewriterCursor = 0
 	m.typewriterLineIdx = len(m.viewportLines) - 1
+	m.typewriterRTL = lineHasRTLScript(m.typewriterTarget)
 }
 
 func (m *Model) advanceTypewriter() {
@@ -1242,14 +1266,16 @@ func (m *Model) advanceTypewriter() {
 	if m.typewriterCursor < len(m.typewriterTarget) {
 		step := max(m.typewriterStep, 1)
 		m.typewriterCursor = min(m.typewriterCursor+step, len(m.typewriterTarget))
-		m.viewportLines[m.typewriterLineIdx] = strings.Join(m.typewriterTarget[:m.typewriterCursor], "")
+		if m.typewriterRTL {
+			start := len(m.typewriterTarget) - m.typewriterCursor
+			m.viewportLines[m.typewriterLineIdx] = strings.Join(m.typewriterTarget[start:], "")
+		} else {
+			m.viewportLines[m.typewriterLineIdx] = strings.Join(m.typewriterTarget[:m.typewriterCursor], "")
+		}
 	}
 
 	if m.typewriterCursor >= len(m.typewriterTarget) {
-		m.typewriterActive = false
-		m.typewriterTarget = nil
-		m.typewriterCursor = 0
-		m.typewriterLineIdx = -1
+		m.resetTypewriterState()
 	}
 }
 
