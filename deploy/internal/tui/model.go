@@ -226,8 +226,6 @@ type Model struct {
 	typewriterTarget  []string
 	typewriterCursor  int
 	typewriterLineIdx int // -1 indicates no active animated line
-	// typewriterRTL records detected paragraph direction for renderer fallback behavior.
-	// In terminals without BiDi support, RTL lines reveal from the logical suffix so the head appears on the right.
 	typewriterRTL     bool
 	typewriterStep    int
 
@@ -1199,18 +1197,16 @@ func toGraphemeClusters(line string) []string {
 	return clusters
 }
 
-func lineHasRTLScript(clusters []string) bool {
-	for _, cluster := range clusters {
-		for _, r := range cluster {
-			// LookupRune always returns a Unicode BiDi class; the width return value is
-			// not needed for rune-based iteration.
-			props, _ := bidi.LookupRune(r)
-			switch props.Class() {
-			case bidi.R, bidi.AL:
-				return true
-			case bidi.L:
-				return false
-			}
+func lineHasRTLScript(line string) bool {
+	for _, r := range line {
+		// LookupRune always returns a Unicode BiDi class; the width return value is
+		// not needed for rune-based iteration.
+		props, _ := bidi.LookupRune(r)
+		switch props.Class() {
+		case bidi.R, bidi.AL:
+			return true
+		case bidi.L:
+			return false
 		}
 	}
 	return false
@@ -1248,7 +1244,7 @@ func (m *Model) beginNextTypewriterLine() {
 	m.typewriterTarget = toGraphemeClusters(line)
 	m.typewriterCursor = 0
 	m.typewriterLineIdx = len(m.viewportLines) - 1
-	m.typewriterRTL = lineHasRTLScript(m.typewriterTarget)
+	m.typewriterRTL = lineHasRTLScript(line)
 }
 
 func (m *Model) advanceTypewriter() {

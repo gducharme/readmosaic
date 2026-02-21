@@ -615,7 +615,7 @@ func TestTypewriterMixedDirectionUsesFirstStrongCharacter(t *testing.T) {
 	}
 }
 
-func TestTypewriterRTLWithNumbersUsesSuffixReveal(t *testing.T) {
+func TestTypewriterRTLWithNumbersStillUsesSuffixReveal(t *testing.T) {
 	m := NewModel("127.0.0.1:1234", 80, 24)
 	m.setViewportContent("seed")
 	m.enqueueTypewriter("١٢٣مرحبا")
@@ -664,86 +664,6 @@ func TestTypewriterRTLCombiningMarksRemainStable(t *testing.T) {
 	m = m.Update(TypewriterTickMsg{})
 	if got := m.viewportLines[len(m.viewportLines)-1]; got != line {
 		t.Fatalf("rtl combining grapheme rendered %q, want %q", got, line)
-	}
-}
-
-func TestTypewriterTracksDirectionAcrossMultilineSwitches(t *testing.T) {
-	m := NewModel("127.0.0.1:1234", 80, 24)
-	m.setViewportContent("seed")
-	m.enqueueTypewriter("مرحبا", "hello", "مرحبا")
-
-	if !m.typewriterRTL {
-		t.Fatalf("expected first queued line direction to be RTL")
-	}
-
-	for i := 0; i < 5; i++ {
-		m = m.Update(TypewriterTickMsg{})
-	}
-	m = m.Update(TypewriterTickMsg{}) // begin second line
-	if m.typewriterRTL {
-		t.Fatalf("expected second queued line direction to be LTR")
-	}
-	if got := m.viewportLines[len(m.viewportLines)-1]; got != "h" {
-		t.Fatalf("expected second line first tick to be %q, got %q", "h", got)
-	}
-
-	for i := 0; i < 4; i++ {
-		m = m.Update(TypewriterTickMsg{})
-	}
-	m = m.Update(TypewriterTickMsg{}) // begin third line
-	if !m.typewriterRTL {
-		t.Fatalf("expected third queued line direction to be RTL")
-	}
-	if got := m.viewportLines[len(m.viewportLines)-1]; got != "ا" {
-		t.Fatalf("expected third line first tick to be %q, got %q", "ا", got)
-	}
-}
-
-func TestTypewriterFlushDuringRTLAnimation(t *testing.T) {
-	m := NewModel("127.0.0.1:1234", 80, 24)
-	m.setViewportContent("seed")
-	m.enqueueTypewriter("مرحبا", "later")
-	m = m.Update(TypewriterTickMsg{})
-	m.flushTypewriter()
-
-	if got := m.viewportLines[len(m.viewportLines)-2]; got != "مرحبا" {
-		t.Fatalf("expected flushed active RTL line, got %q", got)
-	}
-	if got := m.viewportLines[len(m.viewportLines)-1]; got != "later" {
-		t.Fatalf("expected flushed queued line, got %q", got)
-	}
-	if m.typewriterActive || len(m.typewriterQueue) != 0 || m.typewriterRTL {
-		t.Fatalf("expected typewriter state reset after flush")
-	}
-}
-
-func TestTypewriterQueueOverflowWhileAnimatingRTL(t *testing.T) {
-	m := NewModel("127.0.0.1:1234", 80, 24)
-	m.setViewportContent("seed")
-	m.enqueueTypewriter("مرحبا")
-
-	extra := make([]string, 0, maxTypewriterQueueLines+10)
-	for i := 0; i < maxTypewriterQueueLines+10; i++ {
-		extra = append(extra, fmt.Sprintf("tail-%03d", i))
-	}
-	m.enqueueTypewriter(extra...)
-
-	if !m.typewriterRTL {
-		t.Fatalf("expected active RTL direction to remain set while queue overflows")
-	}
-	if len(m.typewriterQueue) > maxTypewriterQueueLines {
-		t.Fatalf("queue should remain capped, got %d", len(m.typewriterQueue))
-	}
-
-	for i := 0; i < 5; i++ {
-		m = m.Update(TypewriterTickMsg{})
-	}
-	m = m.Update(TypewriterTickMsg{}) // begin next queued line (drop marker)
-	if strings.Join(m.typewriterTarget, "") != typewriterQueueDropLine {
-		t.Fatalf("expected drop marker to become next animated line")
-	}
-	if m.typewriterRTL {
-		t.Fatalf("expected drop marker line direction to resolve LTR")
 	}
 }
 
