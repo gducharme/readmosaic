@@ -36,12 +36,21 @@ const api = {
   async getLangs() {
     const res = await fetch('/api/langs', { headers: authHeaders() });
     if (res.status === 401) throw new Error('Unauthorized access code.');
+    if (res.status === 429) throw new Error('Too many attempts. Try again soon.');
     if (!res.ok) throw new Error('Failed to load languages.');
+    return res.json();
+  },
+  async whoami() {
+    const res = await fetch('/api/whoami', { headers: authHeaders() });
+    if (res.status === 401) throw new Error('Unauthorized access code.');
+    if (res.status === 429) throw new Error('Too many attempts. Try again soon.');
+    if (!res.ok) throw new Error('Failed to validate access code.');
     return res.json();
   },
   async getChapters(lang) {
     const res = await fetch(`/api/chapters/${encodeURIComponent(lang)}`, { headers: authHeaders() });
     if (res.status === 401) throw new Error('Unauthorized access code.');
+    if (res.status === 429) throw new Error('Too many attempts. Try again soon.');
     if (!res.ok) throw new Error('Failed to load chapters.');
     return res.json();
   },
@@ -50,6 +59,7 @@ const api = {
       headers: authHeaders(),
     });
     if (res.status === 401) throw new Error('Unauthorized access code.');
+    if (res.status === 429) throw new Error('Too many attempts. Try again soon.');
     if (!res.ok) throw new Error('Failed to load content.');
     return res.text();
   },
@@ -61,6 +71,7 @@ const api = {
     });
 
     if (res.status === 401) throw new Error('Unauthorized access code.');
+    if (res.status === 429) throw new Error('Too many attempts. Try again soon.');
     if (res.status === 403) throw new Error('Archivist access code required.');
     if (!res.ok) throw new Error('Failed to save content.');
     return res.json();
@@ -102,32 +113,36 @@ function renderLogin() {
   const input = document.getElementById('access-code');
   const error = document.getElementById('login-error');
 
-  form.addEventListener('submit', (event) => {
+  form.addEventListener('submit', async (event) => {
     event.preventDefault();
     const code = input.value.trim();
-    const nextMode = code === 'root' ? 'reader' : code === 'archivist' ? 'editor' : null;
 
-    if (!nextMode) {
-      error.textContent = 'INVALID ACCESS CODE';
+    if (!code) {
+      error.textContent = 'ENTER A CODE';
       input.select();
       return;
     }
 
-    state.mode = nextMode;
     state.accessCode = code;
     error.textContent = 'AUTHORIZING...';
 
-    api
-      .getLangs()
-      .then(() => {
-        renderLanguageSelection();
-      })
-      .catch(() => {
-        state.mode = null;
-        state.accessCode = null;
-        error.textContent = 'ACCESS CODE REJECTED BY SERVER';
-        input.select();
-      });
+    try {
+      const identity = await api.whoami();
+      if (identity.role === 'archivist') {
+        state.mode = 'editor';
+      } else if (identity.role === 'root') {
+        state.mode = 'reader';
+      } else {
+        throw new Error('Access role not supported.');
+      }
+
+      renderLanguageSelection();
+    } catch (authError) {
+      state.mode = null;
+      state.accessCode = null;
+      error.textContent = authError.message === 'Too many attempts. Try again soon.' ? authError.message : 'ACCESS CODE REJECTED BY SERVER';
+      input.select();
+    }
   });
 }
 

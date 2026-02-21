@@ -28,6 +28,8 @@ Defaults:
 - `root` → Reader mode (read-only API access)
 - `archivist` → Editor mode (read + write API access)
 
+The login screen validates whatever code is configured server-side, so these defaults can be safely overridden.
+
 You can override with environment variables:
 
 - `ROOT_CODE`
