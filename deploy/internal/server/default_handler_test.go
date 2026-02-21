@@ -267,7 +267,7 @@ func TestDefaultHandlerRouteSelectionByUsernamePolicy(t *testing.T) {
 		user       string
 		wantMarker string
 	}{
-		{name: "archive-readonly-user", user: "west", wantMarker: "TRIAGE FLOW ACTIVE [west]"},
+		{name: "vector-user-west", user: "west", wantMarker: "VECTOR FLOW ACTIVE [west]"},
 		{name: "triage-user-read", user: "read", wantMarker: "TRIAGE FLOW ACTIVE [read]"},
 		{name: "triage-user-archive", user: "archive", wantMarker: "TRIAGE FLOW ACTIVE [archive]"},
 	}
@@ -301,6 +301,28 @@ func waitForOutputContains(t *testing.T, sess *fakeDefaultHandlerSession, want s
 			t.Fatalf("timed out waiting for output containing %q; got %q", want, sess.output())
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestResolveFlowRouteMapping(t *testing.T) {
+	tests := []struct {
+		user string
+		want string
+	}{
+		{user: "west", want: "vector"},
+		{user: "fitra", want: "vector"},
+		{user: "root", want: "vector"},
+		{user: "read", want: "triage"},
+		{user: "archive", want: "triage"},
+	}
+	for _, tc := range tests {
+		got, err := resolveFlow(router.Identity{Username: tc.user})
+		if err != nil {
+			t.Fatalf("resolveFlow(%q) unexpected error: %v", tc.user, err)
+		}
+		if got != tc.want {
+			t.Fatalf("resolveFlow(%q)=%q, want %q", tc.user, got, tc.want)
+		}
 	}
 }
 

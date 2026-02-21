@@ -57,6 +57,7 @@ const (
 	maxArchiveFileBytes     = 2 * 1024 * 1024
 	menuSelectionDebounce   = 75 * time.Millisecond
 	flowArchive             = "archive"
+	flowVector              = "vector"
 	flowDefault             = "default"
 )
 
@@ -299,6 +300,8 @@ func normalizeFlow(flow string) string {
 		return ""
 	case flowArchive:
 		return flowArchive
+	case flowVector:
+		return flowVector
 	default:
 		return ""
 	}
@@ -309,19 +312,18 @@ func normalizeFlow(flow string) string {
 // Explicit archive flow takes precedence, then username fallback preserves
 // backward compatibility for archive user sessions when flow is unset/default.
 func isArchiveMode(username, flow string) bool {
-	if normalizeFlow(flow) == flowArchive {
+	normalizedFlow := normalizeFlow(flow)
+	if normalizedFlow == flowArchive {
+		return true
+	}
+	if normalizedFlow == flowVector && isArchiveReadOnlyUser(username) {
 		return true
 	}
 	return isArchiveDefaultUser(username)
 }
 
 func isArchiveDefaultUser(username string) bool {
-	switch strings.ToLower(strings.TrimSpace(username)) {
-	case "archive", "root", "fitra", "west":
-		return true
-	default:
-		return false
-	}
+	return strings.EqualFold(strings.TrimSpace(username), "archive")
 }
 
 func isArchiveReadOnlyUser(username string) bool {
@@ -735,7 +737,9 @@ func (m *Model) handleArchiveFileKey(lower, raw string) {
 		m.archiveFileIdx = choice - 1
 		m.openArchiveFile(m.archiveFiles[m.archiveFileIdx])
 		m.screen = ScreenArchiveEditor
-		if !m.archiveReadOnly {
+		if m.archiveReadOnly {
+			m.renderArchiveReadOnlyFile(true)
+		} else {
 			m.renderArchiveEditor()
 		}
 		return
@@ -837,12 +841,9 @@ func (m *Model) openArchiveFile(file archiveDocument) {
 	m.archiveEditorBuffer = sanitizeArchiveLoadedContent(string(data))
 	m.archiveCursor = len([]rune(m.archiveEditorBuffer))
 	m.archiveStatus = ""
-	if m.archiveReadOnly {
-		m.renderArchiveReadOnlyFile()
-	}
 }
 
-func (m *Model) renderArchiveReadOnlyFile() {
+func (m *Model) renderArchiveReadOnlyFile(animate bool) {
 	lang := m.archiveLanguages[m.archiveLanguageIdx]
 	file := m.archiveFiles[m.archiveFileIdx]
 	dir := "LTR"
@@ -862,6 +863,9 @@ func (m *Model) renderArchiveReadOnlyFile() {
 		lines = append(lines, "WARNING: "+m.archiveStatus, "")
 	}
 	m.setViewportContent(strings.Join(lines, "\n"))
+	if !animate {
+		return
+	}
 	content := strings.Split(m.archiveEditorBuffer, "\n")
 	m.enqueueTypewriter(content...)
 }
@@ -901,8 +905,11 @@ func (m *Model) handleArchiveEditorKey(lower, raw string) {
 			m.screen = ScreenArchiveFile
 			m.renderArchiveFileMenu()
 			return
+		default:
+			m.archiveStatus = "Read-only mode: edits are disabled"
+			m.renderArchiveReadOnlyFile(false)
+			return
 		}
-		return
 	}
 
 	m.archiveCursor = clamp(m.archiveCursor, 0, len([]rune(m.archiveEditorBuffer)))
@@ -1334,7 +1341,15 @@ func renderPrompt(m Model) string {
 		prompt = promptPrefix + "[ARCHIVE FILE #] " + m.promptInput
 	case ScreenArchiveEditor:
 		if m.archiveReadOnly {
-			prompt = promptPrefix + "[READ ONLY]"
+			fileName := ""
+			if m.archiveFileIdx >= 0 && m.archiveFileIdx < len(m.archiveFiles) {
+				fileName = m.archiveFiles[m.archiveFileIdx].Name
+			}
+			if fileName != "" {
+				prompt = promptPrefix + "[READ ONLY " + fileName + "]"
+			} else {
+				prompt = promptPrefix + "[READ ONLY]"
+			}
 		} else {
 			cursor := " "
 			if m.cursorBlink {
