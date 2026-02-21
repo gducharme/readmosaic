@@ -18,7 +18,9 @@ const AUTH_MAX_ATTEMPTS = 30;
 const authAttemptBuckets = new Map();
 
 function validateSegment(value, type) {
-  if (!SAFE_SEGMENT.test(value)) {
+  const isUnsafeReserved = value === '.' || value === '..' || value.startsWith('.');
+
+  if (!SAFE_SEGMENT.test(value) || isUnsafeReserved) {
     const error = new Error(`Invalid ${type}.`);
     error.status = 400;
     throw error;
