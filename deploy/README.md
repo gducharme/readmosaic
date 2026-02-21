@@ -91,19 +91,22 @@ Set all 3 together or leave unset:
 
 ## Ports and defaults
 
-- Base compose (`docker-compose.yml`) publishes `${MOSAIC_SSH_PUBLISH_PORT:-22}:2222`, `${MOSAIC_GATEWAY_PUBLISH_PORT:-8080}:8080`, and `${MOSAIC_WEB_PUBLISH_PORT:-3000}:3000`.
-- Dev override (`docker-compose.override.yml`) publishes `${MOSAIC_SSH_PUBLISH_PORT:-2222}:2222` and `${MOSAIC_GATEWAY_PUBLISH_PORT:-8080}:8080` for the `app` service and enables bind-mounted web development workflow.
+- Base compose (`docker-compose.yml`) publishes `${MOSAIC_SSH_PUBLISH_PORT:-22}:2222`, `${MOSAIC_GATEWAY_PUBLISH_PORT:-8080}:8080`, and `${MOSAIC_WEB_BIND_HOST:-0.0.0.0}:${MOSAIC_WEB_PUBLISH_PORT:-3000}:3000`.
+- Dev override (`docker-compose.override.yml`) publishes `${MOSAIC_SSH_PUBLISH_PORT:-2222}:2222` and `${MOSAIC_GATEWAY_PUBLISH_PORT:-8080}:8080` for the `app` service and enables bind-mounted web development workflow with cached `node_modules` volume state.
 
 This is intentional:
 
 - **Deploy/default base** can target host SSH port 22.
 - **Local dev** avoids privileged ports by defaulting SSH to 2222 and browser UI to 3000 while still exposing the HTTP gateway on 8080.
+- **Web bind host** defaults to `127.0.0.1` in `.env.example` to reduce accidental external exposure; override `MOSAIC_WEB_BIND_HOST` when you intentionally need remote access.
 - Archive storage is bind-mounted from `MOSAIC_ARCHIVE_HOST_DIR` into `MOSAIC_ARCHIVE_ROOT`; point `MOSAIC_ARCHIVE_HOST_DIR` at shared/host-persistent storage if you run multiple container instances.
 
 
 ## Web UI exposure and security
 
 The `web` service is a browser terminal surface. Do not expose it directly to the public internet without additional controls (TLS termination, authentication, and network restrictions such as allowlists or private ingress).
+
+The service sets both `WEB_PORT` and `PORT` to `3000` in Compose for compatibility with common Node server conventions.
 
 ## Local dev flow
 
@@ -243,6 +246,7 @@ docker compose logs --tail=100 -f app
 
 - **Port bind denied on 22**: set `MOSAIC_SSH_PUBLISH_PORT=2222`.
 - **Port bind denied on 3000**: set `MOSAIC_WEB_PUBLISH_PORT` to any available host port.
+- **Need remote web access**: set `MOSAIC_WEB_BIND_HOST=0.0.0.0` (or a specific interface IP), then confirm firewall/TLS/auth controls.
 - **Host key mount errors**: verify file exists and `chmod 600`.
 - **Neo4j unhealthy**: check `docker compose logs neo4j` and auth env.
 - **App unhealthy**: inspect `docker compose logs app` for startup/env errors.

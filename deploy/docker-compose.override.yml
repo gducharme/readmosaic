@@ -11,4 +11,12 @@ services:
       - type: bind
         source: ../web
         target: /app
-    command: sh -lc "npm ci && npm start"
+      - type: volume
+        source: web-node-modules
+        target: /app/node_modules
+    command: >-
+      sh -lc "if [ ! -d node_modules ] || [ -z \"$(ls -A node_modules 2>/dev/null)\" ];
+      then npm ci; fi; npm start"
+
+volumes:
+  web-node-modules:

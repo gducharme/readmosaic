@@ -47,17 +47,17 @@ services:
     image: mosaic-web:local
     restart: unless-stopped
     depends_on:
-      app:
-        condition: service_healthy
+      - app
     environment:
       WEB_PORT: 3000
+      PORT: 3000
       SSH_HOST: app
       SSH_PORT: 2222
       GATEWAY_BASE_URL: http://app:8080
       GATEWAY_TARGET_HOST: app
       GATEWAY_TARGET_PORT: 2222
     ports:
-      - "${MOSAIC_WEB_PUBLISH_PORT:-3000}:3000"
+      - "${MOSAIC_WEB_BIND_HOST:-0.0.0.0}:${MOSAIC_WEB_PUBLISH_PORT:-3000}:3000"
     healthcheck:
       test:
         - CMD
