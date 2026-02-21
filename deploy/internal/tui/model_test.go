@@ -79,7 +79,31 @@ func TestTypewriterCadenceFromEnv(t *testing.T) {
 	}
 }
 
+func TestTypewriterDisabledByDefault(t *testing.T) {
+	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true})
+	m.setViewportContent("seed")
+	m.enqueueTypewriter("abcdef")
+	if got := m.viewportLines[len(m.viewportLines)-1]; got != "abcdef" {
+		t.Fatalf("expected full line when typewriter disabled, got %q", got)
+	}
+	if m.typewriterActive || len(m.typewriterQueue) != 0 {
+		t.Fatalf("typewriter state should remain idle when disabled")
+	}
+}
+
+func TestTypewriterCanBeEnabledFromEnv(t *testing.T) {
+	t.Setenv(typewriterEnabledEnvVar, "true")
+	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, TypewriterStep: 2})
+	m.setViewportContent("seed")
+	m.enqueueTypewriter("abcdef")
+	m = m.Update(TypewriterTickMsg{})
+	if got := m.viewportLines[len(m.viewportLines)-1]; got != "ab" {
+		t.Fatalf("expected animated output when typewriter enabled, got %q", got)
+	}
+}
+
 func TestTypewriterBatchStepConfigurable(t *testing.T) {
+	t.Setenv(typewriterEnabledEnvVar, "true")
 	t.Setenv(typewriterBatchEnvVar, "3")
 	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true})
 	m.setViewportContent("seed")
@@ -338,6 +362,7 @@ func TestVectorAReadFallsBackWhenFragmentMissing(t *testing.T) {
 }
 
 func TestVectorSelectionUsesTypewriterAcrossOptions(t *testing.T) {
+	t.Setenv(typewriterEnabledEnvVar, "true")
 	cases := []struct {
 		name   string
 		key    string
@@ -542,6 +567,7 @@ func TestTypewriterTickNoOpWhenQueueEmpty(t *testing.T) {
 }
 
 func TestTypewriterSingleLineQueueTransitionsCleanly(t *testing.T) {
+	t.Setenv(typewriterEnabledEnvVar, "true")
 	m := NewModel("127.0.0.1:1234", 80, 24)
 	m.setViewportContent("seed")
 	m.enqueueTypewriter("DONE")
@@ -560,6 +586,7 @@ func TestTypewriterSingleLineQueueTransitionsCleanly(t *testing.T) {
 }
 
 func TestTypewriterUsesGraphemeBoundariesAndStableWidths(t *testing.T) {
+	t.Setenv(typewriterEnabledEnvVar, "true")
 	line := "👩🏽\u200d💻e\u0301界"
 	expected := []string{"👩🏽\u200d💻", "👩🏽\u200d💻e\u0301", "👩🏽\u200d💻e\u0301界"}
 	expectedWidths := []int{2, 3, 5}
@@ -582,6 +609,7 @@ func TestTypewriterUsesGraphemeBoundariesAndStableWidths(t *testing.T) {
 }
 
 func TestTypewriterUsesPrefixRevealForRTL(t *testing.T) {
+	t.Setenv(typewriterEnabledEnvVar, "true")
 	m := NewModel("127.0.0.1:1234", 80, 24)
 	m.setViewportContent("seed")
 	m.enqueueTypewriter("مرحبا")
@@ -598,6 +626,7 @@ func TestTypewriterUsesPrefixRevealForRTL(t *testing.T) {
 }
 
 func TestTypewriterStillUsesPrefixRevealForLTR(t *testing.T) {
+	t.Setenv(typewriterEnabledEnvVar, "true")
 	m := NewModel("127.0.0.1:1234", 80, 24)
 	m.setViewportContent("seed")
 	m.enqueueTypewriter("hello")
@@ -614,6 +643,7 @@ func TestTypewriterStillUsesPrefixRevealForLTR(t *testing.T) {
 }
 
 func TestTypewriterMixedDirectionUsesFirstStrongCharacter(t *testing.T) {
+	t.Setenv(typewriterEnabledEnvVar, "true")
 	line := "Error: الملف not found"
 	m := NewModel("127.0.0.1:1234", 80, 24)
 	m.setViewportContent("seed")
@@ -636,6 +666,7 @@ func TestTypewriterMixedDirectionUsesFirstStrongCharacter(t *testing.T) {
 }
 
 func TestTypewriterRTLWithNumbersStillUsesPrefixReveal(t *testing.T) {
+	t.Setenv(typewriterEnabledEnvVar, "true")
 	m := NewModel("127.0.0.1:1234", 80, 24)
 	m.setViewportContent("seed")
 	m.enqueueTypewriter("١٢٣مرحبا")
@@ -647,6 +678,7 @@ func TestTypewriterRTLWithNumbersStillUsesPrefixReveal(t *testing.T) {
 }
 
 func TestTypewriterNeutralOnlyLineDefaultsToLTR(t *testing.T) {
+	t.Setenv(typewriterEnabledEnvVar, "true")
 	m := NewModel("127.0.0.1:1234", 80, 24)
 	m.setViewportContent("seed")
 	m.enqueueTypewriter("١٢٣")
@@ -746,6 +778,7 @@ func TestTypewriterQueueLimitDropsOldest(t *testing.T) {
 }
 
 func TestAppendLineIsEnqueuedWhenTypewriterActive(t *testing.T) {
+	t.Setenv(typewriterEnabledEnvVar, "true")
 	m := NewModel("127.0.0.1:1234", 80, 24)
 	m.setViewportContent("seed")
 	m.enqueueTypewriter("hello")
@@ -760,6 +793,7 @@ func TestAppendLineIsEnqueuedWhenTypewriterActive(t *testing.T) {
 }
 
 func TestTypewriterFlushesWhenUserInteractsMidAnimation(t *testing.T) {
+	t.Setenv(typewriterEnabledEnvVar, "true")
 	tmp := t.TempDir()
 	fragmentPath := filepath.Join(tmp, "vector_a.txt")
 	if err := os.WriteFile(fragmentPath, []byte("line-1\nline-2"), 0o600); err != nil {
@@ -796,6 +830,7 @@ func TestNewModelStartsWithNoTypewriterState(t *testing.T) {
 }
 
 func TestTwoModelsAdvanceTypewriterIndependently(t *testing.T) {
+	t.Setenv(typewriterEnabledEnvVar, "true")
 	m1 := NewModel("127.0.0.1:1234", 80, 24)
 	m2 := NewModel("127.0.0.2:1234", 80, 24)
 
@@ -1034,6 +1069,7 @@ func TestRootFamilyUsersStartInArchiveLanguageMenu(t *testing.T) {
 }
 
 func TestArchiveEditorReadOnlyForRootFamilyUsers(t *testing.T) {
+	t.Setenv(typewriterEnabledEnvVar, "true")
 	for _, user := range []string{"root", "fitra", "west"} {
 		t.Run(user, func(t *testing.T) {
 			root := t.TempDir()

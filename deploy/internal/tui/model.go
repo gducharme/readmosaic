@@ -51,6 +51,7 @@ const (
 	archiveRootEnvVar       = "MOSAIC_ARCHIVE_ROOT"
 	archiveSeedEnvVar       = "MOSAIC_ARCHIVE_SEED_DEFAULTS"
 	defaultArchiveRoot      = "/archive"
+	typewriterEnabledEnvVar = "MOSAIC_TUI_TYPEWRITER_ENABLED"
 	typewriterTickMsEnvVar  = "MOSAIC_TUI_TYPEWRITER_TICK_MS"
 	typewriterBatchEnvVar   = "MOSAIC_TUI_TYPEWRITER_BATCH"
 	readFallbackLine        = "READ FRAGMENT UNAVAILABLE"
@@ -227,6 +228,7 @@ type Model struct {
 	typewriterCursor  int
 	typewriterLineIdx int // -1 indicates no active animated line
 	typewriterStep    int
+	typewriterEnabled bool
 
 	username                string
 	archiveRoot             string
@@ -262,20 +264,21 @@ func NewModelWithOptions(remoteAddr string, opts Options) Model {
 	}
 
 	m := Model{
-		width:          max(opts.Width, 1),
-		height:         max(opts.Height, 1),
-		viewportH:      computeViewportHeight(opts.Height),
-		isTTY:          opts.IsTTY,
-		statusBlink:    true,
-		cursorBlink:    true,
-		screen:         ScreenMOTD,
-		observerHash:   deriveObserverHash(remoteAddr),
-		maxBuffer:      maxBuffer,
-		ticks:          ticks,
-		viewportLines:  strings.Split(renderMOTD(), "\n"),
-		typewriterStep: resolveTypewriterStep(opts.TypewriterStep),
-		username:       strings.ToLower(strings.TrimSpace(opts.Username)),
-		now:            time.Now,
+		width:             max(opts.Width, 1),
+		height:            max(opts.Height, 1),
+		viewportH:         computeViewportHeight(opts.Height),
+		isTTY:             opts.IsTTY,
+		statusBlink:       true,
+		cursorBlink:       true,
+		screen:            ScreenMOTD,
+		observerHash:      deriveObserverHash(remoteAddr),
+		maxBuffer:         maxBuffer,
+		ticks:             ticks,
+		viewportLines:     strings.Split(renderMOTD(), "\n"),
+		typewriterStep:    resolveTypewriterStep(opts.TypewriterStep),
+		typewriterEnabled: resolveTypewriterEnabled(),
+		username:          strings.ToLower(strings.TrimSpace(opts.Username)),
+		now:               time.Now,
 	}
 	flow := normalizeFlow(opts.Flow)
 	if opts.ThemeBundle != nil {
@@ -1164,6 +1167,12 @@ func (m *Model) enqueueTypewriter(lines ...string) {
 	if len(lines) == 0 {
 		return
 	}
+	if !m.typewriterEnabled {
+		for _, line := range lines {
+			m.appendViewportLineNow(line)
+		}
+		return
+	}
 	m.typewriterQueue = append(m.typewriterQueue, lines...)
 	m.enforceTypewriterQueueLimit()
 	if !m.typewriterActive {
@@ -1513,6 +1522,18 @@ func readPositiveIntFromEnv(name string) (int, bool) {
 		return 0, false
 	}
 	return n, true
+}
+
+func resolveTypewriterEnabled() bool {
+	v := strings.TrimSpace(os.Getenv(typewriterEnabledEnvVar))
+	if v == "" {
+		return false
+	}
+	enabled, err := strconv.ParseBool(v)
+	if err != nil {
+		return false
+	}
+	return enabled
 }
 
 func resolveTypewriterStep(configured int) int {
