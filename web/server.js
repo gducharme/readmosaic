@@ -26,7 +26,7 @@ function validateSegment(value, type) {
 }
 
 function getClientIp(req) {
-  return req.headers['x-forwarded-for']?.split(',')[0].trim() || req.ip || req.socket.remoteAddress || 'unknown';
+  return req.ip || 'unknown';
 }
 
 function registerFailedAuthAttempt(ip) {
@@ -65,7 +65,7 @@ function requireApiAuth(req, res, next) {
 
   if (!role) {
     const attempts = registerFailedAuthAttempt(clientIp);
-    if (attempts > AUTH_MAX_ATTEMPTS) {
+    if (attempts >= AUTH_MAX_ATTEMPTS) {
       return res.status(429).json({ error: 'Too many authentication attempts. Please retry later.' });
     }
 
@@ -111,8 +111,14 @@ function contentPath(lang, file) {
 
 async function writeMarkdownAtomic(filePath, markdown) {
   const tempPath = `${filePath}.tmp-${process.pid}-${Date.now()}`;
-  await fs.writeFile(tempPath, markdown, 'utf8');
-  await fs.rename(tempPath, filePath);
+
+  try {
+    await fs.writeFile(tempPath, markdown, 'utf8');
+    await fs.rename(tempPath, filePath);
+  } catch (error) {
+    await fs.rm(tempPath, { force: true }).catch(() => {});
+    throw error;
+  }
 }
 
 app.use('/api', requireApiAuth);
