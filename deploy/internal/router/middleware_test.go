@@ -217,13 +217,36 @@ func TestSessionMetadataStoresIdentity(t *testing.T) {
 }
 
 func TestIdentityPolicyCoverage(t *testing.T) {
-	if len(identityPolicy) != 5 {
-		t.Fatalf("identityPolicy size = %d, want 5", len(identityPolicy))
+	if len(identityPolicy) != 6 {
+		t.Fatalf("identityPolicy size = %d, want 6", len(identityPolicy))
 	}
-	for _, user := range []string{"west", "fitra", "root", "read", "archive"} {
+	for _, user := range []string{"west", "fitra", "root", "read", "archive", "test"} {
 		if _, ok := identityPolicy[user]; !ok {
 			t.Fatalf("identityPolicy missing user %q", user)
 		}
+	}
+}
+
+func TestUsernameRoutingTestUser(t *testing.T) {
+	s := newFakeSession("test")
+	called := false
+
+	h := usernameRouting()(func(ssh.Session) {
+		called = true
+	})
+	h(s)
+
+	if !called {
+		t.Fatalf("expected next handler to be called")
+	}
+
+	identityValue, ok := s.Context().Value(sessionIdentityKey).(Identity)
+	if !ok {
+		t.Fatalf("expected %v to be set", sessionIdentityKey)
+	}
+
+	if identityValue.Route != routeTest || identityValue.Vector != routeTest {
+		t.Fatalf("identity = %+v, expected test route metadata", identityValue)
 	}
 }
 

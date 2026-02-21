@@ -5,6 +5,8 @@ import (
 	"context"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -290,6 +292,31 @@ func TestDefaultHandlerRouteSelectionByUsernamePolicy(t *testing.T) {
 	}
 }
 
+func TestDefaultHandlerTestFlowWritesArabicAndExits(t *testing.T) {
+	tempDir := t.TempDir()
+	path := filepath.Join(tempDir, "arabic.txt")
+	custom := "مرحبا بكم"
+	if err := os.WriteFile(path, []byte(custom), 0o644); err != nil {
+		t.Fatalf("seed file: %v", err)
+	}
+	t.Setenv(testArabicPathEnv, path)
+
+	sess := newFakeDefaultHandlerSession(context.Background(), "test", true, "")
+	routedHandler()(sess)
+
+	out := sess.output()
+	if !strings.Contains(out, custom) {
+		t.Fatalf("expected Arabic test text %q in output %q", custom, out)
+	}
+	if strings.Contains(out, "MOSAIC PROTOCOL") {
+		t.Fatalf("test flow should not render the standard TUI")
+	}
+	code, ok := sess.recordedExitCode()
+	if !ok || code != 0 {
+		t.Fatalf("expected graceful exit code 0, got (%d, %v)", code, ok)
+	}
+}
+
 func waitForOutputContains(t *testing.T, sess *fakeDefaultHandlerSession, want string, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -314,6 +341,7 @@ func TestResolveFlowRouteMapping(t *testing.T) {
 		{user: "root", want: "vector"},
 		{user: "read", want: "triage"},
 		{user: "archive", want: "triage"},
+		{user: "test", want: "test"},
 	}
 	for _, tc := range tests {
 		got, err := resolveFlow(router.Identity{Username: tc.user})
@@ -323,6 +351,27 @@ func TestResolveFlowRouteMapping(t *testing.T) {
 		if got != tc.want {
 			t.Fatalf("resolveFlow(%q)=%q, want %q", tc.user, got, tc.want)
 		}
+	}
+}
+
+func TestLoadArabicTestStringCreatesDefaultFile(t *testing.T) {
+	tempDir := t.TempDir()
+	path := filepath.Join(tempDir, "arabic.txt")
+	t.Setenv(testArabicPathEnv, path)
+
+	got, err := loadArabicTestString()
+	if err != nil {
+		t.Fatalf("loadArabicTestString() error = %v", err)
+	}
+	if got != defaultArabicText {
+		t.Fatalf("loadArabicTestString()=%q, want %q", got, defaultArabicText)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read created file: %v", err)
+	}
+	if string(raw) != defaultArabicText {
+		t.Fatalf("file content=%q, want %q", string(raw), defaultArabicText)
 	}
 }
 
