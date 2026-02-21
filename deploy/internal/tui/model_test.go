@@ -667,6 +667,34 @@ func TestTypewriterRTLCombiningMarksRemainStable(t *testing.T) {
 	}
 }
 
+func TestLineForTerminalDisplayWrapsRTLWithEmbeddingMarks(t *testing.T) {
+	got := lineForTerminalDisplay("مرحبا")
+	want := "\u202Bمرحبا\u202C"
+	if got != want {
+		t.Fatalf("rtl display wrapper rendered %q, want %q", got, want)
+	}
+}
+
+func TestLineForTerminalDisplayLeavesLTRUnchanged(t *testing.T) {
+	line := "hello مرحبا"
+	if got := lineForTerminalDisplay(line); got != line {
+		t.Fatalf("ltr-leading line should remain unchanged, got %q", got)
+	}
+}
+
+func TestRenderViewportWrapsRTLLinesForTerminalDisplay(t *testing.T) {
+	m := NewModel("127.0.0.1:1234", 80, 24)
+	m.setViewportContent("abc\nمرحبا")
+	m.viewportH = 2
+	m.viewportTop = 0
+
+	got := renderViewport(m)
+	want := "abc\n\u202Bمرحبا\u202C"
+	if got != want {
+		t.Fatalf("viewport render with rtl line = %q, want %q", got, want)
+	}
+}
+
 func TestTypewriterQueueLimitDropsOldest(t *testing.T) {
 	m := NewModel("127.0.0.1:1234", 80, 24)
 	lines := make([]string, 0, maxTypewriterQueueLines+20)

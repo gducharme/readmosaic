@@ -1340,11 +1340,24 @@ func renderViewport(m Model) string {
 	if from >= to {
 		return ""
 	}
-	content := strings.Join(m.viewportLines[from:to], "\n")
+	visible := make([]string, 0, to-from)
+	for _, line := range m.viewportLines[from:to] {
+		visible = append(visible, lineForTerminalDisplay(line))
+	}
+	content := strings.Join(visible, "\n")
 	if !m.isTTY || !m.hasThemeBundle {
 		return content
 	}
 	return applyStyle(content, m.themeBundle.Viewport)
+}
+
+func lineForTerminalDisplay(line string) string {
+	if !lineHasRTLScript(line) {
+		return line
+	}
+	const rtlEmbeddingStart = "\u202B"
+	const rtlEmbeddingEnd = "\u202C"
+	return rtlEmbeddingStart + line + rtlEmbeddingEnd
 }
 
 func renderPrompt(m Model) string {
