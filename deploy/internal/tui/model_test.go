@@ -304,6 +304,26 @@ func TestVectorAReadLoadsFragmentFromRuntimeFile(t *testing.T) {
 	}
 }
 
+func TestVectorAReadArabicRendersThroughPipeline(t *testing.T) {
+	tmp := t.TempDir()
+	fragmentPath := filepath.Join(tmp, "vector_a.txt")
+	arabic := "ظل التحدي"
+	if err := os.WriteFile(fragmentPath, []byte(arabic), 0o600); err != nil {
+		t.Fatalf("write fragment: %v", err)
+	}
+
+	t.Setenv(readFragmentPathEnvVar, fragmentPath)
+
+	m := NewModel("127.0.0.1:1234", 80, 24)
+	m = m.Update(KeyMsg{Key: "enter"})
+	m = m.Update(KeyMsg{Key: "a"})
+
+	m = pumpTypewriter(m)
+	if !strings.Contains(renderViewport(m), "\u202B"+arabic+"\u202C") {
+		t.Fatalf("expected viewport to include wrapped arabic line after completion")
+	}
+}
+
 func TestVectorAReadFallsBackWhenFragmentMissing(t *testing.T) {
 	t.Setenv(readFragmentPathEnvVar, filepath.Join(t.TempDir(), "missing.txt"))
 
@@ -561,19 +581,19 @@ func TestTypewriterUsesGraphemeBoundariesAndStableWidths(t *testing.T) {
 
 }
 
-func TestTypewriterUsesSuffixRevealForRTL(t *testing.T) {
+func TestTypewriterUsesPrefixRevealForRTL(t *testing.T) {
 	m := NewModel("127.0.0.1:1234", 80, 24)
 	m.setViewportContent("seed")
 	m.enqueueTypewriter("مرحبا")
 
 	m = m.Update(TypewriterTickMsg{})
-	if got := m.viewportLines[len(m.viewportLines)-1]; got != "ا" {
-		t.Fatalf("first RTL tick rendered %q, want %q", got, "ا")
+	if got := m.viewportLines[len(m.viewportLines)-1]; got != "م" {
+		t.Fatalf("first RTL tick rendered %q, want %q", got, "م")
 	}
 
 	m = m.Update(TypewriterTickMsg{})
-	if got := m.viewportLines[len(m.viewportLines)-1]; got != "با" {
-		t.Fatalf("second RTL tick rendered %q, want %q", got, "با")
+	if got := m.viewportLines[len(m.viewportLines)-1]; got != "مر" {
+		t.Fatalf("second RTL tick rendered %q, want %q", got, "مر")
 	}
 }
 
@@ -615,14 +635,14 @@ func TestTypewriterMixedDirectionUsesFirstStrongCharacter(t *testing.T) {
 	}
 }
 
-func TestTypewriterRTLWithNumbersStillUsesSuffixReveal(t *testing.T) {
+func TestTypewriterRTLWithNumbersStillUsesPrefixReveal(t *testing.T) {
 	m := NewModel("127.0.0.1:1234", 80, 24)
 	m.setViewportContent("seed")
 	m.enqueueTypewriter("١٢٣مرحبا")
 
 	m = m.Update(TypewriterTickMsg{})
-	if got := m.viewportLines[len(m.viewportLines)-1]; got != "ا" {
-		t.Fatalf("first RTL+number tick rendered %q, want %q", got, "ا")
+	if got := m.viewportLines[len(m.viewportLines)-1]; got != "١" {
+		t.Fatalf("first RTL+number tick rendered %q, want %q", got, "١")
 	}
 }
 
@@ -637,7 +657,7 @@ func TestTypewriterNeutralOnlyLineDefaultsToLTR(t *testing.T) {
 	}
 }
 
-func TestTypewriterWhitespaceLineDoesNotLeakRTLState(t *testing.T) {
+func TestTypewriterWhitespaceLineBetweenRTLAndLTR(t *testing.T) {
 	m := NewModel("127.0.0.1:1234", 80, 24)
 	m.setViewportContent("seed")
 	m.enqueueTypewriter("مرحبا", "   ", "hello")
@@ -645,9 +665,6 @@ func TestTypewriterWhitespaceLineDoesNotLeakRTLState(t *testing.T) {
 
 	if got := m.viewportLines[len(m.viewportLines)-1]; got != "hello" {
 		t.Fatalf("unexpected final line after whitespace transition: %q", got)
-	}
-	if m.typewriterRTL {
-		t.Fatalf("rtl state leaked after queue drained")
 	}
 }
 

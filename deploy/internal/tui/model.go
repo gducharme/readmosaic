@@ -226,7 +226,6 @@ type Model struct {
 	typewriterTarget  []string
 	typewriterCursor  int
 	typewriterLineIdx int // -1 indicates no active animated line
-	typewriterRTL     bool
 	typewriterStep    int
 
 	username                string
@@ -1217,7 +1216,6 @@ func (m *Model) resetTypewriterState() {
 	m.typewriterTarget = nil
 	m.typewriterCursor = 0
 	m.typewriterLineIdx = -1
-	m.typewriterRTL = false
 }
 
 func (m *Model) flushTypewriter() {
@@ -1244,7 +1242,6 @@ func (m *Model) beginNextTypewriterLine() {
 	m.typewriterTarget = toGraphemeClusters(line)
 	m.typewriterCursor = 0
 	m.typewriterLineIdx = len(m.viewportLines) - 1
-	m.typewriterRTL = lineHasRTLScript(line)
 }
 
 func (m *Model) advanceTypewriter() {
@@ -1262,12 +1259,7 @@ func (m *Model) advanceTypewriter() {
 	if m.typewriterCursor < len(m.typewriterTarget) {
 		step := max(m.typewriterStep, 1)
 		m.typewriterCursor = min(m.typewriterCursor+step, len(m.typewriterTarget))
-		if m.typewriterRTL {
-			start := len(m.typewriterTarget) - m.typewriterCursor
-			m.viewportLines[m.typewriterLineIdx] = strings.Join(m.typewriterTarget[start:], "")
-		} else {
-			m.viewportLines[m.typewriterLineIdx] = strings.Join(m.typewriterTarget[:m.typewriterCursor], "")
-		}
+		m.viewportLines[m.typewriterLineIdx] = strings.Join(m.typewriterTarget[:m.typewriterCursor], "")
 	}
 
 	if m.typewriterCursor >= len(m.typewriterTarget) {
