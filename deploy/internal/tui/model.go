@@ -240,6 +240,7 @@ type Model struct {
 	menuLastSelectionAt     time.Time
 	menuLastSelectionScreen Screen
 	now                     func() time.Time
+	archiveReadOnly         bool
 }
 
 // NewModel constructs the interactive TUI model from caller/session metadata.
@@ -311,7 +312,25 @@ func isArchiveMode(username, flow string) bool {
 	if normalizeFlow(flow) == flowArchive {
 		return true
 	}
-	return strings.ToLower(strings.TrimSpace(username)) == "archive"
+	return isArchiveDefaultUser(username)
+}
+
+func isArchiveDefaultUser(username string) bool {
+	switch strings.ToLower(strings.TrimSpace(username)) {
+	case "archive", "root", "fitra", "west":
+		return true
+	default:
+		return false
+	}
+}
+
+func isArchiveReadOnlyUser(username string) bool {
+	switch strings.ToLower(strings.TrimSpace(username)) {
+	case "root", "fitra", "west":
+		return true
+	default:
+		return false
+	}
 }
 
 // NextStatusTick returns blink cadence.
@@ -416,6 +435,7 @@ func (m *Model) initArchiveMode() {
 		m.archiveRoot = defaultArchiveRoot
 	}
 	m.screen = ScreenArchiveLanguage
+	m.archiveReadOnly = isArchiveReadOnlyUser(m.username)
 	m.promptInput = ""
 	m.selectedVector = "ARCHIVE"
 	if archiveSeedEnabled() {
@@ -715,7 +735,9 @@ func (m *Model) handleArchiveFileKey(lower, raw string) {
 		m.archiveFileIdx = choice - 1
 		m.openArchiveFile(m.archiveFiles[m.archiveFileIdx])
 		m.screen = ScreenArchiveEditor
-		m.renderArchiveEditor()
+		if !m.archiveReadOnly {
+			m.renderArchiveEditor()
+		}
 		return
 	}
 	m.appendMenuSelectionDigit(raw)
@@ -815,6 +837,33 @@ func (m *Model) openArchiveFile(file archiveDocument) {
 	m.archiveEditorBuffer = sanitizeArchiveLoadedContent(string(data))
 	m.archiveCursor = len([]rune(m.archiveEditorBuffer))
 	m.archiveStatus = ""
+	if m.archiveReadOnly {
+		m.renderArchiveReadOnlyFile()
+	}
+}
+
+func (m *Model) renderArchiveReadOnlyFile() {
+	lang := m.archiveLanguages[m.archiveLanguageIdx]
+	file := m.archiveFiles[m.archiveFileIdx]
+	dir := "LTR"
+	if lang.IsRTL {
+		dir = "RTL"
+	}
+	line, col := archiveCursorLineCol(m.archiveEditorBuffer, m.archiveCursor)
+	lines := []string{
+		fmt.Sprintf("ARCHIVE EDITOR // %s", file.Name),
+		fmt.Sprintf("Language: %s [%s]", lang.DisplayName, dir),
+		"READ-ONLY VIEW. Typewriter playback enabled.",
+		fmt.Sprintf("Cursor: Ln %d, Col %d", line, col),
+		"Esc returns to file list.",
+		"",
+	}
+	if m.archiveStatus != "" {
+		lines = append(lines, "WARNING: "+m.archiveStatus, "")
+	}
+	m.setViewportContent(strings.Join(lines, "\n"))
+	content := strings.Split(m.archiveEditorBuffer, "\n")
+	m.enqueueTypewriter(content...)
 }
 
 func (m *Model) renderArchiveEditor() {
@@ -825,15 +874,37 @@ func (m *Model) renderArchiveEditor() {
 		dir = "RTL"
 	}
 	line, col := archiveCursorLineCol(m.archiveEditorBuffer, m.archiveCursor)
-	lines := []string{fmt.Sprintf("ARCHIVE EDITOR // %s", file.Name), fmt.Sprintf("Language: %s [%s]", lang.DisplayName, dir), "Arrow/Home/End navigation enabled. Edits save immediately.", fmt.Sprintf("Cursor: Ln %d, Col %d", line, col), "Esc returns to file list.", ""}
+	modeLine := "Arrow/Home/End navigation enabled. Edits save immediately."
+	if m.archiveReadOnly {
+		modeLine = "READ-ONLY VIEW. Typewriter playback enabled."
+	}
+	lines := []string{fmt.Sprintf("ARCHIVE EDITOR // %s", file.Name), fmt.Sprintf("Language: %s [%s]", lang.DisplayName, dir), modeLine, fmt.Sprintf("Cursor: Ln %d, Col %d", line, col), "Esc returns to file list.", ""}
 	if m.archiveStatus != "" {
 		lines = append(lines, "WARNING: "+m.archiveStatus, "")
 	}
-	lines = append(lines, renderArchiveBufferWithCursor(m.archiveEditorBuffer, m.archiveCursor, m.cursorBlink)...)
+	if m.archiveReadOnly {
+		lines = append(lines, strings.Split(m.archiveEditorBuffer, "\n")...)
+	} else {
+		lines = append(lines, renderArchiveBufferWithCursor(m.archiveEditorBuffer, m.archiveCursor, m.cursorBlink)...)
+	}
 	m.setViewportContent(strings.Join(lines, "\n"))
 }
 
 func (m *Model) handleArchiveEditorKey(lower, raw string) {
+	if m.archiveReadOnly {
+		switch lower {
+		case "ctrl+d":
+			m.screen = ScreenExit
+			return
+		case "esc":
+			m.promptInput = ""
+			m.screen = ScreenArchiveFile
+			m.renderArchiveFileMenu()
+			return
+		}
+		return
+	}
+
 	m.archiveCursor = clamp(m.archiveCursor, 0, len([]rune(m.archiveEditorBuffer)))
 	switch lower {
 	case "ctrl+d":
@@ -1262,15 +1333,19 @@ func renderPrompt(m Model) string {
 	case ScreenArchiveFile:
 		prompt = promptPrefix + "[ARCHIVE FILE #] " + m.promptInput
 	case ScreenArchiveEditor:
-		cursor := " "
-		if m.cursorBlink {
-			cursor = "█"
+		if m.archiveReadOnly {
+			prompt = promptPrefix + "[READ ONLY]"
+		} else {
+			cursor := " "
+			if m.cursorBlink {
+				cursor = "█"
+			}
+			marker := "◌"
+			if m.cursorBlink {
+				marker = "◉"
+			}
+			prompt = promptPrefix + "[EDITING LIVE " + marker + "]" + cursor
 		}
-		marker := "◌"
-		if m.cursorBlink {
-			marker = "◉"
-		}
-		prompt = promptPrefix + "[EDITING LIVE " + marker + "]" + cursor
 	default:
 		prompt = promptPrefix
 	}

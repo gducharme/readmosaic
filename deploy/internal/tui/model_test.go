@@ -850,6 +850,66 @@ func TestArchiveMenuDeduplicatesImmediateRepeatedDigitInput(t *testing.T) {
 	}
 }
 
+func TestRootFamilyUsersStartInArchiveLanguageMenu(t *testing.T) {
+	for _, user := range []string{"root", "fitra", "west"} {
+		t.Run(user, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.Mkdir(filepath.Join(root, "en"), 0o755); err != nil {
+				t.Fatalf("mkdir en: %v", err)
+			}
+			t.Setenv(archiveRootEnvVar, root)
+			t.Setenv(archiveSeedEnvVar, "false")
+
+			m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: user})
+			if m.screen != ScreenArchiveLanguage {
+				t.Fatalf("expected archive language screen for %s, got %v", user, m.screen)
+			}
+		})
+	}
+}
+
+func TestArchiveEditorReadOnlyForRootFamilyUsers(t *testing.T) {
+	for _, user := range []string{"root", "fitra", "west"} {
+		t.Run(user, func(t *testing.T) {
+			root := t.TempDir()
+			langDir := filepath.Join(root, "en")
+			if err := os.Mkdir(langDir, 0o755); err != nil {
+				t.Fatalf("mkdir en: %v", err)
+			}
+			filePath := filepath.Join(langDir, "001-Intro")
+			if err := os.WriteFile(filePath, []byte("Hello"), 0o600); err != nil {
+				t.Fatalf("write initial file: %v", err)
+			}
+			t.Setenv(archiveRootEnvVar, root)
+			t.Setenv(archiveSeedEnvVar, "false")
+
+			m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: user})
+			m = m.Update(KeyMsg{Key: "1"})
+			m = m.Update(KeyMsg{Key: "enter"})
+			m = m.Update(KeyMsg{Key: "1"})
+			m = m.Update(KeyMsg{Key: "enter"})
+			if m.screen != ScreenArchiveEditor {
+				t.Fatalf("expected archive editor screen, got %v", m.screen)
+			}
+			if got := renderPrompt(m); !strings.Contains(got, "[READ ONLY]") {
+				t.Fatalf("expected read-only prompt, got %q", got)
+			}
+			if !m.typewriterActive && len(m.typewriterQueue) == 0 {
+				t.Fatalf("expected typewriter playback to be active or queued")
+			}
+
+			m = m.Update(KeyMsg{Key: "!"})
+			updated, err := os.ReadFile(filePath)
+			if err != nil {
+				t.Fatalf("read updated file: %v", err)
+			}
+			if string(updated) != "Hello" {
+				t.Fatalf("expected read-only file to stay unchanged, got %q", string(updated))
+			}
+		})
+	}
+}
+
 func TestArchiveEditorPersistsEditsImmediately(t *testing.T) {
 	root := t.TempDir()
 	langDir := filepath.Join(root, "en")

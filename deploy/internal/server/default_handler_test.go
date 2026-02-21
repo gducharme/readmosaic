@@ -267,7 +267,7 @@ func TestDefaultHandlerRouteSelectionByUsernamePolicy(t *testing.T) {
 		user       string
 		wantMarker string
 	}{
-		{name: "vector-user", user: "west", wantMarker: "VECTOR FLOW ACTIVE [west]"},
+		{name: "archive-readonly-user", user: "west", wantMarker: "TRIAGE FLOW ACTIVE [west]"},
 		{name: "triage-user-read", user: "read", wantMarker: "TRIAGE FLOW ACTIVE [read]"},
 		{name: "triage-user-archive", user: "archive", wantMarker: "TRIAGE FLOW ACTIVE [archive]"},
 	}

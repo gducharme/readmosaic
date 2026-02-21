@@ -319,9 +319,7 @@ func defaultHandler(s ssh.Session) {
 
 func resolveFlow(identity router.Identity) (string, error) {
 	switch strings.ToLower(identity.Username) {
-	case "west", "fitra", "root":
-		return "vector", nil
-	case "read", "archive":
+	case "west", "fitra", "root", "read", "archive":
 		return "triage", nil
 	default:
 		return "", fmt.Errorf("unsupported identity %q", identity.Username)
