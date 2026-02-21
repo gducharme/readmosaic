@@ -10,6 +10,8 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -201,6 +203,57 @@ func TestGatewayResume(t *testing.T) {
 	h.ServeHTTP(rec, authedRequest(http.MethodPost, "/gateway/sessions/resume", meta.ResumeToken, `{}`))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("resume status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestArabicTestEndpointCreatesAndServesText(t *testing.T) {
+	tempDir := t.TempDir()
+	path := filepath.Join(tempDir, "arabic.txt")
+	t.Setenv(testArabicPathEnv, path)
+
+	h := NewHandler(mustNewService(t, &fakeLauncher{}, &fakeStore{})).Routes()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/test", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); !strings.Contains(got, "text/html") || !strings.Contains(got, "charset=utf-8") {
+		t.Fatalf("unexpected content-type: %q", got)
+	}
+	for _, expected := range []string{`<html lang="ar">`, `<p dir="rtl">`, defaultArabicText} {
+		if !strings.Contains(rec.Body.String(), expected) {
+			t.Fatalf("missing %q in body=%s", expected, rec.Body.String())
+		}
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read created file: %v", err)
+	}
+	if string(raw) != defaultArabicText {
+		t.Fatalf("unexpected file content: %q", string(raw))
+	}
+}
+
+func TestArabicTestEndpointUsesExistingFileText(t *testing.T) {
+	tempDir := t.TempDir()
+	path := filepath.Join(tempDir, "arabic.txt")
+	want := "مرحبا بكم"
+	if err := os.WriteFile(path, []byte(want), 0o644); err != nil {
+		t.Fatalf("seed file: %v", err)
+	}
+	t.Setenv(testArabicPathEnv, path)
+
+	h := NewHandler(mustNewService(t, &fakeLauncher{}, &fakeStore{})).Routes()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/test", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), want) {
+		t.Fatalf("expected existing file text in body=%s", rec.Body.String())
 	}
 }
 
