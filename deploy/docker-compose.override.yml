@@ -5,3 +5,10 @@ services:
     ports:
       - "${MOSAIC_SSH_PUBLISH_PORT:-2222}:2222"
       - "${MOSAIC_GATEWAY_PUBLISH_PORT:-8080}:8080"
+
+  web:
+    volumes:
+      - type: bind
+        source: ../web
+        target: /app
+    command: sh -lc "npm ci && npm start"

@@ -19,8 +19,8 @@ The deploy setup now includes:
 ## File map
 
 - `Dockerfile` — multi-stage build (`golang` builder + minimal Alpine runtime).
-- `docker-compose.yml` — base deployment defaults (host web port default `80`).
-- `docker-compose.override.yml` — dev defaults (host port default `2222`, rate-limit disabled).
+- `docker-compose.yml` — base deployment defaults with immutable `app` and `web` images (host web port default `3000`).
+- `docker-compose.override.yml` — dev overrides (host SSH port default `2222`, rate-limit disabled, web bind-mount/live install flow).
 - `.env.example` — copy to `.env` and customize.
 - `Makefile` — helper commands for local build/run/test.
 
@@ -91,14 +91,19 @@ Set all 3 together or leave unset:
 
 ## Ports and defaults
 
-- Base compose (`docker-compose.yml`) publishes `${MOSAIC_SSH_PUBLISH_PORT:-22}:2222`, `${MOSAIC_GATEWAY_PUBLISH_PORT:-8080}:8080`, and `${MOSAIC_WEB_PUBLISH_PORT:-80}:3000`.
-- Dev override (`docker-compose.override.yml`) publishes `${MOSAIC_SSH_PUBLISH_PORT:-2222}:2222` and `${MOSAIC_GATEWAY_PUBLISH_PORT:-8080}:8080` for the `app` service while leaving the `web` port default at `80` unless overridden via env.
+- Base compose (`docker-compose.yml`) publishes `${MOSAIC_SSH_PUBLISH_PORT:-22}:2222`, `${MOSAIC_GATEWAY_PUBLISH_PORT:-8080}:8080`, and `${MOSAIC_WEB_PUBLISH_PORT:-3000}:3000`.
+- Dev override (`docker-compose.override.yml`) publishes `${MOSAIC_SSH_PUBLISH_PORT:-2222}:2222` and `${MOSAIC_GATEWAY_PUBLISH_PORT:-8080}:8080` for the `app` service and enables bind-mounted web development workflow.
 
 This is intentional:
 
 - **Deploy/default base** can target host SSH port 22.
-- **Local dev** avoids privileged SSH port surprises by defaulting to 2222 while still exposing the HTTP gateway on 8080. The browser UI is available on host port 80 by default.
+- **Local dev** avoids privileged ports by defaulting SSH to 2222 and browser UI to 3000 while still exposing the HTTP gateway on 8080.
 - Archive storage is bind-mounted from `MOSAIC_ARCHIVE_HOST_DIR` into `MOSAIC_ARCHIVE_ROOT`; point `MOSAIC_ARCHIVE_HOST_DIR` at shared/host-persistent storage if you run multiple container instances.
+
+
+## Web UI exposure and security
+
+The `web` service is a browser terminal surface. Do not expose it directly to the public internet without additional controls (TLS termination, authentication, and network restrictions such as allowlists or private ingress).
 
 ## Local dev flow
 
@@ -237,7 +242,7 @@ docker compose logs --tail=100 -f app
 ```
 
 - **Port bind denied on 22**: set `MOSAIC_SSH_PUBLISH_PORT=2222`.
-- **Port bind denied on 80**: set `MOSAIC_WEB_PUBLISH_PORT=3000` (or another unprivileged host port).
+- **Port bind denied on 3000**: set `MOSAIC_WEB_PUBLISH_PORT` to any available host port.
 - **Host key mount errors**: verify file exists and `chmod 600`.
 - **Neo4j unhealthy**: check `docker compose logs neo4j` and auth env.
 - **App unhealthy**: inspect `docker compose logs app` for startup/env errors.
