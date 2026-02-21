@@ -10,5 +10,6 @@ services:
       - DATA_DIR=/data
       - ROOT_CODE=root
       - ARCHIVIST_CODE=archivist
+      - TRUST_PROXY=0
     volumes:
       - ./data:/data

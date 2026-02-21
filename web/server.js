@@ -7,9 +7,19 @@ const PORT = process.env.PORT || 3000;
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const ROOT_CODE = process.env.ROOT_CODE || 'root';
 const ARCHIVIST_CODE = process.env.ARCHIVIST_CODE || 'archivist';
+const TRUST_PROXY = process.env.TRUST_PROXY || '0';
 
-app.set('trust proxy', 1);
+if (TRUST_PROXY === '1') {
+  app.set('trust proxy', 1);
+}
 app.use(express.json({ limit: '2mb' }));
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Cross-Origin-Resource-Policy', 'same-site');
+  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self' https://cdn.jsdelivr.net; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
+  next();
+});
 app.use(express.static(path.join(__dirname, 'public')));
 
 const SAFE_SEGMENT = /^[a-zA-Z0-9._-]+$/;

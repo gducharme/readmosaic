@@ -34,7 +34,10 @@ You can override with environment variables:
 
 - `ROOT_CODE`
 - `ARCHIVIST_CODE`
+- `TRUST_PROXY` (set to `1` only when running behind a trusted reverse proxy)
 
 ## Security note
 
 If you expose this service beyond localhost, run it behind HTTPS (for example via a reverse proxy). The access code is sent in an HTTP header and must not traverse plaintext HTTP.
+
+Set `TRUST_PROXY=1` only when requests pass through a trusted reverse proxy hop. Also ensure proxy/access logging does not record sensitive request headers like `x-access-code`.
