@@ -394,9 +394,11 @@ async function renderEditor() {
     });
 
     const wrapper = state.editor.codemirror.getWrapperElement();
-    wrapper.setAttribute('dir', isRtlLanguage(state.lang) ? 'rtl' : 'auto');
-    if (state.lang) wrapper.setAttribute('lang', state.lang);
-    else wrapper.removeAttribute('lang');
+    const editorContainer = wrapper.closest('.EasyMDEContainer');
+    setDir(wrapper);
+    if (editorContainer) {
+      setDir(editorContainer);
+    }
 
     const status = document.getElementById('editor-status');
     const saveButton = document.getElementById('save-btn');
