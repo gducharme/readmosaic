@@ -12,6 +12,9 @@ app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 const SAFE_SEGMENT = /^[a-zA-Z0-9._-]+$/;
+const AUTH_WINDOW_MS = 60 * 1000;
+const AUTH_MAX_ATTEMPTS = 30;
+const authAttemptBuckets = new Map();
 
 function validateSegment(value, type) {
   if (!SAFE_SEGMENT.test(value)) {
@@ -19,6 +22,26 @@ function validateSegment(value, type) {
     error.status = 400;
     throw error;
   }
+}
+
+function getClientIp(req) {
+  return req.headers['x-forwarded-for']?.split(',')[0].trim() || req.ip || req.socket.remoteAddress || 'unknown';
+}
+
+function isRateLimited(ip) {
+  const now = Date.now();
+  const bucket = authAttemptBuckets.get(ip);
+  if (!bucket || now - bucket.startedAt > AUTH_WINDOW_MS) {
+    authAttemptBuckets.set(ip, { startedAt: now, attempts: 1 });
+    return false;
+  }
+
+  bucket.attempts += 1;
+  if (bucket.attempts > AUTH_MAX_ATTEMPTS) {
+    return true;
+  }
+
+  return false;
 }
 
 function roleFromCode(req) {
@@ -36,12 +59,18 @@ function roleFromCode(req) {
 }
 
 function requireApiAuth(req, res, next) {
+  const clientIp = getClientIp(req);
+  if (isRateLimited(clientIp)) {
+    return res.status(429).json({ error: 'Too many authentication attempts. Please retry later.' });
+  }
+
   const role = roleFromCode(req);
   if (!role) {
     return res.status(401).json({ error: 'Unauthorized.' });
   }
 
   req.userRole = role;
+  req.clientIp = clientIp;
   return next();
 }
 
@@ -74,6 +103,12 @@ function contentPath(lang, file) {
   }
 
   return path.join(DATA_DIR, lang, file);
+}
+
+async function writeMarkdownAtomic(filePath, markdown) {
+  const tempPath = `${filePath}.tmp-${process.pid}-${Date.now()}`;
+  await fs.writeFile(tempPath, markdown, 'utf8');
+  await fs.rename(tempPath, filePath);
 }
 
 app.use('/api', requireApiAuth);
@@ -119,7 +154,10 @@ app.post('/api/content/:lang/:file', async (req, res, next) => {
       return res.status(400).json({ error: 'Request body must include a string content field.' });
     }
 
-    await fs.writeFile(filePath, markdown, 'utf8');
+    await writeMarkdownAtomic(filePath, markdown);
+    console.log(
+      `[AUDIT] write role=${req.userRole} ip=${req.clientIp} lang=${req.params.lang} file=${req.params.file} ts=${new Date().toISOString()}`
+    );
     return res.json({ ok: true });
   } catch (error) {
     next(error);

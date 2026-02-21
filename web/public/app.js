@@ -105,23 +105,29 @@ function renderLogin() {
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     const code = input.value.trim();
+    const nextMode = code === 'root' ? 'reader' : code === 'archivist' ? 'editor' : null;
 
-    if (code === 'root') {
-      state.mode = 'reader';
-      state.accessCode = code;
-      renderLanguageSelection();
+    if (!nextMode) {
+      error.textContent = 'INVALID ACCESS CODE';
+      input.select();
       return;
     }
 
-    if (code === 'archivist') {
-      state.mode = 'editor';
-      state.accessCode = code;
-      renderLanguageSelection();
-      return;
-    }
+    state.mode = nextMode;
+    state.accessCode = code;
+    error.textContent = 'AUTHORIZING...';
 
-    error.textContent = 'INVALID ACCESS CODE';
-    input.select();
+    api
+      .getLangs()
+      .then(() => {
+        renderLanguageSelection();
+      })
+      .catch(() => {
+        state.mode = null;
+        state.accessCode = null;
+        error.textContent = 'ACCESS CODE REJECTED BY SERVER';
+        input.select();
+      });
   });
 }
 
@@ -245,7 +251,7 @@ function buildPagesFromHtml(html, viewport) {
       commitPage();
     }
 
-    page.appendChild(node.cloneNode(true));
+    page.appendChild(clone);
   });
 
   commitPage();
@@ -366,6 +372,11 @@ async function renderEditor() {
         status.textContent = 'Saved.';
       } catch (error) {
         status.textContent = error.message;
+        if (error.message === 'Unauthorized access code.') {
+          setTimeout(() => {
+            renderLogin();
+          }, 700);
+        }
       } finally {
         saveButton.disabled = false;
       }

@@ -163,6 +163,17 @@ button:hover,
 .EasyMDEContainer .CodeMirror {
   height: 100% !important;
   min-height: 320px;
+  overflow: auto !important;
+  scrollbar-width: auto;
+}
+
+.EasyMDEContainer .CodeMirror::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.EasyMDEContainer .CodeMirror::-webkit-scrollbar-thumb {
+  background: rgba(0, 136, 255, 0.4);
 }
 
 .EasyMDEContainer .editor-toolbar button {

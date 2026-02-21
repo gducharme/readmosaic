@@ -32,3 +32,7 @@ You can override with environment variables:
 
 - `ROOT_CODE`
 - `ARCHIVIST_CODE`
+
+## Security note
+
+If you expose this service beyond localhost, run it behind HTTPS (for example via a reverse proxy). The access code is sent in an HTTP header and must not traverse plaintext HTTP.
