@@ -1347,9 +1347,30 @@ func lineForTerminalDisplay(line string) string {
 	if !lineHasRTLScript(line) {
 		return line
 	}
+	if forceRTLVisualOrderForTerminal() {
+		return reverseGraphemeClusters(line)
+	}
 	const rtlEmbeddingStart = "\u202B"
 	const rtlEmbeddingEnd = "\u202C"
 	return rtlEmbeddingStart + line + rtlEmbeddingEnd
+}
+
+func forceRTLVisualOrderForTerminal() bool {
+	v := strings.TrimSpace(strings.ToLower(os.Getenv("MOSAIC_RTL_VISUAL_ORDER")))
+	switch v {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func reverseGraphemeClusters(line string) string {
+	clusters := toGraphemeClusters(line)
+	for i, j := 0, len(clusters)-1; i < j; i, j = i+1, j-1 {
+		clusters[i], clusters[j] = clusters[j], clusters[i]
+	}
+	return strings.Join(clusters, "")
 }
 
 func renderPrompt(m Model) string {

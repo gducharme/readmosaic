@@ -699,6 +699,20 @@ func TestLineForTerminalDisplayLeavesLTRUnchanged(t *testing.T) {
 	}
 }
 
+func TestLineForTerminalDisplayCanForceVisualRTLOrder(t *testing.T) {
+	t.Setenv("MOSAIC_RTL_VISUAL_ORDER", "true")
+	if got := lineForTerminalDisplay("مرحبا"); got != "ابحرم" {
+		t.Fatalf("forced visual RTL order rendered %q, want %q", got, "ابحرم")
+	}
+}
+
+func TestReverseGraphemeClustersPreservesCombiningMarks(t *testing.T) {
+	line := "سّم"
+	if got := reverseGraphemeClusters(line); got != "مسّ" {
+		t.Fatalf("reverse grapheme clusters rendered %q, want %q", got, "مسّ")
+	}
+}
+
 func TestRenderViewportWrapsRTLLinesForTerminalDisplay(t *testing.T) {
 	m := NewModel("127.0.0.1:1234", 80, 24)
 	m.setViewportContent("abc\nمرحبا")
