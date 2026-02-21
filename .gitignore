@@ -28,3 +28,6 @@ ENV/
 env/
 pip-wheel-metadata/
 *.sqlite3
+
+node_modules/
+web/node_modules/
