@@ -43,7 +43,7 @@ const (
 	defaultCursorTick       = 530 * time.Millisecond
 	defaultTypewriterTick   = 32 * time.Millisecond
 	defaultTypewriterBatch  = 1
-	maxTypewriterQueueLines = 256
+	maxTypewriterQueueLines = 1024
 	maxViewportLines        = 512
 	defaultReadFragmentPath = "internal/content/vector_a_read_fragment.txt"
 	readFragmentPathEnvVar  = "MOSAIC_VECTOR_A_FRAGMENT_PATH"
