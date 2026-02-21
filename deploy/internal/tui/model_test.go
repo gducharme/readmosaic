@@ -897,9 +897,11 @@ func TestArchiveEditorReadOnlyForRootFamilyUsers(t *testing.T) {
 			if !m.typewriterActive && len(m.typewriterQueue) == 0 {
 				t.Fatalf("expected typewriter playback to be active or queued")
 			}
-			m = m.Update(TypewriterTickMsg{})
-			if m.typewriterActive && strings.TrimSpace(renderViewport(m)) == "" {
-				t.Fatalf("expected typewriter tick to render visible content")
+			for i := 0; i < 8; i++ {
+				m = m.Update(TypewriterTickMsg{})
+			}
+			if got := renderViewport(m); !strings.Contains(got, "Hello") {
+				t.Fatalf("expected typewriter playback to render file content, got %q", got)
 			}
 
 			m = m.Update(KeyMsg{Key: "!"})

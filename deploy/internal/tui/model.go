@@ -309,6 +309,9 @@ func normalizeFlow(flow string) string {
 
 // isArchiveMode resolves startup precedence for archive UX.
 //
+// NOTE: server flow and UI mode intentionally diverge for root-family users:
+// server keeps them on vector routing, while the TUI applies a read-only
+// archive UI override when flow=vector for those identities.
 // Explicit archive flow takes precedence, then username fallback preserves
 // backward compatibility for archive user sessions when flow is unset/default.
 func isArchiveMode(username, flow string) bool {
@@ -844,18 +847,17 @@ func (m *Model) openArchiveFile(file archiveDocument) {
 }
 
 func (m *Model) renderArchiveReadOnlyFile(animate bool) {
+	m.archiveCursor = clamp(m.archiveCursor, 0, len([]rune(m.archiveEditorBuffer)))
 	lang := m.archiveLanguages[m.archiveLanguageIdx]
 	file := m.archiveFiles[m.archiveFileIdx]
 	dir := "LTR"
 	if lang.IsRTL {
 		dir = "RTL"
 	}
-	line, col := archiveCursorLineCol(m.archiveEditorBuffer, m.archiveCursor)
 	lines := []string{
 		fmt.Sprintf("ARCHIVE EDITOR // %s", file.Name),
 		fmt.Sprintf("Language: %s [%s]", lang.DisplayName, dir),
 		"READ-ONLY VIEW. Typewriter playback enabled.",
-		fmt.Sprintf("Cursor: Ln %d, Col %d", line, col),
 		"Esc returns to file list.",
 		"",
 	}
@@ -867,10 +869,13 @@ func (m *Model) renderArchiveReadOnlyFile(animate bool) {
 		return
 	}
 	content := strings.Split(m.archiveEditorBuffer, "\n")
+	// Typewriter lines are appended to viewport content; the static header above
+	// remains visible while body lines animate in.
 	m.enqueueTypewriter(content...)
 }
 
 func (m *Model) renderArchiveEditor() {
+	m.archiveCursor = clamp(m.archiveCursor, 0, len([]rune(m.archiveEditorBuffer)))
 	lang := m.archiveLanguages[m.archiveLanguageIdx]
 	file := m.archiveFiles[m.archiveFileIdx]
 	dir := "LTR"
@@ -895,6 +900,7 @@ func (m *Model) renderArchiveEditor() {
 }
 
 func (m *Model) handleArchiveEditorKey(lower, raw string) {
+	m.archiveCursor = clamp(m.archiveCursor, 0, len([]rune(m.archiveEditorBuffer)))
 	if m.archiveReadOnly {
 		switch lower {
 		case "ctrl+d":
@@ -912,7 +918,6 @@ func (m *Model) handleArchiveEditorKey(lower, raw string) {
 		}
 	}
 
-	m.archiveCursor = clamp(m.archiveCursor, 0, len([]rune(m.archiveEditorBuffer)))
 	switch lower {
 	case "ctrl+d":
 		m.screen = ScreenExit
