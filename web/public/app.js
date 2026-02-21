@@ -95,11 +95,13 @@ const api = {
 function setDir(element) {
   if (!state.lang) {
     element.setAttribute('dir', 'auto');
+    element.removeAttribute('lang');
     element.classList.remove('is-rtl');
     return;
   }
   const isRtl = isRtlLanguage(state.lang);
   element.setAttribute('dir', isRtl ? 'rtl' : 'auto');
+  element.setAttribute('lang', state.lang);
   element.classList.toggle('is-rtl', isRtl);
 }
 
@@ -245,6 +247,8 @@ function buildPagesFromHtml(html, viewport) {
   holder.style.lineHeight = getComputedStyle(viewport).lineHeight;
   holder.className = viewport.className;
   holder.setAttribute('dir', viewport.getAttribute('dir') || 'auto');
+  const viewportLang = viewport.getAttribute('lang');
+  if (viewportLang) holder.setAttribute('lang', viewportLang);
   document.body.appendChild(holder);
 
   const source = document.createElement('div');
@@ -391,6 +395,7 @@ async function renderEditor() {
 
     const wrapper = state.editor.codemirror.getWrapperElement();
     wrapper.setAttribute('dir', isRtlLanguage(state.lang) ? 'rtl' : 'auto');
+    wrapper.setAttribute('lang', state.lang || '');
 
     const status = document.getElementById('editor-status');
     const saveButton = document.getElementById('save-btn');
