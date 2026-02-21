@@ -17,6 +17,7 @@ const (
 
 	routeVector = "vector"
 	routeTriage = "triage"
+	routeTest   = "test"
 )
 
 // SessionInfo stores stable metadata for downstream consumers.
@@ -59,6 +60,7 @@ var identityPolicy = map[string]policyRoute{
 	"root":    {Route: routeVector, Vector: "root"},
 	"read":    {Route: routeTriage, Vector: routeTriage},
 	"archive": {Route: routeTriage, Vector: routeTriage},
+	"test":    {Route: routeTest, Vector: routeTest},
 }
 
 // Descriptor keeps middleware metadata for deterministic startup wiring.

@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -26,9 +27,12 @@ import (
 )
 
 const (
-	version         = "dev"
-	shutdownTimeout = 5 * time.Second
-	serverMode      = "wish"
+	version               = "dev"
+	shutdownTimeout       = 5 * time.Second
+	serverMode            = "wish"
+	testArabicPathEnv     = "MOSAIC_TEST_ARABIC_PATH"
+	defaultArabicFilename = "mosaic_test_arabic.txt"
+	defaultArabicText     = "هذا نص عربي للاختبار"
 )
 
 // Runtime wires config + middleware + Wish server as a testable unit.
@@ -223,6 +227,21 @@ func defaultHandler(s ssh.Session) {
 	status = "normal"
 	log.Printf("level=info event=session_runtime_start user=%s route=%s vector=%s selected_flow=%s session=%s", user, route, vector, flow, traceID)
 
+	if flow == "test" {
+		if err := runArabicTestSession(s); err != nil {
+			exitCode = 1
+			status = "error"
+			log.Printf("level=error event=session_test_flow_failed user=%s route=%s vector=%s error=%v session=%s", user, route, vector, err, traceID)
+			_, _ = s.Write([]byte("unable to load test text\n"))
+			_ = s.Exit(1)
+			return
+		}
+		exitCode = 0
+		status = "normal"
+		_ = s.Exit(0)
+		return
+	}
+
 	// Normalize once at runtime boundary before passing flow into the TUI model.
 	// resolveFlow currently returns known values, but this keeps model startup
 	// resilient if future plumbing introduces alternate flow sources.
@@ -323,9 +342,39 @@ func resolveFlow(identity router.Identity) (string, error) {
 		return "vector", nil
 	case "read", "archive":
 		return "triage", nil
+	case "test":
+		return "test", nil
 	default:
 		return "", fmt.Errorf("unsupported identity %q", identity.Username)
 	}
+}
+
+func runArabicTestSession(s ssh.Session) error {
+	text, err := loadArabicTestString()
+	if err != nil {
+		return err
+	}
+	_, err = s.Write([]byte(text + "\n"))
+	return err
+}
+
+func loadArabicTestString() (string, error) {
+	path := strings.TrimSpace(os.Getenv(testArabicPathEnv))
+	if path == "" {
+		path = filepath.Join(os.TempDir(), defaultArabicFilename)
+	}
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		if err := os.WriteFile(path, []byte(defaultArabicText), 0o644); err != nil {
+			return "", err
+		}
+	} else if err != nil {
+		return "", err
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(raw)), nil
 }
 
 // safeTickerDuration defends ticker creation from non-positive model cadence values.
