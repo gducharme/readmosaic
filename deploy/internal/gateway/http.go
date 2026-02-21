@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -22,6 +23,9 @@ const (
 	maxResizeBodyBytes = 4 * 1024
 	maxStdinBodyBytes  = 256 * 1024
 	maxStdinBytes      = 64 * 1024
+	testArabicPathEnv  = "MOSAIC_TEST_ARABIC_PATH"
+	defaultArabicPath  = "/tmp/mosaic_test_arabic.txt"
+	defaultArabicText  = "هذا نص عربي للاختبار"
 )
 
 type Handler struct {
@@ -32,10 +36,49 @@ func NewHandler(svc *Service) *Handler { return &Handler{svc: svc} }
 
 func (h *Handler) Routes() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/test", h.testArabic)
 	mux.HandleFunc("/gateway/sessions", h.openSession)
 	mux.HandleFunc("/gateway/sessions/resume", h.resumeSession)
 	mux.HandleFunc("/gateway/sessions/", h.sessionAction)
 	return instrumentGatewayRequests(mux)
+}
+
+func (h *Handler) testArabic(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeErr(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed")
+		return
+	}
+
+	text, err := loadArabicTestString()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "TEST_TEXT_UNAVAILABLE", "unable to load test text")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprintf(w, "<!doctype html><html lang=\"ar\"><body><p dir=\"rtl\">%s</p></body></html>", text)
+}
+
+func loadArabicTestString() (string, error) {
+	path := strings.TrimSpace(os.Getenv(testArabicPathEnv))
+	if path == "" {
+		path = defaultArabicPath
+	}
+
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		if err := os.WriteFile(path, []byte(defaultArabicText), 0o644); err != nil {
+			return "", err
+		}
+	} else if err != nil {
+		return "", err
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+
+	return strings.TrimSpace(string(raw)), nil
 }
 
 func instrumentGatewayRequests(next http.Handler) http.Handler {
