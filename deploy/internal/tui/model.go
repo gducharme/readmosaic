@@ -226,7 +226,6 @@ type Model struct {
 	typewriterTarget  []string
 	typewriterCursor  int
 	typewriterLineIdx int // -1 indicates no active animated line
-	typewriterRTL     bool
 	typewriterStep    int
 
 	username                string
@@ -1217,7 +1216,6 @@ func (m *Model) resetTypewriterState() {
 	m.typewriterTarget = nil
 	m.typewriterCursor = 0
 	m.typewriterLineIdx = -1
-	m.typewriterRTL = false
 }
 
 func (m *Model) flushTypewriter() {
@@ -1244,7 +1242,6 @@ func (m *Model) beginNextTypewriterLine() {
 	m.typewriterTarget = toGraphemeClusters(line)
 	m.typewriterCursor = 0
 	m.typewriterLineIdx = len(m.viewportLines) - 1
-	m.typewriterRTL = lineHasRTLScript(line)
 }
 
 func (m *Model) advanceTypewriter() {
@@ -1262,12 +1259,7 @@ func (m *Model) advanceTypewriter() {
 	if m.typewriterCursor < len(m.typewriterTarget) {
 		step := max(m.typewriterStep, 1)
 		m.typewriterCursor = min(m.typewriterCursor+step, len(m.typewriterTarget))
-		if m.typewriterRTL {
-			start := len(m.typewriterTarget) - m.typewriterCursor
-			m.viewportLines[m.typewriterLineIdx] = strings.Join(m.typewriterTarget[start:], "")
-		} else {
-			m.viewportLines[m.typewriterLineIdx] = strings.Join(m.typewriterTarget[:m.typewriterCursor], "")
-		}
+		m.viewportLines[m.typewriterLineIdx] = strings.Join(m.typewriterTarget[:m.typewriterCursor], "")
 	}
 
 	if m.typewriterCursor >= len(m.typewriterTarget) {
@@ -1340,11 +1332,45 @@ func renderViewport(m Model) string {
 	if from >= to {
 		return ""
 	}
-	content := strings.Join(m.viewportLines[from:to], "\n")
+	visible := make([]string, 0, to-from)
+	for _, line := range m.viewportLines[from:to] {
+		visible = append(visible, lineForTerminalDisplay(line))
+	}
+	content := strings.Join(visible, "\n")
 	if !m.isTTY || !m.hasThemeBundle {
 		return content
 	}
 	return applyStyle(content, m.themeBundle.Viewport)
+}
+
+func lineForTerminalDisplay(line string) string {
+	if !lineHasRTLScript(line) {
+		return line
+	}
+	if forceRTLVisualOrderForTerminal() {
+		return reverseGraphemeClusters(line)
+	}
+	const rtlEmbeddingStart = "\u202B"
+	const rtlEmbeddingEnd = "\u202C"
+	return rtlEmbeddingStart + line + rtlEmbeddingEnd
+}
+
+func forceRTLVisualOrderForTerminal() bool {
+	v := strings.TrimSpace(strings.ToLower(os.Getenv("MOSAIC_RTL_VISUAL_ORDER")))
+	switch v {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func reverseGraphemeClusters(line string) string {
+	clusters := toGraphemeClusters(line)
+	for i, j := 0, len(clusters)-1; i < j; i, j = i+1, j-1 {
+		clusters[i], clusters[j] = clusters[j], clusters[i]
+	}
+	return strings.Join(clusters, "")
 }
 
 func renderPrompt(m Model) string {
