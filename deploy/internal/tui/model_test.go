@@ -561,6 +561,38 @@ func TestTypewriterUsesGraphemeBoundariesAndStableWidths(t *testing.T) {
 
 }
 
+func TestTypewriterUsesSuffixRevealForRTL(t *testing.T) {
+	m := NewModel("127.0.0.1:1234", 80, 24)
+	m.setViewportContent("seed")
+	m.enqueueTypewriter("مرحبا")
+
+	m = m.Update(TypewriterTickMsg{})
+	if got := m.viewportLines[len(m.viewportLines)-1]; got != "ا" {
+		t.Fatalf("first RTL tick rendered %q, want %q", got, "ا")
+	}
+
+	m = m.Update(TypewriterTickMsg{})
+	if got := m.viewportLines[len(m.viewportLines)-1]; got != "با" {
+		t.Fatalf("second RTL tick rendered %q, want %q", got, "با")
+	}
+}
+
+func TestTypewriterStillUsesPrefixRevealForLTR(t *testing.T) {
+	m := NewModel("127.0.0.1:1234", 80, 24)
+	m.setViewportContent("seed")
+	m.enqueueTypewriter("hello")
+
+	m = m.Update(TypewriterTickMsg{})
+	if got := m.viewportLines[len(m.viewportLines)-1]; got != "h" {
+		t.Fatalf("first LTR tick rendered %q, want %q", got, "h")
+	}
+
+	m = m.Update(TypewriterTickMsg{})
+	if got := m.viewportLines[len(m.viewportLines)-1]; got != "he" {
+		t.Fatalf("second LTR tick rendered %q, want %q", got, "he")
+	}
+}
+
 func TestTypewriterQueueLimitDropsOldest(t *testing.T) {
 	m := NewModel("127.0.0.1:1234", 80, 24)
 	lines := make([]string, 0, maxTypewriterQueueLines+20)

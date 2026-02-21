@@ -225,6 +225,7 @@ type Model struct {
 	typewriterTarget  []string
 	typewriterCursor  int
 	typewriterLineIdx int // -1 indicates no active animated line
+	typewriterRTL     bool
 	typewriterStep    int
 
 	username                string
@@ -1195,6 +1196,20 @@ func toGraphemeClusters(line string) []string {
 	return clusters
 }
 
+func lineHasRTLScript(line string) bool {
+	for _, r := range line {
+		if unicode.Is(unicode.Arabic, r) ||
+			unicode.Is(unicode.Hebrew, r) ||
+			unicode.Is(unicode.Syriac, r) ||
+			unicode.Is(unicode.Thaana, r) ||
+			unicode.Is(unicode.Nko, r) ||
+			unicode.Is(unicode.Adlam, r) {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *Model) flushTypewriter() {
 	if m.typewriterActive && m.typewriterLineIdx >= 0 && m.typewriterLineIdx < len(m.viewportLines) {
 		m.viewportLines[m.typewriterLineIdx] = strings.Join(m.typewriterTarget, "")
@@ -1207,6 +1222,7 @@ func (m *Model) flushTypewriter() {
 	m.typewriterTarget = nil
 	m.typewriterCursor = 0
 	m.typewriterLineIdx = -1
+	m.typewriterRTL = false
 }
 
 func (m *Model) beginNextTypewriterLine() {
@@ -1215,6 +1231,7 @@ func (m *Model) beginNextTypewriterLine() {
 		m.typewriterTarget = nil
 		m.typewriterCursor = 0
 		m.typewriterLineIdx = -1
+		m.typewriterRTL = false
 		return
 	}
 
@@ -1225,6 +1242,7 @@ func (m *Model) beginNextTypewriterLine() {
 	m.typewriterTarget = toGraphemeClusters(line)
 	m.typewriterCursor = 0
 	m.typewriterLineIdx = len(m.viewportLines) - 1
+	m.typewriterRTL = lineHasRTLScript(line)
 }
 
 func (m *Model) advanceTypewriter() {
@@ -1242,7 +1260,12 @@ func (m *Model) advanceTypewriter() {
 	if m.typewriterCursor < len(m.typewriterTarget) {
 		step := max(m.typewriterStep, 1)
 		m.typewriterCursor = min(m.typewriterCursor+step, len(m.typewriterTarget))
-		m.viewportLines[m.typewriterLineIdx] = strings.Join(m.typewriterTarget[:m.typewriterCursor], "")
+		if m.typewriterRTL {
+			start := len(m.typewriterTarget) - m.typewriterCursor
+			m.viewportLines[m.typewriterLineIdx] = strings.Join(m.typewriterTarget[start:], "")
+		} else {
+			m.viewportLines[m.typewriterLineIdx] = strings.Join(m.typewriterTarget[:m.typewriterCursor], "")
+		}
 	}
 
 	if m.typewriterCursor >= len(m.typewriterTarget) {
@@ -1250,6 +1273,7 @@ func (m *Model) advanceTypewriter() {
 		m.typewriterTarget = nil
 		m.typewriterCursor = 0
 		m.typewriterLineIdx = -1
+		m.typewriterRTL = false
 	}
 }
 
