@@ -226,8 +226,6 @@ type Model struct {
 	typewriterTarget  []string
 	typewriterCursor  int
 	typewriterLineIdx int // -1 indicates no active animated line
-	// typewriterRTL records detected paragraph direction for future renderer-aware behavior.
-	// Reveal order is always logical; this flag must NEVER change reveal slicing.
 	typewriterRTL     bool
 	typewriterStep    int
 
@@ -1199,18 +1197,16 @@ func toGraphemeClusters(line string) []string {
 	return clusters
 }
 
-func lineHasRTLScript(clusters []string) bool {
-	for _, cluster := range clusters {
-		for _, r := range cluster {
-			// LookupRune always returns a Unicode BiDi class; the width return value is
-			// not needed for rune-based iteration.
-			props, _ := bidi.LookupRune(r)
-			switch props.Class() {
-			case bidi.R, bidi.AL:
-				return true
-			case bidi.L:
-				return false
-			}
+func lineHasRTLScript(line string) bool {
+	for _, r := range line {
+		// LookupRune always returns a Unicode BiDi class; the width return value is
+		// not needed for rune-based iteration.
+		props, _ := bidi.LookupRune(r)
+		switch props.Class() {
+		case bidi.R, bidi.AL:
+			return true
+		case bidi.L:
+			return false
 		}
 	}
 	return false
@@ -1248,7 +1244,7 @@ func (m *Model) beginNextTypewriterLine() {
 	m.typewriterTarget = toGraphemeClusters(line)
 	m.typewriterCursor = 0
 	m.typewriterLineIdx = len(m.viewportLines) - 1
-	m.typewriterRTL = lineHasRTLScript(m.typewriterTarget)
+	m.typewriterRTL = lineHasRTLScript(line)
 }
 
 func (m *Model) advanceTypewriter() {
@@ -1266,9 +1262,12 @@ func (m *Model) advanceTypewriter() {
 	if m.typewriterCursor < len(m.typewriterTarget) {
 		step := max(m.typewriterStep, 1)
 		m.typewriterCursor = min(m.typewriterCursor+step, len(m.typewriterTarget))
-		// Keep reveal in logical (prefix) order for all scripts.
-		// RTL display order should be handled by the terminal renderer's BiDi support.
-		m.viewportLines[m.typewriterLineIdx] = strings.Join(m.typewriterTarget[:m.typewriterCursor], "")
+		if m.typewriterRTL {
+			start := len(m.typewriterTarget) - m.typewriterCursor
+			m.viewportLines[m.typewriterLineIdx] = strings.Join(m.typewriterTarget[start:], "")
+		} else {
+			m.viewportLines[m.typewriterLineIdx] = strings.Join(m.typewriterTarget[:m.typewriterCursor], "")
+		}
 	}
 
 	if m.typewriterCursor >= len(m.typewriterTarget) {
