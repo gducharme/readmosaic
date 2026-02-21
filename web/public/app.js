@@ -395,7 +395,8 @@ async function renderEditor() {
 
     const wrapper = state.editor.codemirror.getWrapperElement();
     wrapper.setAttribute('dir', isRtlLanguage(state.lang) ? 'rtl' : 'auto');
-    wrapper.setAttribute('lang', state.lang || '');
+    if (state.lang) wrapper.setAttribute('lang', state.lang);
+    else wrapper.removeAttribute('lang');
 
     const status = document.getElementById('editor-status');
     const saveButton = document.getElementById('save-btn');
