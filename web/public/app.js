@@ -11,7 +11,21 @@ const state = {
   readerResizeHandler: null,
 };
 
-const rtlLangs = new Set(['ar', 'fa', 'he', 'ur']);
+const rtlLangPrefixes = ['ar', 'fa', 'he', 'ur'];
+
+function isRtlLanguage(lang) {
+  if (!lang) return false;
+  const normalizedLang = lang.trim().toLowerCase();
+  if (!normalizedLang) return false;
+
+  return rtlLangPrefixes.some(
+    (prefix) =>
+      normalizedLang === prefix ||
+      normalizedLang.startsWith(`${prefix}-`) ||
+      normalizedLang.startsWith(`${prefix}_`) ||
+      normalizedLang.includes('arab')
+  );
+}
 
 const escapeHtml = (value) =>
   value
@@ -81,9 +95,12 @@ const api = {
 function setDir(element) {
   if (!state.lang) {
     element.setAttribute('dir', 'auto');
+    element.classList.remove('is-rtl');
     return;
   }
-  element.setAttribute('dir', rtlLangs.has(state.lang) ? 'rtl' : 'auto');
+  const isRtl = isRtlLanguage(state.lang);
+  element.setAttribute('dir', isRtl ? 'rtl' : 'auto');
+  element.classList.toggle('is-rtl', isRtl);
 }
 
 function renderLogin() {
@@ -373,7 +390,7 @@ async function renderEditor() {
     });
 
     const wrapper = state.editor.codemirror.getWrapperElement();
-    wrapper.setAttribute('dir', rtlLangs.has(state.lang) ? 'rtl' : 'auto');
+    wrapper.setAttribute('dir', isRtlLanguage(state.lang) ? 'rtl' : 'auto');
 
     const status = document.getElementById('editor-status');
     const saveButton = document.getElementById('save-btn');
