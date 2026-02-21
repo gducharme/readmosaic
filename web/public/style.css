@@ -179,3 +179,14 @@ button:hover,
 .EasyMDEContainer .editor-toolbar button {
   color: var(--text) !important;
 }
+
+
+.terminal-screen.is-rtl {
+  text-align: right;
+}
+
+.EasyMDEContainer[dir='rtl'] .CodeMirror,
+.EasyMDEContainer[dir='rtl'] .CodeMirror pre {
+  direction: rtl;
+  text-align: right;
+}
