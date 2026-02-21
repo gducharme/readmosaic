@@ -850,6 +850,144 @@ func TestArchiveMenuDeduplicatesImmediateRepeatedDigitInput(t *testing.T) {
 	}
 }
 
+func TestRootFamilyUsersStartInArchiveLanguageMenu(t *testing.T) {
+	for _, user := range []string{"root", "fitra", "west"} {
+		t.Run(user, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.Mkdir(filepath.Join(root, "en"), 0o755); err != nil {
+				t.Fatalf("mkdir en: %v", err)
+			}
+			t.Setenv(archiveRootEnvVar, root)
+			t.Setenv(archiveSeedEnvVar, "false")
+
+			m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: user, Flow: "vector"})
+			if m.screen != ScreenArchiveLanguage {
+				t.Fatalf("expected archive language screen for %s, got %v", user, m.screen)
+			}
+		})
+	}
+}
+
+func TestArchiveEditorReadOnlyForRootFamilyUsers(t *testing.T) {
+	for _, user := range []string{"root", "fitra", "west"} {
+		t.Run(user, func(t *testing.T) {
+			root := t.TempDir()
+			langDir := filepath.Join(root, "en")
+			if err := os.Mkdir(langDir, 0o755); err != nil {
+				t.Fatalf("mkdir en: %v", err)
+			}
+			filePath := filepath.Join(langDir, "001-Intro")
+			if err := os.WriteFile(filePath, []byte("Hello"), 0o600); err != nil {
+				t.Fatalf("write initial file: %v", err)
+			}
+			t.Setenv(archiveRootEnvVar, root)
+			t.Setenv(archiveSeedEnvVar, "false")
+
+			m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: user, Flow: "vector"})
+			m = m.Update(KeyMsg{Key: "1"})
+			m = m.Update(KeyMsg{Key: "enter"})
+			m = m.Update(KeyMsg{Key: "1"})
+			m = m.Update(KeyMsg{Key: "enter"})
+			if m.screen != ScreenArchiveEditor {
+				t.Fatalf("expected archive editor screen, got %v", m.screen)
+			}
+			if got := renderPrompt(m); !strings.Contains(got, "[READ ONLY") {
+				t.Fatalf("expected read-only prompt, got %q", got)
+			}
+			if !m.typewriterActive && len(m.typewriterQueue) == 0 {
+				t.Fatalf("expected typewriter playback to be active or queued")
+			}
+			for i := 0; i < 8; i++ {
+				m = m.Update(TypewriterTickMsg{})
+			}
+			if got := renderViewport(m); !strings.Contains(got, "Hello") {
+				t.Fatalf("expected typewriter playback to render file content, got %q", got)
+			}
+
+			m = m.Update(KeyMsg{Key: "!"})
+			if got := renderViewport(m); !strings.Contains(got, "Read-only mode: edits are disabled") {
+				t.Fatalf("expected read-only feedback message, got %q", got)
+			}
+			updated, err := os.ReadFile(filePath)
+			if err != nil {
+				t.Fatalf("read updated file: %v", err)
+			}
+			if string(updated) != "Hello" {
+				t.Fatalf("expected read-only file to stay unchanged, got %q", string(updated))
+			}
+		})
+	}
+}
+
+func TestArchiveEditorReadOnlyEscAndCtrlD(t *testing.T) {
+	root := t.TempDir()
+	langDir := filepath.Join(root, "en")
+	if err := os.Mkdir(langDir, 0o755); err != nil {
+		t.Fatalf("mkdir en: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(langDir, "001-Intro"), []byte("Hello"), 0o600); err != nil {
+		t.Fatalf("write initial file: %v", err)
+	}
+	t.Setenv(archiveRootEnvVar, root)
+	t.Setenv(archiveSeedEnvVar, "false")
+
+	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: "root", Flow: "vector"})
+	m = m.Update(KeyMsg{Key: "1"})
+	m = m.Update(KeyMsg{Key: "enter"})
+	m = m.Update(KeyMsg{Key: "1"})
+	m = m.Update(KeyMsg{Key: "enter"})
+	if m.screen != ScreenArchiveEditor {
+		t.Fatalf("expected archive editor screen, got %v", m.screen)
+	}
+
+	m = m.Update(KeyMsg{Key: "esc"})
+	if m.screen != ScreenArchiveFile {
+		t.Fatalf("expected esc to return to archive file screen, got %v", m.screen)
+	}
+
+	m = m.Update(KeyMsg{Key: "1"})
+	m = m.Update(KeyMsg{Key: "enter"})
+	m = m.Update(KeyMsg{Key: "ctrl+d"})
+	if m.screen != ScreenExit {
+		t.Fatalf("expected ctrl+d to exit, got %v", m.screen)
+	}
+}
+
+func TestArchiveFlowReadUserRemainsEditable(t *testing.T) {
+	root := t.TempDir()
+	langDir := filepath.Join(root, "en")
+	if err := os.Mkdir(langDir, 0o755); err != nil {
+		t.Fatalf("mkdir en: %v", err)
+	}
+	filePath := filepath.Join(langDir, "001-Intro")
+	if err := os.WriteFile(filePath, []byte("Hello"), 0o600); err != nil {
+		t.Fatalf("write initial file: %v", err)
+	}
+	t.Setenv(archiveRootEnvVar, root)
+	t.Setenv(archiveSeedEnvVar, "false")
+
+	m := NewModelWithOptions("127.0.0.1:1234", Options{Width: 80, Height: 24, IsTTY: true, Username: "read", Flow: "archive"})
+	m = m.Update(KeyMsg{Key: "1"})
+	m = m.Update(KeyMsg{Key: "enter"})
+	m = m.Update(KeyMsg{Key: "1"})
+	m = m.Update(KeyMsg{Key: "enter"})
+	if m.screen != ScreenArchiveEditor {
+		t.Fatalf("expected archive editor screen, got %v", m.screen)
+	}
+	if got := renderPrompt(m); !strings.Contains(got, "[EDITING LIVE") {
+		t.Fatalf("expected editable prompt, got %q", got)
+	}
+
+	m = m.Update(KeyMsg{Key: "!"})
+	updated, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read updated file: %v", err)
+	}
+	if string(updated) != "Hello!" {
+		t.Fatalf("expected editable archive flow for read user, got %q", string(updated))
+	}
+}
+
 func TestArchiveEditorPersistsEditsImmediately(t *testing.T) {
 	root := t.TempDir()
 	langDir := filepath.Join(root, "en")
