@@ -16,6 +16,7 @@ import (
 
 	"github.com/rivo/uniseg"
 	"golang.org/x/text/language"
+	"golang.org/x/text/unicode/bidi"
 )
 
 // Architecture:
@@ -1198,16 +1199,23 @@ func toGraphemeClusters(line string) []string {
 
 func lineHasRTLScript(line string) bool {
 	for _, r := range line {
-		if unicode.Is(unicode.Arabic, r) ||
-			unicode.Is(unicode.Hebrew, r) ||
-			unicode.Is(unicode.Syriac, r) ||
-			unicode.Is(unicode.Thaana, r) ||
-			unicode.Is(unicode.Nko, r) ||
-			unicode.Is(unicode.Adlam, r) {
+		props, _ := bidi.LookupRune(r)
+		switch props.Class() {
+		case bidi.R, bidi.AL:
 			return true
+		case bidi.L:
+			return false
 		}
 	}
 	return false
+}
+
+func (m *Model) resetTypewriterState() {
+	m.typewriterActive = false
+	m.typewriterTarget = nil
+	m.typewriterCursor = 0
+	m.typewriterLineIdx = -1
+	m.typewriterRTL = false
 }
 
 func (m *Model) flushTypewriter() {
@@ -1218,20 +1226,12 @@ func (m *Model) flushTypewriter() {
 		m.appendViewportLineNow(m.typewriterQueue[0])
 		m.typewriterQueue = m.typewriterQueue[1:]
 	}
-	m.typewriterActive = false
-	m.typewriterTarget = nil
-	m.typewriterCursor = 0
-	m.typewriterLineIdx = -1
-	m.typewriterRTL = false
+	m.resetTypewriterState()
 }
 
 func (m *Model) beginNextTypewriterLine() {
 	if len(m.typewriterQueue) == 0 {
-		m.typewriterActive = false
-		m.typewriterTarget = nil
-		m.typewriterCursor = 0
-		m.typewriterLineIdx = -1
-		m.typewriterRTL = false
+		m.resetTypewriterState()
 		return
 	}
 
@@ -1269,11 +1269,7 @@ func (m *Model) advanceTypewriter() {
 	}
 
 	if m.typewriterCursor >= len(m.typewriterTarget) {
-		m.typewriterActive = false
-		m.typewriterTarget = nil
-		m.typewriterCursor = 0
-		m.typewriterLineIdx = -1
-		m.typewriterRTL = false
+		m.resetTypewriterState()
 	}
 }
 

@@ -593,6 +593,54 @@ func TestTypewriterStillUsesPrefixRevealForLTR(t *testing.T) {
 	}
 }
 
+func TestTypewriterMixedDirectionUsesFirstStrongCharacter(t *testing.T) {
+	m := NewModel("127.0.0.1:1234", 80, 24)
+	m.setViewportContent("seed")
+	m.enqueueTypewriter("Error: الملف not found")
+
+	m = m.Update(TypewriterTickMsg{})
+	if got := m.viewportLines[len(m.viewportLines)-1]; got != "E" {
+		t.Fatalf("first mixed-direction tick rendered %q, want %q", got, "E")
+	}
+}
+
+func TestTypewriterRTLWithNumbersStillUsesSuffixReveal(t *testing.T) {
+	m := NewModel("127.0.0.1:1234", 80, 24)
+	m.setViewportContent("seed")
+	m.enqueueTypewriter("١٢٣مرحبا")
+
+	m = m.Update(TypewriterTickMsg{})
+	if got := m.viewportLines[len(m.viewportLines)-1]; got != "ا" {
+		t.Fatalf("first RTL+number tick rendered %q, want %q", got, "ا")
+	}
+}
+
+func TestTypewriterWhitespaceLineDoesNotLeakRTLState(t *testing.T) {
+	m := NewModel("127.0.0.1:1234", 80, 24)
+	m.setViewportContent("seed")
+	m.enqueueTypewriter("مرحبا", "   ", "hello")
+	m = pumpTypewriter(m)
+
+	if got := m.viewportLines[len(m.viewportLines)-1]; got != "hello" {
+		t.Fatalf("unexpected final line after whitespace transition: %q", got)
+	}
+	if m.typewriterRTL {
+		t.Fatalf("rtl state leaked after queue drained")
+	}
+}
+
+func TestTypewriterRTLCombiningMarksRemainStable(t *testing.T) {
+	line := "سّ" // sheen + shadda
+	m := NewModel("127.0.0.1:1234", 80, 24)
+	m.setViewportContent("seed")
+	m.enqueueTypewriter(line)
+
+	m = m.Update(TypewriterTickMsg{})
+	if got := m.viewportLines[len(m.viewportLines)-1]; got != line {
+		t.Fatalf("rtl combining grapheme rendered %q, want %q", got, line)
+	}
+}
+
 func TestTypewriterQueueLimitDropsOldest(t *testing.T) {
 	m := NewModel("127.0.0.1:1234", 80, 24)
 	lines := make([]string, 0, maxTypewriterQueueLines+20)
