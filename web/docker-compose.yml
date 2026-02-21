@@ -4,9 +4,11 @@ services:
     build: .
     container_name: mosaic-terminal
     ports:
-      - '3000:3000'
+      - '127.0.0.1:3000:3000'
     environment:
       - PORT=3000
       - DATA_DIR=/data
+      - ROOT_CODE=root
+      - ARCHIVIST_CODE=archivist
     volumes:
       - ./data:/data

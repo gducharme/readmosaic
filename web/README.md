@@ -21,5 +21,14 @@ Data is read/written from `./data` on the host and mounted to `/data` in the con
 
 ## Access codes
 
-- `root` → Reader mode
-- `archivist` → Editor mode
+The backend enforces server-side auth on all `/api/*` endpoints via the `x-access-code` header.
+
+Defaults:
+
+- `root` → Reader mode (read-only API access)
+- `archivist` → Editor mode (read + write API access)
+
+You can override with environment variables:
+
+- `ROOT_CODE`
+- `ARCHIVIST_CODE`

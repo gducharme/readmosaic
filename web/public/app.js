@@ -4,9 +4,11 @@ const state = {
   mode: null,
   lang: null,
   file: null,
+  accessCode: null,
   pageIndex: 0,
   pages: [],
   editor: null,
+  readerResizeHandler: null,
 };
 
 const rtlLangs = new Set(['ar', 'fa', 'he', 'ur']);
@@ -19,28 +21,47 @@ const escapeHtml = (value) =>
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#039;');
 
+function clearReaderResizeHandler() {
+  if (state.readerResizeHandler) {
+    window.removeEventListener('resize', state.readerResizeHandler);
+    state.readerResizeHandler = null;
+  }
+}
+
+function authHeaders() {
+  return state.accessCode ? { 'x-access-code': state.accessCode } : {};
+}
+
 const api = {
   async getLangs() {
-    const res = await fetch('/api/langs');
+    const res = await fetch('/api/langs', { headers: authHeaders() });
+    if (res.status === 401) throw new Error('Unauthorized access code.');
     if (!res.ok) throw new Error('Failed to load languages.');
     return res.json();
   },
   async getChapters(lang) {
-    const res = await fetch(`/api/chapters/${encodeURIComponent(lang)}`);
+    const res = await fetch(`/api/chapters/${encodeURIComponent(lang)}`, { headers: authHeaders() });
+    if (res.status === 401) throw new Error('Unauthorized access code.');
     if (!res.ok) throw new Error('Failed to load chapters.');
     return res.json();
   },
   async getContent(lang, file) {
-    const res = await fetch(`/api/content/${encodeURIComponent(lang)}/${encodeURIComponent(file)}`);
+    const res = await fetch(`/api/content/${encodeURIComponent(lang)}/${encodeURIComponent(file)}`, {
+      headers: authHeaders(),
+    });
+    if (res.status === 401) throw new Error('Unauthorized access code.');
     if (!res.ok) throw new Error('Failed to load content.');
     return res.text();
   },
   async saveContent(lang, file, content) {
     const res = await fetch(`/api/content/${encodeURIComponent(lang)}/${encodeURIComponent(file)}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ content }),
     });
+
+    if (res.status === 401) throw new Error('Unauthorized access code.');
+    if (res.status === 403) throw new Error('Archivist access code required.');
     if (!res.ok) throw new Error('Failed to save content.');
     return res.json();
   },
@@ -55,9 +76,17 @@ function setDir(element) {
 }
 
 function renderLogin() {
+  clearReaderResizeHandler();
+  if (state.editor) {
+    state.editor.toTextArea();
+    state.editor = null;
+  }
+
   state.mode = null;
   state.lang = null;
   state.file = null;
+  state.accessCode = null;
+
   app.innerHTML = `
     <section class="prompt">
       <h2>ENTER ACCESS CODE:</h2>
@@ -79,12 +108,14 @@ function renderLogin() {
 
     if (code === 'root') {
       state.mode = 'reader';
+      state.accessCode = code;
       renderLanguageSelection();
       return;
     }
 
     if (code === 'archivist') {
       state.mode = 'editor';
+      state.accessCode = code;
       renderLanguageSelection();
       return;
     }
@@ -95,6 +126,7 @@ function renderLogin() {
 }
 
 async function renderLanguageSelection() {
+  clearReaderResizeHandler();
   app.innerHTML = '<p>Loading languages...</p>';
 
   try {
@@ -127,6 +159,7 @@ async function renderLanguageSelection() {
 }
 
 async function renderChapterSelection() {
+  clearReaderResizeHandler();
   app.innerHTML = '<p>Loading chapters...</p>';
 
   try {
@@ -173,35 +206,51 @@ function buildPagesFromHtml(html, viewport) {
   holder.style.overflow = 'hidden';
   holder.style.lineHeight = getComputedStyle(viewport).lineHeight;
   holder.className = viewport.className;
+  holder.setAttribute('dir', viewport.getAttribute('dir') || 'auto');
   document.body.appendChild(holder);
 
   const source = document.createElement('div');
   source.innerHTML = html;
-  const nodes = [...source.children];
+  const nodes = [...source.childNodes].filter(
+    (node) => !(node.nodeType === Node.TEXT_NODE && !node.textContent.trim())
+  );
 
   const pages = [];
   let page = document.createElement('div');
 
   const commitPage = () => {
-    pages.push(page.innerHTML || '<p></p>');
-    page = document.createElement('div');
+    if (page.childNodes.length > 0) {
+      pages.push(page.innerHTML);
+      page = document.createElement('div');
+    }
   };
 
   nodes.forEach((node) => {
+    const clone = node.cloneNode(true);
     const candidate = page.cloneNode(true);
-    candidate.appendChild(node.cloneNode(true));
+    candidate.appendChild(clone);
+
     holder.innerHTML = '';
     holder.appendChild(candidate);
 
-    if (holder.scrollHeight > holder.clientHeight && page.childNodes.length > 0) {
+    const overflow = holder.scrollHeight > holder.clientHeight;
+
+    if (overflow && page.childNodes.length === 0) {
+      page.appendChild(clone);
+      commitPage();
+      return;
+    }
+
+    if (overflow) {
       commitPage();
     }
 
     page.appendChild(node.cloneNode(true));
   });
 
-  if (page.childNodes.length > 0 || pages.length === 0) {
-    commitPage();
+  commitPage();
+  if (pages.length === 0) {
+    pages.push('<p></p>');
   }
 
   document.body.removeChild(holder);
@@ -213,7 +262,8 @@ async function renderReader() {
 
   try {
     const markdown = await api.getContent(state.lang, state.file);
-    const html = marked.parse(markdown);
+    const unsafeHtml = marked.parse(markdown);
+    const safeHtml = DOMPurify.sanitize(unsafeHtml);
 
     app.innerHTML = `
       <h2>${escapeHtml(state.lang)} / ${escapeHtml(state.file)}</h2>
@@ -227,21 +277,23 @@ async function renderReader() {
 
     const screen = document.getElementById('reader-screen');
     setDir(screen);
-    state.pages = buildPagesFromHtml(html, screen);
-    state.pageIndex = 0;
 
-    const indicator = document.getElementById('page-indicator');
-    const paint = () => {
+    const renderPages = () => {
+      state.pages = buildPagesFromHtml(safeHtml, screen);
+      state.pageIndex = Math.min(state.pageIndex, state.pages.length - 1);
       screen.innerHTML = state.pages[state.pageIndex] || '<p></p>';
       indicator.textContent = `PAGE ${state.pageIndex + 1} / ${state.pages.length}`;
     };
 
-    paint();
+    const indicator = document.getElementById('page-indicator');
+    state.pageIndex = 0;
+    renderPages();
 
     document.getElementById('reader-back').addEventListener('click', () => {
       if (state.pageIndex > 0) {
         state.pageIndex -= 1;
-        paint();
+        screen.innerHTML = state.pages[state.pageIndex] || '<p></p>';
+        indicator.textContent = `PAGE ${state.pageIndex + 1} / ${state.pages.length}`;
       } else {
         renderChapterSelection();
       }
@@ -250,21 +302,23 @@ async function renderReader() {
     document.getElementById('reader-next').addEventListener('click', () => {
       if (state.pageIndex < state.pages.length - 1) {
         state.pageIndex += 1;
-        paint();
+        screen.innerHTML = state.pages[state.pageIndex] || '<p></p>';
+        indicator.textContent = `PAGE ${state.pageIndex + 1} / ${state.pages.length}`;
       }
     });
 
-    window.onresize = () => {
-      state.pages = buildPagesFromHtml(html, screen);
-      state.pageIndex = Math.min(state.pageIndex, state.pages.length - 1);
-      paint();
+    clearReaderResizeHandler();
+    state.readerResizeHandler = () => {
+      renderPages();
     };
+    window.addEventListener('resize', state.readerResizeHandler);
   } catch (error) {
     app.innerHTML = `<p>${escapeHtml(error.message)}</p>`;
   }
 }
 
 async function renderEditor() {
+  clearReaderResizeHandler();
   app.innerHTML = '<p>Loading editor...</p>';
 
   try {
@@ -301,12 +355,19 @@ async function renderEditor() {
     wrapper.setAttribute('dir', rtlLangs.has(state.lang) ? 'rtl' : 'auto');
 
     const status = document.getElementById('editor-status');
-    document.getElementById('save-btn').addEventListener('click', async () => {
+    const saveButton = document.getElementById('save-btn');
+
+    saveButton.addEventListener('click', async () => {
+      saveButton.disabled = true;
+      status.textContent = 'Saving...';
+
       try {
         await api.saveContent(state.lang, state.file, state.editor.value());
         status.textContent = 'Saved.';
       } catch (error) {
         status.textContent = error.message;
+      } finally {
+        saveButton.disabled = false;
       }
     });
 

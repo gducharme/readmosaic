@@ -7,12 +7,6 @@
 
 * {
   box-sizing: border-box;
-  scrollbar-width: none;
-}
-
-*::-webkit-scrollbar {
-  width: 0;
-  height: 0;
 }
 
 html,
@@ -31,6 +25,17 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+  scrollbar-width: none;
+}
+
+body::-webkit-scrollbar,
+.terminal-screen::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.terminal-screen {
+  scrollbar-width: none;
 }
 
 .terminal {
@@ -85,6 +90,11 @@ button,
   cursor: pointer;
 }
 
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 button:hover,
 .option:hover,
 .nav-link:hover {
@@ -125,10 +135,6 @@ button:hover,
   display: flex;
   justify-content: space-between;
   margin-top: auto;
-}
-
-.hidden {
-  display: none !important;
 }
 
 .status {
