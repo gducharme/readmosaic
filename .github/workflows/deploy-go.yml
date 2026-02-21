@@ -1,110 +1,46 @@
-name: deploy-go-checks
+name: repo-checks
 
 on:
   pull_request:
     paths:
-      - 'deploy/**'
+      - 'scripts/**'
+      - 'libs/**'
+      - 'requirements.txt'
       - '.github/workflows/deploy-go.yml'
       - '.trivyignore'
   push:
     branches:
       - main
     paths:
-      - 'deploy/**'
+      - 'scripts/**'
+      - 'libs/**'
+      - 'requirements.txt'
       - '.github/workflows/deploy-go.yml'
       - '.trivyignore'
-
-env:
-  IMAGE_NAME: ghcr.io/${{ github.repository }}/mosaic-terminal
 
 jobs:
   checks:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: deploy
     steps:
       - uses: actions/checkout@v4
 
-      - name: Clear Go module cache
-        run: rm -rf ~/go/pkg/mod
-
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-python@v5
         with:
-          go-version-file: deploy/go.mod
-          cache: true
-          cache-dependency-path: deploy/go.sum
+          python-version: '3.11'
 
-      - name: format check
-        run: test -z "$(gofmt -l ./cmd ./internal ./third_party)"
+      - name: install minimal deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-      # Host-run tests catch regressions quickly.
-      - name: go test (host toolchain)
-        run: go test ./...
-
-      - name: go vet
-        run: go vet ./...
-
-      - name: setup docker buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.IMAGE_NAME }}
-          tags: |
-            type=sha
-            type=raw,value=latest,enable={{is_default_branch}}
-
-      - name: login ghcr
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: build image (pull requests)
-        if: github.event_name == 'pull_request'
-        uses: docker/build-push-action@v6
-        with:
-          context: ./deploy
-          file: ./deploy/Dockerfile
-          platforms: linux/amd64
-          tags: ${{ env.IMAGE_NAME }}:pr-${{ github.sha }}
-          labels: ${{ steps.meta.outputs.labels }}
-          load: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: build and push multi-arch image (main)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: docker/build-push-action@v6
-        with:
-          context: ./deploy
-          file: ./deploy/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          push: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: python compile check
+        run: python -m compileall scripts libs
 
       - name: trivy fs scan
         uses: aquasecurity/trivy-action@0.24.0
         with:
           scan-type: fs
-          scan-ref: deploy
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          trivyignores: .trivyignore
-
-      - name: trivy image scan
-        if: github.event_name == 'pull_request'
-        uses: aquasecurity/trivy-action@0.24.0
-        with:
-          image-ref: ${{ env.IMAGE_NAME }}:pr-${{ github.sha }}
+          scan-ref: .
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           trivyignores: .trivyignore
