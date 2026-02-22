@@ -135,29 +135,102 @@ async function writeMarkdownAtomic(filePath, markdown) {
 
 const EMAIL_SIGNUPS_FILE = path.join(DATA_DIR, 'more_email_signups.csv');
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const EMAIL_SIGNUP_WINDOW_MS = 60 * 1000;
+const EMAIL_SIGNUP_MAX_ATTEMPTS = 6;
+const EMAIL_SIGNUP_HEADER = 'timestamp,language,email\n';
+const emailSignupAttemptBuckets = new Map();
+let signupWriteQueue = Promise.resolve();
+
+function registerEmailSignupAttempt(ip) {
+  const now = Date.now();
+  const bucket = emailSignupAttemptBuckets.get(ip);
+
+  if (!bucket || now - bucket.startedAt > EMAIL_SIGNUP_WINDOW_MS) {
+    emailSignupAttemptBuckets.set(ip, { startedAt: now, attempts: 1 });
+    return 1;
+  }
+
+  bucket.attempts += 1;
+  return bucket.attempts;
+}
+
+function normalizeEmail(email) {
+  return email.trim().toLowerCase();
+}
+
+function sanitizeSpreadsheetFormula(value) {
+  if (/^[=+\-@]/.test(value)) {
+    return `'${value}`;
+  }
+
+  return value;
+}
 
 function escapeCsvValue(value) {
   const normalized = String(value ?? '').replaceAll('"', '""');
   return `"${normalized}"`;
 }
 
+function parseCsvLine(line) {
+  const match = line.match(/^"((?:[^"]|"")*)","((?:[^"]|"")*)","((?:[^"]|"")*)"$/);
+  if (!match) return null;
+
+  return {
+    timestamp: match[1].replaceAll('""', '"'),
+    language: match[2].replaceAll('""', '"'),
+    email: match[3].replaceAll('""', '"'),
+  };
+}
+
+async function queueSignupWrite(action) {
+  signupWriteQueue = signupWriteQueue.then(action, action);
+  return signupWriteQueue;
+}
+
 async function appendEmailSignup(email, lang) {
-  if (!EMAIL_REGEX.test(email)) {
+  const normalizedEmail = normalizeEmail(email);
+
+  if (!EMAIL_REGEX.test(normalizedEmail)) {
     const error = new Error('Please enter a valid email address.');
     error.status = 400;
     throw error;
   }
 
-  const timestamp = new Date().toISOString();
-  const row = `${escapeCsvValue(timestamp)},${escapeCsvValue(lang)},${escapeCsvValue(email)}\n`;
+  return queueSignupWrite(async () => {
+    let existing = '';
+    try {
+      existing = await fs.readFile(EMAIL_SIGNUPS_FILE, 'utf8');
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
 
-  try {
-    await fs.access(EMAIL_SIGNUPS_FILE);
-  } catch {
-    await fs.writeFile(EMAIL_SIGNUPS_FILE, 'timestamp,language,email\n', 'utf8');
-  }
+    const lines = existing.split('\n').filter(Boolean);
+    const hasHeader = lines[0] === EMAIL_SIGNUP_HEADER.trim();
+    const dataLines = hasHeader ? lines.slice(1) : lines;
 
-  await fs.appendFile(EMAIL_SIGNUPS_FILE, row, 'utf8');
+    const alreadyExists = dataLines.some((line) => {
+      const parsed = parseCsvLine(line);
+      return parsed && parsed.language === lang && parsed.email === normalizedEmail;
+    });
+
+    if (alreadyExists) {
+      return { status: 'already_exists' };
+    }
+
+    const safeEmail = sanitizeSpreadsheetFormula(normalizedEmail);
+    const timestamp = new Date().toISOString();
+    const row = `${escapeCsvValue(timestamp)},${escapeCsvValue(lang)},${escapeCsvValue(safeEmail)}\n`;
+
+    if (!existing) {
+      await fs.writeFile(EMAIL_SIGNUPS_FILE, `${EMAIL_SIGNUP_HEADER}${row}`, 'utf8');
+    } else if (!hasHeader) {
+      await fs.writeFile(EMAIL_SIGNUPS_FILE, `${EMAIL_SIGNUP_HEADER}${existing}${existing.endsWith('\n') ? '' : '\n'}${row}`, 'utf8');
+    } else {
+      await fs.appendFile(EMAIL_SIGNUPS_FILE, row, 'utf8');
+    }
+
+    return { status: 'created' };
+  });
 }
 
 app.use('/api', requireApiAuth);
@@ -226,9 +299,14 @@ app.post('/api/more-signups', async (req, res, next) => {
       return res.status(400).json({ error: 'Language is required.' });
     }
 
+    const attempts = registerEmailSignupAttempt(req.clientIp);
+    if (attempts > EMAIL_SIGNUP_MAX_ATTEMPTS) {
+      return res.status(429).json({ error: 'Too many email signup attempts. Please retry later.' });
+    }
+
     validateSegment(lang, 'language');
-    await appendEmailSignup(email, lang);
-    return res.json({ ok: true });
+    const result = await appendEmailSignup(email, lang);
+    return res.json({ ok: true, status: result.status });
   } catch (error) {
     next(error);
   }

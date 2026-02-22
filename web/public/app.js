@@ -35,6 +35,12 @@ const escapeHtml = (value) =>
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#039;');
 
+function moreLabelForLanguage(lang) {
+  const normalizedLang = (lang || '').trim().toLowerCase();
+  if (normalizedLang.startsWith('ar')) return 'المزيد';
+  return 'more';
+}
+
 function clearReaderResizeHandler() {
   if (state.readerResizeHandler) {
     window.removeEventListener('resize', state.readerResizeHandler);
@@ -99,7 +105,13 @@ const api = {
 
     if (res.status === 401) throw new Error('Unauthorized access code.');
     if (res.status === 429) throw new Error('Too many attempts. Try again soon.');
-    const body = await res.json().catch(() => ({}));
+
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      throw new Error('Unexpected server response.');
+    }
+
+    const body = await res.json();
     if (!res.ok) throw new Error(body.error || 'Failed to submit email.');
     return body;
   },
@@ -245,7 +257,7 @@ async function renderChapterSelection() {
 
     const moreNode = document.createElement('button');
     moreNode.className = 'option';
-    moreNode.textContent = 'more';
+    moreNode.textContent = moreLabelForLanguage(state.lang);
     moreNode.addEventListener('click', renderMoreSignup);
     grid.appendChild(moreNode);
 
@@ -275,25 +287,33 @@ function renderMoreSignup() {
   const form = document.getElementById('more-signup-form');
   const emailInput = document.getElementById('more-email');
   const status = document.getElementById('more-signup-status');
+  const submitButton = form.querySelector('button[type="submit"]');
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     const email = emailInput.value.trim();
 
-    if (!email) {
-      status.textContent = 'Please enter an email address.';
+    if (!email || !emailInput.checkValidity()) {
+      status.textContent = 'Please enter a valid email address.';
       emailInput.focus();
       return;
     }
 
+    submitButton.disabled = true;
     status.textContent = 'Submitting...';
 
     try {
-      await api.submitMoreSignup(state.lang, email);
-      status.textContent = 'Thanks! You are on the list for updates.';
+      const response = await api.submitMoreSignup(state.lang, email);
+      if (response.status === 'already_exists') {
+        status.textContent = 'You are already on the list for this language.';
+      } else {
+        status.textContent = 'Thanks! You are on the list for updates.';
+      }
       form.reset();
     } catch (error) {
       status.textContent = error.message;
+    } finally {
+      submitButton.disabled = false;
     }
   });
 
