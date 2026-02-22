@@ -115,6 +115,10 @@ def validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--retry must be 0 or greater")
 
 
+def normalize_language(language: str) -> str:
+    return language.strip().strip("/")
+
+
 def _candidate_prompt_paths(prompt_root: Path, language: str) -> list[Path]:
     variants = [language, language.lower(), language.replace(" ", "_"), language.lower().replace(" ", "_")]
     exts = ["", ".txt", ".md"]
@@ -195,7 +199,11 @@ def main() -> None:
     args = parse_args()
     validate_args(args)
 
-    prompt_path = resolve_prompt_path(args.language, args.prompt_root)
+    normalized_language = normalize_language(args.language)
+    if not normalized_language:
+        raise SystemExit("--language must contain at least one non-slash character")
+
+    prompt_path = resolve_prompt_path(normalized_language, args.prompt_root)
     prompt_text = prompt_path.read_text(encoding="utf-8")
 
     source_paragraphs = load_source_paragraphs(args.file, args.preprocessed)
@@ -217,7 +225,7 @@ def main() -> None:
                     args.base_url,
                     args.model,
                     prompt_text,
-                    args.language,
+                    normalized_language,
                     text,
                     args.timeout,
                 )
@@ -253,12 +261,12 @@ def main() -> None:
     full_translation = "\n\n".join(paragraph_translations)
     whole_translation = full_translation
 
-    language_dir = args.output_root / args.language.lower().replace(" ", "_")
+    language_dir = args.output_root / normalized_language.lower().replace(" ", "_")
     language_dir.mkdir(parents=True, exist_ok=True)
     output_path = language_dir / "translation.json"
 
     payload = {
-        "language": args.language,
+        "language": normalized_language,
         "model": args.model,
         "input_file": str(args.file) if args.file else None,
         "preprocessed": str(args.preprocessed) if args.preprocessed else None,
