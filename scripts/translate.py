@@ -15,12 +15,15 @@ from typing import Any
 
 from libs.local_llm import (
     DEFAULT_LM_STUDIO_CHAT_COMPLETIONS_URL,
-    request_chat_completion_content,
+    request_chat_completion_content_streaming,
 )
 
 DEFAULT_BASE_URL = DEFAULT_LM_STUDIO_CHAT_COMPLETIONS_URL
 DEFAULT_PROMPT_ROOTS = [Path("prompt/translate"), Path("prompts/translate")]
 DEFAULT_OUTPUT_ROOT = Path("output/translate")
+
+class TranslationLengthExceededError(RuntimeError):
+    """Raised when streamed translation grows beyond configured max ratio."""
 
 
 class ProgressBar:
@@ -185,13 +188,27 @@ def call_lm(base_url: str, model: str, system_prompt: str, language: str, text: 
         f"Translate this single source paragraph into {language}. Return only translated text.\\n\\n"
         f"SOURCE PARAGRAPH:\n{text}"
     )
-    return request_chat_completion_content(
+    source_len = max(1, len(text))
+    max_streamed_len = source_len * 3
+    streamed_len = 0
+
+    def check_chunk(chunk: str) -> None:
+        nonlocal streamed_len
+        streamed_len += len(chunk)
+        if streamed_len > max_streamed_len:
+            raise TranslationLengthExceededError(
+                "Streamed translation exceeded 3x source length "
+                f"({streamed_len}>{max_streamed_len})."
+            )
+
+    return request_chat_completion_content_streaming(
         base_url,
         model,
         system_prompt,
         user_prompt,
         timeout,
         temperature=0.2,
+        chunk_callback=check_chunk,
     )
 
 
