@@ -133,6 +133,155 @@ async function writeMarkdownAtomic(filePath, markdown) {
   }
 }
 
+const EMAIL_SIGNUPS_FILE = path.join(DATA_DIR, 'more_email_signups.csv');
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const EMAIL_SIGNUP_WINDOW_MS = 60 * 1000;
+const EMAIL_SIGNUP_MAX_ATTEMPTS = 6;
+const EMAIL_SIGNUP_HEADER = 'timestamp,language,email\n';
+const EMAIL_SIGNUPS_FILE_MAX_BYTES = 5 * 1024 * 1024;
+const EMAIL_SIGNUP_BUCKET_PRUNE_INTERVAL = 50;
+const emailSignupAttemptBuckets = new Map();
+let emailSignupAttemptCount = 0;
+let signupWriteQueue = Promise.resolve();
+
+function pruneEmailSignupAttempts(now) {
+  for (const [ip, bucket] of emailSignupAttemptBuckets.entries()) {
+    if (now - bucket.startedAt > EMAIL_SIGNUP_WINDOW_MS * 2) {
+      emailSignupAttemptBuckets.delete(ip);
+    }
+  }
+}
+
+function registerEmailSignupAttempt(ip) {
+  const now = Date.now();
+  emailSignupAttemptCount += 1;
+
+  if (emailSignupAttemptCount % EMAIL_SIGNUP_BUCKET_PRUNE_INTERVAL === 0) {
+    pruneEmailSignupAttempts(now);
+  }
+
+  const bucket = emailSignupAttemptBuckets.get(ip);
+
+  if (!bucket || now - bucket.startedAt > EMAIL_SIGNUP_WINDOW_MS) {
+    emailSignupAttemptBuckets.set(ip, { startedAt: now, attempts: 1 });
+    return 1;
+  }
+
+  bucket.attempts += 1;
+  return bucket.attempts;
+}
+
+function normalizeEmail(email) {
+  return email.trim().toLowerCase();
+}
+
+function sanitizeSpreadsheetFormula(value) {
+  if (/^[=+\-@]/.test(value)) {
+    return `'${value}`;
+  }
+
+  return value;
+}
+
+function escapeCsvValue(value) {
+  const normalized = String(value ?? '').replaceAll('"', '""');
+  return `"${normalized}"`;
+}
+
+function parseCsvLine(line) {
+  const match = line.match(/^"((?:[^"]|"")*)","((?:[^"]|"")*)","((?:[^"]|"")*)"$/);
+  if (!match) return null;
+
+  return {
+    timestamp: match[1].replaceAll('""', '"'),
+    language: match[2].replaceAll('""', '"'),
+    email: match[3].replaceAll('""', '"'),
+  };
+}
+
+async function queueSignupWrite(action) {
+  signupWriteQueue = signupWriteQueue.then(action, action);
+  return signupWriteQueue;
+}
+
+async function appendEmailSignup(email, lang) {
+  const normalizedEmail = normalizeEmail(email);
+
+  if (!EMAIL_REGEX.test(normalizedEmail)) {
+    const error = new Error('Please enter a valid email address.');
+    error.status = 400;
+    error.appCode = 'invalid_email';
+    throw error;
+  }
+
+  return queueSignupWrite(async () => {
+    let existing = '';
+    try {
+      const signupFileStat = await fs.stat(EMAIL_SIGNUPS_FILE);
+      if (signupFileStat.size > EMAIL_SIGNUPS_FILE_MAX_BYTES) {
+        const error = new Error('Email signup storage is temporarily unavailable.');
+        error.status = 503;
+        error.appCode = 'signup_storage_limit';
+        throw error;
+      }
+
+      existing = await fs.readFile(EMAIL_SIGNUPS_FILE, 'utf8');
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+
+    if (existing && Buffer.byteLength(existing, 'utf8') > EMAIL_SIGNUPS_FILE_MAX_BYTES) {
+      const error = new Error('Email signup storage is temporarily unavailable.');
+      error.status = 503;
+      error.appCode = 'signup_storage_limit';
+      throw error;
+    }
+
+    const lines = existing.split('\n').filter(Boolean);
+    const hasHeader = lines[0] === EMAIL_SIGNUP_HEADER.trim();
+    const dataLines = hasHeader ? lines.slice(1) : lines;
+
+    const alreadyExists = dataLines.some((line) => {
+      const parsed = parseCsvLine(line);
+      return parsed && parsed.language === lang && parsed.email === normalizedEmail;
+    });
+
+    if (alreadyExists) {
+      return { status: 'already_exists' };
+    }
+
+    const safeEmail = sanitizeSpreadsheetFormula(normalizedEmail);
+    const timestamp = new Date().toISOString();
+    const row = `${escapeCsvValue(timestamp)},${escapeCsvValue(lang)},${escapeCsvValue(safeEmail)}\n`;
+
+    if (!existing) {
+      await fs.writeFile(EMAIL_SIGNUPS_FILE, `${EMAIL_SIGNUP_HEADER}${row}`, 'utf8');
+    } else if (!hasHeader) {
+      await fs.writeFile(EMAIL_SIGNUPS_FILE, `${EMAIL_SIGNUP_HEADER}${existing}${existing.endsWith('\n') ? '' : '\n'}${row}`, 'utf8');
+    } else {
+      await fs.appendFile(EMAIL_SIGNUPS_FILE, row, 'utf8');
+    }
+
+    return { status: 'created' };
+  });
+}
+
+
+app.get('/i18n/:lang', async (req, res, next) => {
+  try {
+    validateSegment(req.params.lang, 'language');
+    const i18nPath = path.join(__dirname, 'i18n', `${req.params.lang}.json`);
+    const text = await fs.readFile(i18nPath, 'utf8');
+    const dict = JSON.parse(text);
+    res.json(dict);
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      error.status = 500;
+    }
+    next(error);
+  }
+});
+
 app.use('/api', requireApiAuth);
 
 app.get('/api/whoami', (req, res) => {
@@ -186,6 +335,37 @@ app.post('/api/content/:lang/:file', async (req, res, next) => {
     );
     return res.json({ ok: true });
   } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/more-signups', async (req, res, next) => {
+  try {
+    const email = typeof req.body?.email === 'string' ? req.body.email.trim() : '';
+    const lang = typeof req.body?.lang === 'string' ? req.body.lang.trim() : '';
+
+    if (!lang) {
+      return res.status(400).json({ error: 'Language is required.', code: 'missing_language' });
+    }
+
+    const signupIp = req.clientIp || req.ip || 'unknown';
+    const attempts = registerEmailSignupAttempt(signupIp);
+    if (attempts > EMAIL_SIGNUP_MAX_ATTEMPTS) {
+      return res.status(429).json({ error: 'Too many email signup attempts. Please retry later.', code: 'signup_rate_limited' });
+    }
+
+    validateSegment(lang, 'language');
+    const result = await appendEmailSignup(email, lang);
+    return res.json({ ok: true, status: result.status });
+  } catch (error) {
+    if (error.appCode) {
+      return res.status(error.status || 400).json({ error: error.message, code: error.appCode });
+    }
+
+    if (error.status && error.status < 500) {
+      return res.status(error.status).json({ error: error.message, code: 'invalid_request' });
+    }
+
     next(error);
   }
 });
