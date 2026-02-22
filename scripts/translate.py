@@ -237,8 +237,8 @@ def main() -> None:
 
     results.sort(key=lambda row: int(row["paragraph_index"]))
     paragraph_translations = [str(row["translation"]) for row in results]
-    source_document = "\n\n".join(source_paragraphs)
     full_translation = "\n\n".join(paragraph_translations)
+    whole_translation = full_translation
 
     language_dir = args.output_root / args.language.lower().replace(" ", "_")
     language_dir.mkdir(parents=True, exist_ok=True)
@@ -250,9 +250,9 @@ def main() -> None:
         "input_file": str(args.file) if args.file else None,
         "preprocessed": str(args.preprocessed) if args.preprocessed else None,
         "prompt": str(prompt_path),
-        "source_document": source_document,
         "paragraph_translations": paragraph_translations,
         "full_translation": full_translation,
+        "whole_translation": whole_translation,
         "records": results,
         "failures": failures,
     }
