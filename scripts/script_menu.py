@@ -102,9 +102,19 @@ class ScriptMenuApp:
             stdscr.clear()
             h, w = stdscr.getmaxyx()
             stdscr.addstr(1, 2, "Mosaic Script Runner", curses.A_BOLD)
-            stdscr.addstr(2, 2, "↑/↓ move • Enter select • Esc exit")
-            for idx, script in enumerate(self.scripts):
-                y = 4 + (idx * 2)
+            stdscr.addstr(2, 2, "↑/↓ move • PgUp/PgDn jump • Enter select • Esc exit")
+
+            visible_rows = max(1, (h - 5) // 2)
+            start_index = _scroll_window_start(
+                current_index=self.script_index,
+                total_items=len(self.scripts),
+                visible_items=visible_rows,
+            )
+            visible_scripts = self.scripts[start_index : start_index + visible_rows]
+
+            for row, script in enumerate(visible_scripts):
+                idx = start_index + row
+                y = 4 + (row * 2)
                 if y >= h - 1:
                     break
                 name = script.path.name
@@ -118,6 +128,10 @@ class ScriptMenuApp:
                 self.script_index = (self.script_index - 1) % len(self.scripts)
             elif key == curses.KEY_DOWN:
                 self.script_index = (self.script_index + 1) % len(self.scripts)
+            elif key == curses.KEY_PPAGE:
+                self.script_index = max(0, self.script_index - visible_rows)
+            elif key == curses.KEY_NPAGE:
+                self.script_index = min(len(self.scripts) - 1, self.script_index + visible_rows)
             elif key in (10, 13, curses.KEY_ENTER):
                 self.field_index = 0
                 return self.scripts[self.script_index]
@@ -213,6 +227,17 @@ def build_command(script: ScriptSpec) -> List[str]:
         elif arg.enabled:
             cmd.append(arg.flag)
     return cmd
+
+
+def _scroll_window_start(current_index: int, total_items: int, visible_items: int) -> int:
+    if total_items <= 0 or visible_items <= 0:
+        return 0
+    if total_items <= visible_items:
+        return 0
+
+    max_start = total_items - visible_items
+    centered = current_index - (visible_items // 2)
+    return max(0, min(centered, max_start))
 
 
 def parse_help_arguments(script_path: Path) -> List[ArgumentSpec]:
