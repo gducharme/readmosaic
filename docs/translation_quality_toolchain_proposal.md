@@ -63,6 +63,13 @@ Each paragraph has stable `paragraph_id` + immutable `content_hash` (hash of sou
 - `manual_review_required`
 - `merged`
 
+### Exclusion lifecycle semantics
+- Excluded paragraphs (`excluded_by_policy=true`) remain in `paragraph_state.jsonl` for auditability but are **out of pipeline scope**.
+- Their `status` remains `ingested` unless an explicit future state is added; they are omitted from translation/review/rework/merge transitions.
+- Excluded paragraphs must not appear in `rework_queue.jsonl` or be counted as merge blockers.
+- Required-paragraph checks in Phase F are computed only over rows with `excluded_by_policy=false`.
+- Exclusion flags and reasons are immutable for a run unless explicitly reauthorized and re-materialized before Phase B.
+
 ### Transition rules
 - `ingested -> translated_pass1 -> translated_pass2 (optional) -> candidate_assembled`.
 - `candidate_assembled -> review_in_progress`.
@@ -325,6 +332,7 @@ python scripts/translation_toolchain.py \
 
 Assumptions for this golden path:
 - `--mode full` executes Phase A through Phase F end-to-end and initializes `runs/tx_001/manifest.json` during Phase A.
+- `translation_toolchain.py --mode` supports exactly `full|rework-only|status` in this proposal.
 - `--mode status --run-id <id>` is the canonical status form used in this doc.
 - This happy-path snapshot assumes no paragraph failures requiring explicit `--mode rework-only`; if failures occur, `--mode rework-only` is used per Phase E.
 - Raw translation output folders (`translate_pass1/`, `translate_pass2/`) may exist but are optional/ephemeral; `pass1_pre/` and `pass2_pre/` are canonical.
@@ -390,7 +398,7 @@ In this post-run snapshot, all required paragraphs reached `merged` during final
 ## Artifact Contract Proposal
 Each run should include:
 
-- `runs/<run_id>/RUNNING.lock` (exists while active)
+- `runs/<run_id>/RUNNING.lock` (**runtime-only**; present only while run is active and removed during successful completion in Phase F)
 - `runs/<run_id>/manifest.json`
 - `runs/<run_id>/state/paragraph_state.jsonl`
 - `runs/<run_id>/state/rework_queue.jsonl`
@@ -418,7 +426,7 @@ Each run should include:
 ---
 
 ## Minimal Implementation Changes
-1. `scripts/translation_toolchain.py` with `--mode full|rework-only`.
+1. `scripts/translation_toolchain.py` with `--mode full|rework-only|status`.
 2. `scripts/translation_toolchain.py --mode status --run-id <run_id>` (state counts).
 3. `scripts/normalize_translation_output.py`.
 4. `scripts/assemble_candidate.py`.
