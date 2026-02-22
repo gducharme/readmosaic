@@ -133,6 +133,33 @@ async function writeMarkdownAtomic(filePath, markdown) {
   }
 }
 
+const EMAIL_SIGNUPS_FILE = path.join(DATA_DIR, 'more_email_signups.csv');
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function escapeCsvValue(value) {
+  const normalized = String(value ?? '').replaceAll('"', '""');
+  return `"${normalized}"`;
+}
+
+async function appendEmailSignup(email, lang) {
+  if (!EMAIL_REGEX.test(email)) {
+    const error = new Error('Please enter a valid email address.');
+    error.status = 400;
+    throw error;
+  }
+
+  const timestamp = new Date().toISOString();
+  const row = `${escapeCsvValue(timestamp)},${escapeCsvValue(lang)},${escapeCsvValue(email)}\n`;
+
+  try {
+    await fs.access(EMAIL_SIGNUPS_FILE);
+  } catch {
+    await fs.writeFile(EMAIL_SIGNUPS_FILE, 'timestamp,language,email\n', 'utf8');
+  }
+
+  await fs.appendFile(EMAIL_SIGNUPS_FILE, row, 'utf8');
+}
+
 app.use('/api', requireApiAuth);
 
 app.get('/api/whoami', (req, res) => {
@@ -184,6 +211,23 @@ app.post('/api/content/:lang/:file', async (req, res, next) => {
     console.log(
       `[AUDIT] write role=${req.userRole} ip=${req.clientIp} lang=${req.params.lang} file=${req.params.file} ts=${new Date().toISOString()}`
     );
+    return res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/more-signups', async (req, res, next) => {
+  try {
+    const email = typeof req.body?.email === 'string' ? req.body.email.trim() : '';
+    const lang = typeof req.body?.lang === 'string' ? req.body.lang.trim() : '';
+
+    if (!lang) {
+      return res.status(400).json({ error: 'Language is required.' });
+    }
+
+    validateSegment(lang, 'language');
+    await appendEmailSignup(email, lang);
     return res.json({ ok: true });
   } catch (error) {
     next(error);

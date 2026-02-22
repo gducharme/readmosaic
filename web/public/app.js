@@ -90,6 +90,19 @@ const api = {
     if (!res.ok) throw new Error('Failed to save content.');
     return res.json();
   },
+  async submitMoreSignup(lang, email) {
+    const res = await fetch('/api/more-signups', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ lang, email }),
+    });
+
+    if (res.status === 401) throw new Error('Unauthorized access code.');
+    if (res.status === 429) throw new Error('Too many attempts. Try again soon.');
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || 'Failed to submit email.');
+    return body;
+  },
 };
 
 function setDir(element) {
@@ -230,10 +243,61 @@ async function renderChapterSelection() {
       grid.appendChild(node);
     });
 
+    const moreNode = document.createElement('button');
+    moreNode.className = 'option';
+    moreNode.textContent = 'more';
+    moreNode.addEventListener('click', renderMoreSignup);
+    grid.appendChild(moreNode);
+
     document.getElementById('back-lang').addEventListener('click', renderLanguageSelection);
   } catch (error) {
     app.innerHTML = `<p>${escapeHtml(error.message)}</p>`;
   }
+}
+
+function renderMoreSignup() {
+  clearReaderResizeHandler();
+
+  app.innerHTML = `
+    <h2>Language: ${escapeHtml(state.lang)}</h2>
+    <h3>Want more chapters?</h3>
+    <p>Enter your email address and we'll notify you when more chapters are available.</p>
+    <form id="more-signup-form" class="access-row">
+      <input id="more-email" type="email" autocomplete="email" placeholder="you@example.com" required autofocus />
+      <button type="submit">Submit</button>
+    </form>
+    <p id="more-signup-status" class="status"></p>
+    <div class="footer-nav">
+      <span class="nav-link" id="back-chapters">[ &lt; BACK ]</span>
+    </div>
+  `;
+
+  const form = document.getElementById('more-signup-form');
+  const emailInput = document.getElementById('more-email');
+  const status = document.getElementById('more-signup-status');
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const email = emailInput.value.trim();
+
+    if (!email) {
+      status.textContent = 'Please enter an email address.';
+      emailInput.focus();
+      return;
+    }
+
+    status.textContent = 'Submitting...';
+
+    try {
+      await api.submitMoreSignup(state.lang, email);
+      status.textContent = 'Thanks! You are on the list for updates.';
+      form.reset();
+    } catch (error) {
+      status.textContent = error.message;
+    }
+  });
+
+  document.getElementById('back-chapters').addEventListener('click', renderChapterSelection);
 }
 
 function buildPagesFromHtml(html, viewport) {
