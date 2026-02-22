@@ -259,7 +259,7 @@ async function appendEmailSignup(email, lang) {
 }
 
 
-app.get('/api/i18n/:lang', async (req, res, next) => {
+app.get('/i18n/:lang', async (req, res, next) => {
   try {
     validateSegment(req.params.lang, 'language');
     const i18nPath = path.join(__dirname, 'i18n', `${req.params.lang}.json`);
@@ -340,7 +340,8 @@ app.post('/api/more-signups', async (req, res, next) => {
       return res.status(400).json({ error: 'Language is required.', code: 'missing_language' });
     }
 
-    const attempts = registerEmailSignupAttempt(req.clientIp);
+    const signupIp = req.clientIp || req.ip || 'unknown';
+    const attempts = registerEmailSignupAttempt(signupIp);
     if (attempts > EMAIL_SIGNUP_MAX_ATTEMPTS) {
       return res.status(429).json({ error: 'Too many email signup attempts. Please retry later.', code: 'signup_rate_limited' });
     }
@@ -349,12 +350,12 @@ app.post('/api/more-signups', async (req, res, next) => {
     const result = await appendEmailSignup(email, lang);
     return res.json({ ok: true, status: result.status });
   } catch (error) {
-    if (error.status && error.status < 500) {
-      return res.status(error.status).json({ error: error.message, code: error.appCode || 'invalid_request' });
+    if (error.appCode) {
+      return res.status(error.status || 400).json({ error: error.message, code: error.appCode });
     }
 
-    if (error.appCode === 'signup_storage_limit') {
-      return res.status(503).json({ error: error.message, code: error.appCode });
+    if (error.status && error.status < 500) {
+      return res.status(error.status).json({ error: error.message, code: 'invalid_request' });
     }
 
     next(error);

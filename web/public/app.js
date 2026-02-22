@@ -46,7 +46,7 @@ function t(key, fallback = key) {
 
 async function loadI18n(lang) {
   const normalizedLang = (lang || '').trim().toLowerCase() || DEFAULT_I18N_LANG;
-  const response = await fetch(`/api/i18n/${encodeURIComponent(normalizedLang)}`, { headers: authHeaders() });
+  const response = await fetch(`/i18n/${encodeURIComponent(normalizedLang)}`, { headers: authHeaders() });
 
   if (response.status === 404 && normalizedLang !== DEFAULT_I18N_LANG) {
     return loadI18n(DEFAULT_I18N_LANG);
