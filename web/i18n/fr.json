@@ -28,5 +28,15 @@
   "more.signup.languageRequired": "Veuillez d’abord choisir une langue.",
   "more.signup.rateLimited": "Trop de tentatives d’inscription. Veuillez réessayer plus tard.",
   "more.signup.storageUnavailable": "Le stockage des inscriptions est temporairement indisponible. Veuillez réessayer plus tard.",
-  "more.signup.placeholder": "vous@exemple.com"
+  "more.signup.placeholder": "vous@exemple.com",
+  "nav.next": "SUIVANT",
+  "language.current": "Langue : {lang}",
+  "reader.pageIndicator": "PAGE {current} / {total}",
+  "loading.languages": "Chargement des langues...",
+  "loading.chapters": "Chargement des chapitres...",
+  "loading.markdown": "Chargement du markdown...",
+  "loading.editor": "Chargement de l'éditeur...",
+  "editor.save": "ENREGISTRER SUR DISQUE",
+  "editor.saving": "Enregistrement...",
+  "editor.saved": "Enregistré."
 }

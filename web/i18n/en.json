@@ -28,5 +28,15 @@
   "more.signup.languageRequired": "Please choose a language first.",
   "more.signup.rateLimited": "Too many signup attempts. Please retry later.",
   "more.signup.storageUnavailable": "Signup storage is temporarily unavailable. Please try again later.",
-  "more.signup.placeholder": "you@example.com"
+  "more.signup.placeholder": "you@example.com",
+  "nav.next": "NEXT",
+  "language.current": "Language: {lang}",
+  "reader.pageIndicator": "PAGE {current} / {total}",
+  "loading.languages": "Loading languages...",
+  "loading.chapters": "Loading chapters...",
+  "loading.markdown": "Loading markdown...",
+  "loading.editor": "Loading editor...",
+  "editor.save": "SAVE TO DISK",
+  "editor.saving": "Saving...",
+  "editor.saved": "Saved."
 }

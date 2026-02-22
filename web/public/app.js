@@ -44,6 +44,14 @@ function t(key, fallback = key) {
   return state.i18nDict[key] || fallback;
 }
 
+function tf(key, fallback, params = {}) {
+  let text = t(key, fallback);
+  Object.entries(params).forEach(([paramKey, paramValue]) => {
+    text = text.replaceAll(`{${paramKey}}`, String(paramValue));
+  });
+  return text;
+}
+
 async function loadI18n(lang) {
   const normalizedLang = (lang || '').trim().toLowerCase() || DEFAULT_I18N_LANG;
   const response = await fetch(`/i18n/${encodeURIComponent(normalizedLang)}`, { headers: authHeaders() });
@@ -222,7 +230,7 @@ async function renderLogin() {
 
 async function renderLanguageSelection() {
   clearReaderResizeHandler();
-  app.innerHTML = '<p>Loading languages...</p>';
+  app.innerHTML = `<p>${escapeHtml(t('loading.languages', 'Loading languages...'))}</p>`;
 
   try {
     const langs = await api.getLangs();
@@ -257,13 +265,13 @@ async function renderLanguageSelection() {
 
 async function renderChapterSelection() {
   clearReaderResizeHandler();
-  app.innerHTML = '<p>Loading chapters...</p>';
+  app.innerHTML = `<p>${escapeHtml(t('loading.chapters', 'Loading chapters...'))}</p>`;
 
   try {
     const chapters = await api.getChapters(state.lang);
 
     app.innerHTML = `
-      <h2>Language: ${escapeHtml(state.lang)}</h2>
+      <h2>${escapeHtml(tf('language.current', 'Language: {lang}', { lang: state.lang }))}</h2>
       <h3>${escapeHtml(t('chapter.select', 'Select Chapter'))}</h3>
       <div class="selection-grid" id="chapters-grid"></div>
       <div class="footer-nav">
@@ -303,7 +311,7 @@ function renderMoreSignup() {
   clearReaderResizeHandler();
 
   app.innerHTML = `
-    <h2>Language: ${escapeHtml(state.lang)}</h2>
+    <h2>${escapeHtml(tf('language.current', 'Language: {lang}', { lang: state.lang }))}</h2>
     <h3>${escapeHtml(t('more.signup.title', 'Want more chapters?'))}</h3>
     <p>${escapeHtml(t('more.signup.description', "Enter your email address and we'll notify you when more chapters are available."))}</p>
     <form id="more-signup-form" class="access-row">
@@ -416,7 +424,7 @@ function buildPagesFromHtml(html, viewport) {
 }
 
 async function renderReader() {
-  app.innerHTML = '<p>Loading markdown...</p>';
+  app.innerHTML = `<p>${escapeHtml(t('loading.markdown', 'Loading markdown...'))}</p>`;
 
   try {
     const markdown = await api.getContent(state.lang, state.file);
@@ -427,9 +435,9 @@ async function renderReader() {
       <h2>${escapeHtml(state.lang)} / ${escapeHtml(state.file)}</h2>
       <section class="terminal-screen" id="reader-screen"></section>
       <div class="footer-nav">
-        <span class="nav-link" id="reader-back">[ &lt; BACK ]</span>
+        <span class="nav-link" id="reader-back">[ &lt; ${escapeHtml(t('nav.back', 'BACK'))} ]</span>
         <span id="page-indicator"></span>
-        <span class="nav-link" id="reader-next">[ NEXT &gt; ]</span>
+        <span class="nav-link" id="reader-next">[ ${escapeHtml(t('nav.next', 'NEXT'))} &gt; ]</span>
       </div>
     `;
 
@@ -440,7 +448,10 @@ async function renderReader() {
       state.pages = buildPagesFromHtml(safeHtml, screen);
       state.pageIndex = Math.min(state.pageIndex, state.pages.length - 1);
       screen.innerHTML = state.pages[state.pageIndex] || '<p></p>';
-      indicator.textContent = `PAGE ${state.pageIndex + 1} / ${state.pages.length}`;
+      indicator.textContent = tf('reader.pageIndicator', 'PAGE {current} / {total}', {
+        current: state.pageIndex + 1,
+        total: state.pages.length,
+      });
     };
 
     const indicator = document.getElementById('page-indicator');
@@ -451,7 +462,10 @@ async function renderReader() {
       if (state.pageIndex > 0) {
         state.pageIndex -= 1;
         screen.innerHTML = state.pages[state.pageIndex] || '<p></p>';
-        indicator.textContent = `PAGE ${state.pageIndex + 1} / ${state.pages.length}`;
+        indicator.textContent = tf('reader.pageIndicator', 'PAGE {current} / {total}', {
+          current: state.pageIndex + 1,
+          total: state.pages.length,
+        });
       } else {
         renderChapterSelection();
       }
@@ -461,7 +475,10 @@ async function renderReader() {
       if (state.pageIndex < state.pages.length - 1) {
         state.pageIndex += 1;
         screen.innerHTML = state.pages[state.pageIndex] || '<p></p>';
-        indicator.textContent = `PAGE ${state.pageIndex + 1} / ${state.pages.length}`;
+        indicator.textContent = tf('reader.pageIndicator', 'PAGE {current} / {total}', {
+          current: state.pageIndex + 1,
+          total: state.pages.length,
+        });
       }
     });
 
@@ -477,7 +494,7 @@ async function renderReader() {
 
 async function renderEditor() {
   clearReaderResizeHandler();
-  app.innerHTML = '<p>Loading editor...</p>';
+  app.innerHTML = `<p>${escapeHtml(t('loading.editor', 'Loading editor...'))}</p>`;
 
   try {
     const markdown = await api.getContent(state.lang, state.file);
@@ -489,8 +506,8 @@ async function renderEditor() {
       </section>
       <p class="status" id="editor-status"></p>
       <div class="footer-nav">
-        <span class="nav-link" id="editor-back">[ &lt; BACK ]</span>
-        <button id="save-btn">[ SAVE TO DISK ]</button>
+        <span class="nav-link" id="editor-back">[ &lt; ${escapeHtml(t('nav.back', 'BACK'))} ]</span>
+        <button id="save-btn">[ ${escapeHtml(t('editor.save', 'SAVE TO DISK'))} ]</button>
       </div>
     `;
 
@@ -521,11 +538,11 @@ async function renderEditor() {
 
     saveButton.addEventListener('click', async () => {
       saveButton.disabled = true;
-      status.textContent = 'Saving...';
+      status.textContent = t('editor.saving', 'Saving...');
 
       try {
         await api.saveContent(state.lang, state.file, state.editor.value());
-        status.textContent = 'Saved.';
+        status.textContent = t('editor.saved', 'Saved.');
       } catch (error) {
         status.textContent = error.message;
         if (error.message === t('error.unauthorized', 'Unauthorized access code.')) {

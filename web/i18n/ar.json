@@ -28,5 +28,15 @@
   "more.signup.languageRequired": "يرجى اختيار لغة أولاً.",
   "more.signup.rateLimited": "محاولات تسجيل كثيرة جدًا. يُرجى المحاولة لاحقًا.",
   "more.signup.storageUnavailable": "تخزين الاشتراكات غير متاح مؤقتًا. يرجى المحاولة لاحقًا.",
-  "more.signup.placeholder": "you@example.com"
+  "more.signup.placeholder": "you@example.com",
+  "nav.next": "التالي",
+  "language.current": "اللغة: {lang}",
+  "reader.pageIndicator": "الصفحة {current} / {total}",
+  "loading.languages": "جارٍ تحميل اللغات...",
+  "loading.chapters": "جارٍ تحميل الفصول...",
+  "loading.markdown": "جارٍ تحميل الملف...",
+  "loading.editor": "جارٍ تحميل المحرر...",
+  "editor.save": "حفظ إلى القرص",
+  "editor.saving": "جارٍ الحفظ...",
+  "editor.saved": "تم الحفظ."
 }
