@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://readmosaic/schemas/translation_toolchain/paragraph_state_row.schema.json",
+  "title": "state/paragraph_state.jsonl row",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "run_id",
+    "document_id",
+    "paragraph_index",
+    "source_content_hash",
+    "state",
+    "updated_at"
+  ],
+  "properties": {
+    "schema_version": {
+      "$ref": "defs.schema.json#/$defs/schema_version"
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "document_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "paragraph_index": {
+      "$ref": "defs.schema.json#/$defs/paragraph_index"
+    },
+    "source_content_hash": {
+      "$ref": "defs.schema.json#/$defs/content_hash"
+    },
+    "state": {
+      "$ref": "defs.schema.json#/$defs/paragraph_state"
+    },
+    "attempt": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Translation/review attempt number."
+    },
+    "actor": {
+      "type": "string",
+      "description": "Agent or service that wrote the state transition."
+    },
+    "notes": {
+      "type": "string"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "ingested"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "not": {
+          "required": [
+            "attempt"
+          ]
+        }
+      },
+      "else": {
+        "required": [
+          "attempt"
+        ]
+      }
+    }
+  ],
+  "additionalProperties": false
+}

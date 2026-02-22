@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://readmosaic/schemas/translation_toolchain/defs.schema.json",
+  "title": "Translation toolchain shared definitions",
+  "$defs": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^1\\.\\d+\\.\\d+$",
+      "description": "Semantic version for this row contract. Major version 1 is required for compatibility."
+    },
+    "content_hash": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "description": "Hash identifier formatted as sha256:<64 lowercase hex chars>."
+    },
+    "paragraph_index": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "1-based paragraph position in the source document."
+    },
+    "language_code": {
+      "type": "string",
+      "pattern": "^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$",
+      "maxLength": 35,
+      "description": "Loosely validated BCP47-like language tag used by the pipeline (examples: en, en-US, en-us, zh-Hans)."
+    },
+    "paragraph_state": {
+      "type": "string",
+      "enum": [
+        "ingested",
+        "translated_pass1",
+        "reviewed_pass1",
+        "rework_required",
+        "translated_pass2",
+        "reviewed_pass2",
+        "approved",
+        "rejected"
+      ],
+      "description": "Lifecycle state for a paragraph within the translation pipeline."
+    },
+    "selection_outcome": {
+      "type": "string",
+      "enum": [
+        "approved",
+        "rejected"
+      ],
+      "description": "Final candidate selection decision."
+    },
+    "severity": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ]
+    },
+    "priority_level": {
+      "$ref": "#/$defs/severity",
+      "description": "Queue prioritization level for rework processing (alias of severity scale)."
+    },
+    "unit_interval_number": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    }
+  }
+}
