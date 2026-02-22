@@ -11,6 +11,7 @@ const state = {
   readerResizeHandler: null,
   i18nLang: 'en',
   i18nDict: {},
+  chapters: [],
 };
 
 const rtlLangPrefixes = ['ar', 'fa', 'he', 'ur'];
@@ -269,6 +270,7 @@ async function renderChapterSelection() {
 
   try {
     const chapters = await api.getChapters(state.lang);
+    state.chapters = chapters;
 
     app.innerHTML = `
       <h2>${escapeHtml(tf('language.current', 'Language: {lang}', { lang: state.lang }))}</h2>
@@ -471,7 +473,7 @@ async function renderReader() {
       }
     });
 
-    document.getElementById('reader-next').addEventListener('click', () => {
+    document.getElementById('reader-next').addEventListener('click', async () => {
       if (state.pageIndex < state.pages.length - 1) {
         state.pageIndex += 1;
         screen.innerHTML = state.pages[state.pageIndex] || '<p></p>';
@@ -479,6 +481,22 @@ async function renderReader() {
           current: state.pageIndex + 1,
           total: state.pages.length,
         });
+        return;
+      }
+
+      if (!state.chapters.length) {
+        state.chapters = await api.getChapters(state.lang);
+      }
+
+      const currentChapterIndex = state.chapters.indexOf(state.file);
+      if (currentChapterIndex === -1) {
+        return;
+      }
+
+      const nextChapter = state.chapters[currentChapterIndex + 1];
+      if (nextChapter) {
+        state.file = nextChapter;
+        await renderReader();
       }
     });
 
