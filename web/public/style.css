@@ -1,8 +1,8 @@
 :root {
   --bg: #000000;
-  --text: #0088ff;
-  --glow: rgba(0, 136, 255, 0.35);
-  --border: rgba(0, 136, 255, 0.5);
+  --text: #1199ff;
+  --glow: rgba(17, 153, 255, 0.55);
+  --border: rgba(17, 153, 255, 0.58);
 }
 
 * {
@@ -18,7 +18,7 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: 'Courier New', Consolas, Menlo, Monaco, monospace;
-  text-shadow: 0 0 6px var(--glow);
+  text-shadow: 0 0 8px var(--glow), 0 0 18px rgba(17, 153, 255, 0.35);
 }
 
 body {
