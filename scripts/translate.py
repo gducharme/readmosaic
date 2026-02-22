@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Translate manuscript text line-by-line using language-specific prompts."""
+"""Translate manuscript text paragraph-by-paragraph using language-specific prompts."""
 from __future__ import annotations
 
 import sys
@@ -67,17 +67,17 @@ class ProgressBar:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Translate manuscript content line-by-line using a language-specific prompt "
+            "Translate manuscript content paragraph-by-paragraph using a language-specific prompt "
             "from prompt/translate or prompts/translate."
         )
     )
-    parser.add_argument("--file", required=True, type=Path, help="Input manuscript (.txt/.md).")
+    parser.add_argument("--file", type=Path, help="Optional input manuscript (.txt/.md).")
     parser.add_argument("--language", required=True, help="Target language (e.g., French).")
     parser.add_argument("--model", required=True, help="Model identifier served by LM Studio.")
     parser.add_argument(
         "--preprocessed",
         type=Path,
-        help="Optional pre-processing directory or JSONL file used as the source of lines.",
+        help="Optional pre-processing directory or JSONL file used as the source of paragraphs.",
     )
     parser.add_argument(
         "--prompt-root",
@@ -97,7 +97,9 @@ def parse_args() -> argparse.Namespace:
 
 
 def validate_args(args: argparse.Namespace) -> None:
-    if not args.file.exists():
+    if not args.file and not args.preprocessed:
+        raise SystemExit("Provide --file or --preprocessed as a translation source.")
+    if args.file and not args.file.exists():
         raise SystemExit(f"Input file not found: {args.file}")
     if args.preprocessed and not args.preprocessed.exists():
         raise SystemExit(f"Preprocessed path not found: {args.preprocessed}")
@@ -131,8 +133,8 @@ def resolve_prompt_path(language: str, prompt_root: Path | None) -> Path:
     )
 
 
-def _load_lines_from_jsonl(path: Path) -> list[str]:
-    lines: list[str] = []
+def _load_paragraphs_from_jsonl(path: Path) -> list[str]:
+    paragraphs: list[str] = []
     for raw in path.read_text(encoding="utf-8").splitlines():
         row = raw.strip()
         if not row:
@@ -141,32 +143,35 @@ def _load_lines_from_jsonl(path: Path) -> list[str]:
         if isinstance(payload, dict) and "text" in payload:
             text = str(payload["text"]).strip()
             if text:
-                lines.extend(segment.strip() for segment in text.splitlines() if segment.strip())
-    return lines
+                paragraphs.append(text)
+    return paragraphs
 
 
-def load_source_lines(input_path: Path, preprocessed: Path | None) -> list[str]:
+def load_source_paragraphs(input_path: Path | None, preprocessed: Path | None) -> list[str]:
     if preprocessed:
         if preprocessed.is_file() and preprocessed.suffix.lower() == ".jsonl":
-            lines = _load_lines_from_jsonl(preprocessed)
-            if lines:
-                return lines
+            paragraphs = _load_paragraphs_from_jsonl(preprocessed)
+            if paragraphs:
+                return paragraphs
         elif preprocessed.is_dir():
-            preferred = [preprocessed / "lines.jsonl", preprocessed / "paragraphs.jsonl", preprocessed / "sentences.jsonl"]
+            preferred = [preprocessed / "paragraphs.jsonl", preprocessed / "lines.jsonl", preprocessed / "sentences.jsonl"]
             for candidate in preferred:
                 if candidate.exists() and candidate.is_file():
-                    lines = _load_lines_from_jsonl(candidate)
-                    if lines:
-                        return lines
+                    paragraphs = _load_paragraphs_from_jsonl(candidate)
+                    if paragraphs:
+                        return paragraphs
 
-    fallback = [line.strip() for line in input_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    return fallback
+    if input_path is None:
+        return []
+
+    raw = input_path.read_text(encoding="utf-8")
+    return [block.strip() for block in raw.split("\n\n") if block.strip()]
 
 
 def call_lm(base_url: str, model: str, system_prompt: str, language: str, text: str, timeout: int) -> str:
     user_prompt = (
-        f"Translate this single source line into {language}. Return only translated text.\\n\\n"
-        f"SOURCE LINE:\n{text}"
+        f"Translate this single source paragraph into {language}. Return only translated text.\\n\\n"
+        f"SOURCE PARAGRAPH:\n{text}"
     )
     return request_chat_completion_content(
         base_url,
@@ -185,17 +190,17 @@ def main() -> None:
     prompt_path = resolve_prompt_path(args.language, args.prompt_root)
     prompt_text = prompt_path.read_text(encoding="utf-8")
 
-    source_lines = load_source_lines(args.file, args.preprocessed)
-    if not source_lines:
-        raise SystemExit("No source lines found to translate.")
+    source_paragraphs = load_source_paragraphs(args.file, args.preprocessed)
+    if not source_paragraphs:
+        raise SystemExit("No source paragraphs found to translate.")
 
-    progress = ProgressBar(total=len(source_lines))
+    progress = ProgressBar(total=len(source_paragraphs))
     print(progress.render(0, failed=0), end="", flush=True)
 
     failures = 0
     results: list[dict[str, Any]] = []
 
-    def process_line(index: int, text: str) -> dict[str, Any]:
+    def process_paragraph(index: int, text: str) -> dict[str, Any]:
         translation = ""
         error: str | None = None
         try:
@@ -210,7 +215,7 @@ def main() -> None:
         except (Exception, SystemExit) as exc:  # noqa: BLE001
             error = str(exc)
         return {
-            "line_index": index,
+            "paragraph_index": index,
             "source": text,
             "translation": translation,
             "error": error,
@@ -218,8 +223,8 @@ def main() -> None:
 
     with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
         futures = [
-            pool.submit(process_line, idx, line)
-            for idx, line in enumerate(source_lines, start=1)
+            pool.submit(process_paragraph, idx, paragraph)
+            for idx, paragraph in enumerate(source_paragraphs, start=1)
         ]
         for completed, future in enumerate(as_completed(futures), start=1):
             row = future.result()
@@ -230,9 +235,10 @@ def main() -> None:
 
     print()
 
-    results.sort(key=lambda row: int(row["line_index"]))
-    line_translations = [str(row["translation"]) for row in results]
-    full_translation = "\n".join(line_translations)
+    results.sort(key=lambda row: int(row["paragraph_index"]))
+    paragraph_translations = [str(row["translation"]) for row in results]
+    full_translation = "\n\n".join(paragraph_translations)
+    whole_translation = full_translation
 
     language_dir = args.output_root / args.language.lower().replace(" ", "_")
     language_dir.mkdir(parents=True, exist_ok=True)
@@ -241,19 +247,20 @@ def main() -> None:
     payload = {
         "language": args.language,
         "model": args.model,
-        "input_file": str(args.file),
+        "input_file": str(args.file) if args.file else None,
         "preprocessed": str(args.preprocessed) if args.preprocessed else None,
         "prompt": str(prompt_path),
-        "line_translations": line_translations,
+        "paragraph_translations": paragraph_translations,
         "full_translation": full_translation,
+        "whole_translation": whole_translation,
         "records": results,
         "failures": failures,
     }
     output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    print(f"Translated lines: {len(source_lines)}")
+    print(f"Translated paragraphs: {len(source_paragraphs)}")
     if failures:
-        print(f"Completed with {failures} failed line(s).")
+        print(f"Completed with {failures} failed paragraph(s).")
     print(f"Output JSON: {output_path}")
 
 
