@@ -27,5 +27,6 @@
   "error.submitEmail": "Échec de l'envoi de l'e-mail.",
   "more.signup.languageRequired": "Veuillez d’abord choisir une langue.",
   "more.signup.rateLimited": "Trop de tentatives d’inscription. Veuillez réessayer plus tard.",
-  "more.signup.storageUnavailable": "Le stockage des inscriptions est temporairement indisponible. Veuillez réessayer plus tard."
+  "more.signup.storageUnavailable": "Le stockage des inscriptions est temporairement indisponible. Veuillez réessayer plus tard.",
+  "more.signup.placeholder": "vous@exemple.com"
 }

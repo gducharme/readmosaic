@@ -307,7 +307,7 @@ function renderMoreSignup() {
     <h3>${escapeHtml(t('more.signup.title', 'Want more chapters?'))}</h3>
     <p>${escapeHtml(t('more.signup.description', "Enter your email address and we'll notify you when more chapters are available."))}</p>
     <form id="more-signup-form" class="access-row">
-      <input id="more-email" type="email" autocomplete="email" placeholder="you@example.com" required autofocus />
+      <input id="more-email" type="email" autocomplete="email" placeholder="${escapeHtml(t('more.signup.placeholder', 'you@example.com'))}" required autofocus />
       <button type="submit">${escapeHtml(t('more.signup.submit', 'Submit'))}</button>
     </form>
     <p id="more-signup-status" class="status"></p>
@@ -340,8 +340,8 @@ function renderMoreSignup() {
         status.textContent = t('more.signup.alreadyExists', 'You are already on the list for this language.');
       } else {
         status.textContent = t('more.signup.success', 'Thanks! You are on the list for updates.');
+        form.reset();
       }
-      form.reset();
     } catch (error) {
       status.textContent = error.message;
     } finally {

@@ -217,6 +217,14 @@ async function appendEmailSignup(email, lang) {
   return queueSignupWrite(async () => {
     let existing = '';
     try {
+      const signupFileStat = await fs.stat(EMAIL_SIGNUPS_FILE);
+      if (signupFileStat.size > EMAIL_SIGNUPS_FILE_MAX_BYTES) {
+        const error = new Error('Email signup storage is temporarily unavailable.');
+        error.status = 503;
+        error.appCode = 'signup_storage_limit';
+        throw error;
+      }
+
       existing = await fs.readFile(EMAIL_SIGNUPS_FILE, 'utf8');
     } catch (error) {
       if (error.code !== 'ENOENT') throw error;
