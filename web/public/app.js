@@ -9,6 +9,8 @@ const state = {
   pages: [],
   editor: null,
   readerResizeHandler: null,
+  i18nLang: 'en',
+  i18nDict: {},
 };
 
 const rtlLangPrefixes = ['ar', 'fa', 'he', 'ur'];
@@ -35,10 +37,28 @@ const escapeHtml = (value) =>
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#039;');
 
-function moreLabelForLanguage(lang) {
-  const normalizedLang = (lang || '').trim().toLowerCase();
-  if (normalizedLang.startsWith('ar')) return 'المزيد';
-  return 'more';
+
+const DEFAULT_I18N_LANG = 'en';
+
+function t(key, fallback = key) {
+  return state.i18nDict[key] || fallback;
+}
+
+async function loadI18n(lang) {
+  const normalizedLang = (lang || '').trim().toLowerCase() || DEFAULT_I18N_LANG;
+  const response = await fetch(`/api/i18n/${encodeURIComponent(normalizedLang)}`, { headers: authHeaders() });
+
+  if (response.status === 404 && normalizedLang !== DEFAULT_I18N_LANG) {
+    return loadI18n(DEFAULT_I18N_LANG);
+  }
+
+  if (!response.ok) {
+    throw new Error(`Failed to load translations for ${normalizedLang}.`);
+  }
+
+  const dict = await response.json();
+  state.i18nLang = normalizedLang;
+  state.i18nDict = dict;
 }
 
 function clearReaderResizeHandler() {
@@ -55,32 +75,32 @@ function authHeaders() {
 const api = {
   async getLangs() {
     const res = await fetch('/api/langs', { headers: authHeaders() });
-    if (res.status === 401) throw new Error('Unauthorized access code.');
-    if (res.status === 429) throw new Error('Too many attempts. Try again soon.');
-    if (!res.ok) throw new Error('Failed to load languages.');
+    if (res.status === 401) throw new Error(t('error.unauthorized', 'Unauthorized access code.'));
+    if (res.status === 429) throw new Error(t('error.rateLimited', 'Too many attempts. Try again soon.'));
+    if (!res.ok) throw new Error(t('error.loadLanguages', 'Failed to load languages.'));
     return res.json();
   },
   async whoami() {
     const res = await fetch('/api/whoami', { headers: authHeaders() });
-    if (res.status === 401) throw new Error('Unauthorized access code.');
-    if (res.status === 429) throw new Error('Too many attempts. Try again soon.');
-    if (!res.ok) throw new Error('Failed to validate access code.');
+    if (res.status === 401) throw new Error(t('error.unauthorized', 'Unauthorized access code.'));
+    if (res.status === 429) throw new Error(t('error.rateLimited', 'Too many attempts. Try again soon.'));
+    if (!res.ok) throw new Error(t('error.validateCode', 'Failed to validate access code.'));
     return res.json();
   },
   async getChapters(lang) {
     const res = await fetch(`/api/chapters/${encodeURIComponent(lang)}`, { headers: authHeaders() });
-    if (res.status === 401) throw new Error('Unauthorized access code.');
-    if (res.status === 429) throw new Error('Too many attempts. Try again soon.');
-    if (!res.ok) throw new Error('Failed to load chapters.');
+    if (res.status === 401) throw new Error(t('error.unauthorized', 'Unauthorized access code.'));
+    if (res.status === 429) throw new Error(t('error.rateLimited', 'Too many attempts. Try again soon.'));
+    if (!res.ok) throw new Error(t('error.loadChapters', 'Failed to load chapters.'));
     return res.json();
   },
   async getContent(lang, file) {
     const res = await fetch(`/api/content/${encodeURIComponent(lang)}/${encodeURIComponent(file)}`, {
       headers: authHeaders(),
     });
-    if (res.status === 401) throw new Error('Unauthorized access code.');
-    if (res.status === 429) throw new Error('Too many attempts. Try again soon.');
-    if (!res.ok) throw new Error('Failed to load content.');
+    if (res.status === 401) throw new Error(t('error.unauthorized', 'Unauthorized access code.'));
+    if (res.status === 429) throw new Error(t('error.rateLimited', 'Too many attempts. Try again soon.'));
+    if (!res.ok) throw new Error(t('error.loadContent', 'Failed to load content.'));
     return res.text();
   },
   async saveContent(lang, file, content) {
@@ -90,10 +110,10 @@ const api = {
       body: JSON.stringify({ content }),
     });
 
-    if (res.status === 401) throw new Error('Unauthorized access code.');
-    if (res.status === 429) throw new Error('Too many attempts. Try again soon.');
-    if (res.status === 403) throw new Error('Archivist access code required.');
-    if (!res.ok) throw new Error('Failed to save content.');
+    if (res.status === 401) throw new Error(t('error.unauthorized', 'Unauthorized access code.'));
+    if (res.status === 429) throw new Error(t('error.rateLimited', 'Too many attempts. Try again soon.'));
+    if (res.status === 403) throw new Error(t('error.archivistRequired', 'Archivist access code required.'));
+    if (!res.ok) throw new Error(t('error.saveContent', 'Failed to save content.'));
     return res.json();
   },
   async submitMoreSignup(lang, email) {
@@ -103,16 +123,16 @@ const api = {
       body: JSON.stringify({ lang, email }),
     });
 
-    if (res.status === 401) throw new Error('Unauthorized access code.');
-    if (res.status === 429) throw new Error('Too many attempts. Try again soon.');
+    if (res.status === 401) throw new Error(t('error.unauthorized', 'Unauthorized access code.'));
+    if (res.status === 429) throw new Error(t('error.rateLimited', 'Too many attempts. Try again soon.'));
 
     const contentType = res.headers.get('content-type') || '';
     if (!contentType.includes('application/json')) {
-      throw new Error('Unexpected server response.');
+      throw new Error(t('error.unexpectedResponse', 'Unexpected server response.'));
     }
 
     const body = await res.json();
-    if (!res.ok) throw new Error(body.error || 'Failed to submit email.');
+    if (!res.ok) throw new Error(body.error || t('error.submitEmail', 'Failed to submit email.'));
     return body;
   },
 };
@@ -130,7 +150,7 @@ function setDir(element) {
   element.classList.toggle('is-rtl', isRtl);
 }
 
-function renderLogin() {
+async function renderLogin() {
   clearReaderResizeHandler();
   if (state.editor) {
     state.editor.toTextArea();
@@ -142,12 +162,14 @@ function renderLogin() {
   state.file = null;
   state.accessCode = null;
 
+  await loadI18n(DEFAULT_I18N_LANG);
+
   app.innerHTML = `
     <section class="prompt">
-      <h2>ENTER ACCESS CODE:</h2>
+      <h2>${escapeHtml(t('login.title', 'ENTER ACCESS CODE:'))}</h2>
       <form id="login-form" class="access-row">
         <input id="access-code" type="password" autocomplete="off" autofocus />
-        <button type="submit">ENTER</button>
+        <button type="submit">${escapeHtml(t('login.enter', 'ENTER'))}</button>
       </form>
       <p id="login-error" class="status"></p>
     </section>
@@ -162,13 +184,13 @@ function renderLogin() {
     const code = input.value.trim();
 
     if (!code) {
-      error.textContent = 'ENTER A CODE';
+      error.textContent = t('login.enterCode', 'ENTER A CODE');
       input.select();
       return;
     }
 
     state.accessCode = code;
-    error.textContent = 'AUTHORIZING...';
+    error.textContent = t('login.authorizing', 'AUTHORIZING...');
 
     try {
       const identity = await api.whoami();
@@ -184,7 +206,7 @@ function renderLogin() {
     } catch (authError) {
       state.mode = null;
       state.accessCode = null;
-      error.textContent = authError.message === 'Too many attempts. Try again soon.' ? authError.message : 'ACCESS CODE REJECTED BY SERVER';
+      error.textContent = authError.message === t('error.rateLimited', 'Too many attempts. Try again soon.') ? authError.message : t('login.rejected', 'ACCESS CODE REJECTED BY SERVER');
       input.select();
     }
   });
@@ -198,10 +220,10 @@ async function renderLanguageSelection() {
     const langs = await api.getLangs();
 
     app.innerHTML = `
-      <h2>Select Language</h2>
+      <h2>${escapeHtml(t('language.select', 'Select Language'))}</h2>
       <div class="selection-grid" id="langs-grid"></div>
       <div class="footer-nav">
-        <span class="nav-link" id="back-login">[ &lt; BACK ]</span>
+        <span class="nav-link" id="back-login">[ &lt; ${escapeHtml(t('nav.back', 'BACK'))} ]</span>
       </div>
     `;
 
@@ -210,14 +232,16 @@ async function renderLanguageSelection() {
       const node = document.createElement('button');
       node.className = 'option';
       node.textContent = lang;
-      node.addEventListener('click', () => {
+      node.addEventListener('click', async () => {
         state.lang = lang;
+        await loadI18n(lang);
+        setDir(document.body);
         renderChapterSelection();
       });
       grid.appendChild(node);
     });
 
-    document.getElementById('back-login').addEventListener('click', renderLogin);
+    document.getElementById('back-login').addEventListener('click', () => { renderLogin().catch((error) => { app.innerHTML = `<p>${escapeHtml(error.message)}</p>`; }); });
   } catch (error) {
     app.innerHTML = `<p>${escapeHtml(error.message)}</p>`;
   }
@@ -232,10 +256,10 @@ async function renderChapterSelection() {
 
     app.innerHTML = `
       <h2>Language: ${escapeHtml(state.lang)}</h2>
-      <h3>Select Chapter</h3>
+      <h3>${escapeHtml(t('chapter.select', 'Select Chapter'))}</h3>
       <div class="selection-grid" id="chapters-grid"></div>
       <div class="footer-nav">
-        <span class="nav-link" id="back-lang">[ &lt; BACK ]</span>
+        <span class="nav-link" id="back-lang">[ &lt; ${escapeHtml(t('nav.back', 'BACK'))} ]</span>
       </div>
     `;
 
@@ -257,7 +281,7 @@ async function renderChapterSelection() {
 
     const moreNode = document.createElement('button');
     moreNode.className = 'option';
-    moreNode.textContent = moreLabelForLanguage(state.lang);
+    moreNode.textContent = t('chapter.more', 'more');
     moreNode.addEventListener('click', renderMoreSignup);
     grid.appendChild(moreNode);
 
@@ -272,15 +296,15 @@ function renderMoreSignup() {
 
   app.innerHTML = `
     <h2>Language: ${escapeHtml(state.lang)}</h2>
-    <h3>Want more chapters?</h3>
-    <p>Enter your email address and we'll notify you when more chapters are available.</p>
+    <h3>${escapeHtml(t('more.signup.title', 'Want more chapters?'))}</h3>
+    <p>${escapeHtml(t('more.signup.description', "Enter your email address and we'll notify you when more chapters are available."))}</p>
     <form id="more-signup-form" class="access-row">
       <input id="more-email" type="email" autocomplete="email" placeholder="you@example.com" required autofocus />
-      <button type="submit">Submit</button>
+      <button type="submit">${escapeHtml(t('more.signup.submit', 'Submit'))}</button>
     </form>
     <p id="more-signup-status" class="status"></p>
     <div class="footer-nav">
-      <span class="nav-link" id="back-chapters">[ &lt; BACK ]</span>
+      <span class="nav-link" id="back-chapters">[ &lt; ${escapeHtml(t('nav.back', 'BACK'))} ]</span>
     </div>
   `;
 
@@ -294,20 +318,20 @@ function renderMoreSignup() {
     const email = emailInput.value.trim();
 
     if (!email || !emailInput.checkValidity()) {
-      status.textContent = 'Please enter a valid email address.';
+      status.textContent = t('more.signup.invalidEmail', 'Please enter a valid email address.');
       emailInput.focus();
       return;
     }
 
     submitButton.disabled = true;
-    status.textContent = 'Submitting...';
+    status.textContent = t('more.signup.submitting', 'Submitting...');
 
     try {
       const response = await api.submitMoreSignup(state.lang, email);
       if (response.status === 'already_exists') {
-        status.textContent = 'You are already on the list for this language.';
+        status.textContent = t('more.signup.alreadyExists', 'You are already on the list for this language.');
       } else {
-        status.textContent = 'Thanks! You are on the list for updates.';
+        status.textContent = t('more.signup.success', 'Thanks! You are on the list for updates.');
       }
       form.reset();
     } catch (error) {
@@ -496,9 +520,9 @@ async function renderEditor() {
         status.textContent = 'Saved.';
       } catch (error) {
         status.textContent = error.message;
-        if (error.message === 'Unauthorized access code.') {
+        if (error.message === t('error.unauthorized', 'Unauthorized access code.')) {
           setTimeout(() => {
-            renderLogin();
+            renderLogin().catch((error) => { app.innerHTML = `<p>${escapeHtml(error.message)}</p>`; });
           }, 700);
         }
       } finally {
@@ -516,4 +540,4 @@ async function renderEditor() {
   }
 }
 
-renderLogin();
+renderLogin().catch((error) => { app.innerHTML = `<p>${escapeHtml(error.message)}</p>`; });

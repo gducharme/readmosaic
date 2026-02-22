@@ -233,6 +233,22 @@ async function appendEmailSignup(email, lang) {
   });
 }
 
+
+app.get('/api/i18n/:lang', async (req, res, next) => {
+  try {
+    validateSegment(req.params.lang, 'language');
+    const i18nPath = path.join(__dirname, 'i18n', `${req.params.lang}.json`);
+    const text = await fs.readFile(i18nPath, 'utf8');
+    const dict = JSON.parse(text);
+    res.json(dict);
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      error.status = 500;
+    }
+    next(error);
+  }
+});
+
 app.use('/api', requireApiAuth);
 
 app.get('/api/whoami', (req, res) => {
