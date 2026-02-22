@@ -93,6 +93,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="LM Studio chat completions URL.")
     parser.add_argument("--timeout", type=int, default=180, help="HTTP timeout in seconds.")
     parser.add_argument("--concurrency", type=int, default=4, help="Parallel request count.")
+    parser.add_argument(
+        "--retry",
+        type=int,
+        default=1,
+        help="Retry count per paragraph after an initial failure (default: 1).",
+    )
     return parser.parse_args()
 
 
@@ -105,6 +111,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise SystemExit(f"Preprocessed path not found: {args.preprocessed}")
     if args.concurrency < 1:
         raise SystemExit("--concurrency must be at least 1")
+    if args.retry < 0:
+        raise SystemExit("--retry must be 0 or greater")
 
 
 def _candidate_prompt_paths(prompt_root: Path, language: str) -> list[Path]:
@@ -203,17 +211,22 @@ def main() -> None:
     def process_paragraph(index: int, text: str) -> dict[str, Any]:
         translation = ""
         error: str | None = None
-        try:
-            translation = call_lm(
-                args.base_url,
-                args.model,
-                prompt_text,
-                args.language,
-                text,
-                args.timeout,
-            )
-        except (Exception, SystemExit) as exc:  # noqa: BLE001
-            error = str(exc)
+        for attempt in range(args.retry + 1):
+            try:
+                translation = call_lm(
+                    args.base_url,
+                    args.model,
+                    prompt_text,
+                    args.language,
+                    text,
+                    args.timeout,
+                )
+                error = None
+                break
+            except (Exception, SystemExit) as exc:  # noqa: BLE001
+                error = str(exc)
+                if attempt >= args.retry:
+                    break
         return {
             "paragraph_index": index,
             "source": text,
