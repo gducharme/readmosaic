@@ -24,5 +24,8 @@
   "error.archivistRequired": "Archivist access code required.",
   "error.saveContent": "Failed to save content.",
   "error.unexpectedResponse": "Unexpected server response.",
-  "error.submitEmail": "Failed to submit email."
+  "error.submitEmail": "Failed to submit email.",
+  "more.signup.languageRequired": "Please choose a language first.",
+  "more.signup.rateLimited": "Too many signup attempts. Please retry later.",
+  "more.signup.storageUnavailable": "Signup storage is temporarily unavailable. Please try again later."
 }

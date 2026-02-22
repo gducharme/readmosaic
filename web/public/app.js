@@ -132,7 +132,15 @@ const api = {
     }
 
     const body = await res.json();
-    if (!res.ok) throw new Error(body.error || t('error.submitEmail', 'Failed to submit email.'));
+    if (!res.ok) {
+      const localizedErrors = {
+        missing_language: t('more.signup.languageRequired', 'Please choose a language first.'),
+        signup_rate_limited: t('more.signup.rateLimited', 'Too many signup attempts. Please retry later.'),
+        invalid_email: t('more.signup.invalidEmail', 'Please enter a valid email address.'),
+        signup_storage_limit: t('more.signup.storageUnavailable', 'Signup storage is temporarily unavailable. Please try again later.'),
+      };
+      throw new Error(localizedErrors[body.code] || body.error || t('error.submitEmail', 'Failed to submit email.'));
+    }
     return body;
   },
 };

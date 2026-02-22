@@ -24,5 +24,8 @@
   "error.archivistRequired": "مطلوب رمز الأرشيفي.",
   "error.saveContent": "فشل حفظ المحتوى.",
   "error.unexpectedResponse": "استجابة خادم غير متوقعة.",
-  "error.submitEmail": "فشل إرسال البريد الإلكتروني."
+  "error.submitEmail": "فشل إرسال البريد الإلكتروني.",
+  "more.signup.languageRequired": "يرجى اختيار لغة أولاً.",
+  "more.signup.rateLimited": "محاولات تسجيل كثيرة جدًا. يُرجى المحاولة لاحقًا.",
+  "more.signup.storageUnavailable": "تخزين الاشتراكات غير متاح مؤقتًا. يرجى المحاولة لاحقًا."
 }

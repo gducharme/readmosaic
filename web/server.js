@@ -138,11 +138,28 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const EMAIL_SIGNUP_WINDOW_MS = 60 * 1000;
 const EMAIL_SIGNUP_MAX_ATTEMPTS = 6;
 const EMAIL_SIGNUP_HEADER = 'timestamp,language,email\n';
+const EMAIL_SIGNUPS_FILE_MAX_BYTES = 5 * 1024 * 1024;
+const EMAIL_SIGNUP_BUCKET_PRUNE_INTERVAL = 50;
 const emailSignupAttemptBuckets = new Map();
+let emailSignupAttemptCount = 0;
 let signupWriteQueue = Promise.resolve();
+
+function pruneEmailSignupAttempts(now) {
+  for (const [ip, bucket] of emailSignupAttemptBuckets.entries()) {
+    if (now - bucket.startedAt > EMAIL_SIGNUP_WINDOW_MS * 2) {
+      emailSignupAttemptBuckets.delete(ip);
+    }
+  }
+}
 
 function registerEmailSignupAttempt(ip) {
   const now = Date.now();
+  emailSignupAttemptCount += 1;
+
+  if (emailSignupAttemptCount % EMAIL_SIGNUP_BUCKET_PRUNE_INTERVAL === 0) {
+    pruneEmailSignupAttempts(now);
+  }
+
   const bucket = emailSignupAttemptBuckets.get(ip);
 
   if (!bucket || now - bucket.startedAt > EMAIL_SIGNUP_WINDOW_MS) {
@@ -193,6 +210,7 @@ async function appendEmailSignup(email, lang) {
   if (!EMAIL_REGEX.test(normalizedEmail)) {
     const error = new Error('Please enter a valid email address.');
     error.status = 400;
+    error.appCode = 'invalid_email';
     throw error;
   }
 
@@ -202,6 +220,13 @@ async function appendEmailSignup(email, lang) {
       existing = await fs.readFile(EMAIL_SIGNUPS_FILE, 'utf8');
     } catch (error) {
       if (error.code !== 'ENOENT') throw error;
+    }
+
+    if (existing && Buffer.byteLength(existing, 'utf8') > EMAIL_SIGNUPS_FILE_MAX_BYTES) {
+      const error = new Error('Email signup storage is temporarily unavailable.');
+      error.status = 503;
+      error.appCode = 'signup_storage_limit';
+      throw error;
     }
 
     const lines = existing.split('\n').filter(Boolean);
@@ -312,18 +337,26 @@ app.post('/api/more-signups', async (req, res, next) => {
     const lang = typeof req.body?.lang === 'string' ? req.body.lang.trim() : '';
 
     if (!lang) {
-      return res.status(400).json({ error: 'Language is required.' });
+      return res.status(400).json({ error: 'Language is required.', code: 'missing_language' });
     }
 
     const attempts = registerEmailSignupAttempt(req.clientIp);
     if (attempts > EMAIL_SIGNUP_MAX_ATTEMPTS) {
-      return res.status(429).json({ error: 'Too many email signup attempts. Please retry later.' });
+      return res.status(429).json({ error: 'Too many email signup attempts. Please retry later.', code: 'signup_rate_limited' });
     }
 
     validateSegment(lang, 'language');
     const result = await appendEmailSignup(email, lang);
     return res.json({ ok: true, status: result.status });
   } catch (error) {
+    if (error.status && error.status < 500) {
+      return res.status(error.status).json({ error: error.message, code: error.appCode || 'invalid_request' });
+    }
+
+    if (error.appCode === 'signup_storage_limit') {
+      return res.status(503).json({ error: error.message, code: error.appCode });
+    }
+
     next(error);
   }
 });
