@@ -196,8 +196,6 @@ def atomic_write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
     _fsync_directory(path.parent)
 
 
-
-
 def _coerce_optional_list_field(
     paragraph_state_row: dict[str, Any],
     field_name: str,
@@ -215,6 +213,7 @@ def _coerce_optional_list_field(
             f"rework_queued paragraph '{paragraph_id}' field '{field_name}' must be a list when provided"
         )
     return list(value)
+
 
 def build_rework_queue_packet(paragraph_state_row: dict[str, Any]) -> dict[str, Any] | None:
     if paragraph_state_row.get("status") != "rework_queued":
@@ -247,6 +246,9 @@ def build_rework_queue_packet(paragraph_state_row: dict[str, Any]) -> dict[str, 
     )
     if required_fixes is None:
         required_fixes = list(failure_reasons)
+    if not failure_reasons and not required_fixes:
+        failure_reasons = ["unspecified_failure"]
+        required_fixes = ["unspecified_failure"]
 
     failure_history = _coerce_optional_list_field(
         paragraph_state_row,
@@ -598,7 +600,7 @@ def _exec_phase_command(
             raise TimeoutError(f"Phase command timed out after {timeout_seconds}s: {' '.join(command)}") from exc
         return
 
-    process = subprocess.Popen(command)
+    process = subprocess.Popen(command, stdout=sys.stdout, stderr=sys.stderr)
     stop_heartbeat = threading.Event()
     heartbeat_error: Exception | None = None
 
@@ -799,7 +801,7 @@ def _compute_status_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
         if isinstance(status, str):
             status_counts[status] = status_counts.get(status, 0) + 1
 
-        excluded = bool(row.get("excluded_by_policy", False))
+        excluded = row.get("excluded_by_policy", False) is True
         if excluded:
             continue
         required_total += 1
@@ -980,6 +982,8 @@ def run_phase_d(
 
 
 def run_phase_e(paths: dict[str, Path], *, max_paragraph_attempts: int, bump_attempts: bool = True) -> None:
+    # Attempts are incremented only in phase E. Phase D computes review-state
+    # transitions without mutating attempts so policy ownership stays centralized.
     rows = read_jsonl(paths["paragraph_state"], strict=True)
     rework_rows = [row for row in rows if row.get("status") == "rework_queued"]
     for row in rework_rows:
@@ -1207,8 +1211,26 @@ def main() -> None:
             phase_finished_at=None,
             last_heartbeat_at=progress_state["last_heartbeat_at"],
         )
+        heartbeat_stop = threading.Event()
+        heartbeat_error: Exception | None = None
+
+        def _heartbeat_loop() -> None:
+            nonlocal heartbeat_error
+            while not heartbeat_stop.wait(1):
+                try:
+                    maybe_heartbeat()
+                except Exception as exc:  # noqa: BLE001
+                    heartbeat_error = exc
+                    heartbeat_stop.set()
+                    break
+
+        heartbeat_thread = threading.Thread(target=_heartbeat_loop, daemon=True)
+        heartbeat_thread.start()
         try:
+            maybe_heartbeat()
             runner()
+            if heartbeat_error is not None:
+                raise heartbeat_error
         except Exception:
             _write_progress(
                 paths,
@@ -1221,6 +1243,11 @@ def main() -> None:
                 last_heartbeat_at=progress_state["last_heartbeat_at"],
             )
             raise
+        finally:
+            heartbeat_stop.set()
+            heartbeat_thread.join(timeout=2)
+            if heartbeat_error is not None:
+                raise heartbeat_error
         _write_progress(
             paths,
             run_id=args.run_id,
@@ -1235,7 +1262,10 @@ def main() -> None:
         marker_path.parent.mkdir(parents=True, exist_ok=True)
         marker_tmp = marker_path.with_name(f".{marker_path.name}.tmp.{os.getpid()}")
         try:
-            marker_tmp.write_text(_utc_now_iso() + "\n", encoding="utf-8")
+            with marker_tmp.open("w", encoding="utf-8") as handle:
+                handle.write(_utc_now_iso() + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
             os.replace(marker_tmp, marker_path)
             _fsync_directory(marker_path.parent)
         finally:

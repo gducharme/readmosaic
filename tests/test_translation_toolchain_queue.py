@@ -11,6 +11,7 @@ from scripts.translation_toolchain import (
     build_rework_queue_packet,
     build_rework_queue_rows,
     read_jsonl,
+    _compute_status_report,
 )
 
 
@@ -89,7 +90,7 @@ class TranslationToolchainQueueTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             build_rework_queue_packet({"status": "rework_queued", "paragraph_id": "p_01"})
 
-    def test_empty_explicit_failure_fields_do_not_fallback(self) -> None:
+    def test_empty_explicit_failure_fields_fallback_to_unspecified(self) -> None:
         packet = build_rework_queue_packet(
             {
                 "paragraph_id": "p_003",
@@ -101,8 +102,8 @@ class TranslationToolchainQueueTests(unittest.TestCase):
             }
         )
         assert packet is not None
-        self.assertEqual(packet["failure_reasons"], [])
-        self.assertEqual(packet["required_fixes"], [])
+        self.assertEqual(packet["failure_reasons"], ["unspecified_failure"])
+        self.assertEqual(packet["required_fixes"], ["unspecified_failure"])
 
 
     def test_packet_raises_for_non_list_failure_fields(self) -> None:
@@ -135,6 +136,20 @@ class TranslationToolchainQueueTests(unittest.TestCase):
                     "failure_history": {"attempt": 1},
                 }
             )
+
+
+    def test_status_report_treats_string_false_excluded_as_not_excluded(self) -> None:
+        report = _compute_status_report(
+            [
+                {"paragraph_id": "p_1", "status": "ready_to_merge", "excluded_by_policy": "false"},
+                {"paragraph_id": "p_2", "status": "manual_review_required", "excluded_by_policy": False},
+                {"paragraph_id": "p_3", "status": "ready_to_merge", "excluded_by_policy": True},
+            ]
+        )
+
+        self.assertEqual(report["required_total"], 2)
+        self.assertEqual(report["done"], 1)
+        self.assertEqual(report["required_merge_blockers"], 1)
 
     def test_queue_rows_are_sorted_by_paragraph_id(self) -> None:
         out = build_rework_queue_rows(
