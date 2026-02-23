@@ -30,6 +30,7 @@ from scripts.translation_toolchain import (
     _resolve_pipeline_languages,
     _resolve_subset_paragraph_ids,
     run_rework_translation_stage,
+    parse_args,
 )
 
 
@@ -602,6 +603,9 @@ class TranslationToolchainQueueTests(unittest.TestCase):
             final_candidate = root / "final" / "candidate.md"
             final_candidate.write_text("text", encoding="utf-8")
             paths = {
+                "run_root": root,
+                "pass1_pre": root / "pass1_pre",
+                "pass2_pre": root / "pass2_pre",
                 "paragraph_state": state_path,
                 "final_candidate": final_candidate,
                 "candidate_map": candidate_map,
@@ -610,13 +614,34 @@ class TranslationToolchainQueueTests(unittest.TestCase):
                 "rework_queue": root / "state" / "rework_queue.jsonl",
             }
 
-            def _stub_exec(*args, **kwargs):
+            def _stub_exec(command, **kwargs):
                 self.assertEqual(read_jsonl(state_path)[0]["status"], "review_in_progress")
-                atomic_write_jsonl(paths["paragraph_scores"], [])
-                atomic_write_jsonl(paths["rework_queue"], [])
+                script_name = Path(command[1]).name
+                if script_name == "grammar_auditor.py":
+                    out_dir = Path(command[command.index("--output-dir") + 1])
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    (out_dir / "grammar_audit_issues_20260101T000000Z.json").write_text(
+                        json.dumps([{"paragraph_id": "p_1", "scores": {"grammar": 1.0}, "issues": []}]),
+                        encoding="utf-8",
+                    )
+                elif script_name == "normalize_review_output.py":
+                    out_path = Path(command[command.index("--output") + 1])
+                    atomic_write_jsonl(out_path, [])
+                elif script_name == "aggregate_paragraph_reviews.py":
+                    atomic_write_jsonl(paths["paragraph_scores"], [])
+                    atomic_write_jsonl(paths["rework_queue"], [])
 
             with patch("scripts.translation_toolchain._exec_phase_command", side_effect=_stub_exec):
-                run_phase_d(paths, max_paragraph_attempts=4, phase_timeout_seconds=0, should_abort=lambda: None)
+                run_phase_d(
+                    paths,
+                    run_id="run_1",
+                    max_paragraph_attempts=4,
+                    phase_timeout_seconds=0,
+                    should_abort=lambda: None,
+                    model="gpt-4o-mini",
+                    run_typographic_reviewer=False,
+                    run_critics_reviewer=False,
+                )
 
 
     def test_phase_d_only_marks_candidate_map_rows_review_in_progress(self) -> None:
@@ -637,6 +662,9 @@ class TranslationToolchainQueueTests(unittest.TestCase):
             final_candidate = root / "final" / "candidate.md"
             final_candidate.write_text("text", encoding="utf-8")
             paths = {
+                "run_root": root,
+                "pass1_pre": root / "pass1_pre",
+                "pass2_pre": root / "pass2_pre",
                 "paragraph_state": state_path,
                 "final_candidate": final_candidate,
                 "candidate_map": candidate_map,
@@ -645,12 +673,33 @@ class TranslationToolchainQueueTests(unittest.TestCase):
                 "rework_queue": root / "state" / "rework_queue.jsonl",
             }
 
-            def _stub_exec(*args, **kwargs):
-                atomic_write_jsonl(paths["paragraph_scores"], [])
-                atomic_write_jsonl(paths["rework_queue"], [])
+            def _stub_exec(command, **kwargs):
+                script_name = Path(command[1]).name
+                if script_name == "grammar_auditor.py":
+                    out_dir = Path(command[command.index("--output-dir") + 1])
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    (out_dir / "grammar_audit_issues_20260101T000000Z.json").write_text(
+                        json.dumps([{"paragraph_id": "p_1", "scores": {"grammar": 1.0}, "issues": []}]),
+                        encoding="utf-8",
+                    )
+                elif script_name == "normalize_review_output.py":
+                    out_path = Path(command[command.index("--output") + 1])
+                    atomic_write_jsonl(out_path, [])
+                elif script_name == "aggregate_paragraph_reviews.py":
+                    atomic_write_jsonl(paths["paragraph_scores"], [])
+                    atomic_write_jsonl(paths["rework_queue"], [])
 
             with patch("scripts.translation_toolchain._exec_phase_command", side_effect=_stub_exec):
-                run_phase_d(paths, max_paragraph_attempts=4, phase_timeout_seconds=0, should_abort=lambda: None)
+                run_phase_d(
+                    paths,
+                    run_id="run_1",
+                    max_paragraph_attempts=4,
+                    phase_timeout_seconds=0,
+                    should_abort=lambda: None,
+                    model="gpt-4o-mini",
+                    run_typographic_reviewer=False,
+                    run_critics_reviewer=False,
+                )
 
             rows = {row["paragraph_id"]: row for row in read_jsonl(state_path)}
             self.assertEqual(rows["p_1"]["status"], "review_in_progress")
@@ -672,6 +721,9 @@ class TranslationToolchainQueueTests(unittest.TestCase):
             final_candidate = root / "final" / "candidate.md"
             final_candidate.write_text("text", encoding="utf-8")
             paths = {
+                "run_root": root,
+                "pass1_pre": root / "pass1_pre",
+                "pass2_pre": root / "pass2_pre",
                 "paragraph_state": state_path,
                 "final_candidate": final_candidate,
                 "candidate_map": candidate_map,
@@ -681,7 +733,16 @@ class TranslationToolchainQueueTests(unittest.TestCase):
             }
 
             with self.assertRaises(ValueError):
-                run_phase_d(paths, max_paragraph_attempts=4, phase_timeout_seconds=0, should_abort=lambda: None)
+                run_phase_d(
+                    paths,
+                    run_id="run_1",
+                    max_paragraph_attempts=4,
+                    phase_timeout_seconds=0,
+                    should_abort=lambda: None,
+                    run_grammar_reviewer=False,
+                    run_typographic_reviewer=False,
+                    run_critics_reviewer=False,
+                )
 
     def test_phase_d_rejects_candidate_map_ids_missing_in_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -698,6 +759,9 @@ class TranslationToolchainQueueTests(unittest.TestCase):
             final_candidate = root / "final" / "candidate.md"
             final_candidate.write_text("text", encoding="utf-8")
             paths = {
+                "run_root": root,
+                "pass1_pre": root / "pass1_pre",
+                "pass2_pre": root / "pass2_pre",
                 "paragraph_state": state_path,
                 "final_candidate": final_candidate,
                 "candidate_map": candidate_map,
@@ -707,7 +771,382 @@ class TranslationToolchainQueueTests(unittest.TestCase):
             }
 
             with self.assertRaises(ValueError):
-                run_phase_d(paths, max_paragraph_attempts=4, phase_timeout_seconds=0, should_abort=lambda: None)
+                run_phase_d(
+                    paths,
+                    run_id="run_1",
+                    max_paragraph_attempts=4,
+                    phase_timeout_seconds=0,
+                    should_abort=lambda: None,
+                    run_grammar_reviewer=False,
+                    run_typographic_reviewer=False,
+                    run_critics_reviewer=False,
+                )
+
+
+    def test_phase_d_runs_reviewer_chain_before_aggregation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state_path = root / "state" / "paragraph_state.jsonl"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_jsonl(
+                state_path,
+                [{"paragraph_id": "p_1", "status": "candidate_assembled", "attempt": 0, "excluded_by_policy": False, "failure_history": [], "content_hash": "sha256:" + "9" * 64}],
+            )
+            candidate_map = root / "final" / "candidate_map.jsonl"
+            candidate_map.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_jsonl(candidate_map, [{"paragraph_id": "p_1", "paragraph_index": 1, "start_line": 1, "end_line": 1}])
+            final_candidate = root / "final" / "candidate.md"
+            final_candidate.write_text("text", encoding="utf-8")
+            (root / "pass1_pre").mkdir(parents=True, exist_ok=True)
+            (root / "pass2_pre").mkdir(parents=True, exist_ok=True)
+            atomic_write_jsonl(root / "pass1_pre" / "paragraphs.jsonl", [{"paragraph_id": "p_1", "text": "text"}])
+            atomic_write_jsonl(root / "pass2_pre" / "paragraphs.jsonl", [{"paragraph_id": "p_1", "text": "text"}])
+
+            paths = {
+                "run_root": root,
+                "pass1_pre": root / "pass1_pre",
+                "pass2_pre": root / "pass2_pre",
+                "paragraph_state": state_path,
+                "final_candidate": final_candidate,
+                "candidate_map": candidate_map,
+                "review_normalized": root / "review" / "normalized",
+                "paragraph_scores": root / "state" / "paragraph_scores.jsonl",
+                "rework_queue": root / "state" / "rework_queue.jsonl",
+            }
+
+            scripts_called: list[str] = []
+
+            def _stub_exec(command, **kwargs):
+                script_name = Path(command[1]).name
+                scripts_called.append(script_name)
+                if script_name == "grammar_auditor.py":
+                    out_dir = Path(command[command.index("--output-dir") + 1])
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    (out_dir / "grammar_audit_issues_20260101T000000Z.json").write_text(
+                        json.dumps([{"paragraph_id": "p_1", "scores": {"grammar": 0.95}, "issues": []}]),
+                        encoding="utf-8",
+                    )
+                elif script_name in {"typographic_precision_review.py", "critics_runner.py"}:
+                    out_path = Path(command[command.index("--output") + 1])
+                    out_path.parent.mkdir(parents=True, exist_ok=True)
+                    out_path.write_text(
+                        json.dumps({"issues": [{"issue_id": "i1", "line": 1, "description": "x", "severity": "major"}]}),
+                        encoding="utf-8",
+                    )
+                elif script_name == "map_review_to_paragraphs.py":
+                    out_path = Path(command[command.index("--output") + 1])
+                    atomic_write_jsonl(
+                        out_path,
+                        [{"paragraph_id": "p_1", "mapping_status": "mapped", "issue_id": "i1", "issue": {"severity": "major"}}],
+                    )
+                elif script_name == "normalize_review_output.py":
+                    out_path = Path(command[command.index("--output") + 1])
+                    atomic_write_jsonl(out_path, [{"paragraph_id": "p_1", "scores": {"grammar": 0.95}, "issues": [], "hard_fail": False}])
+                elif script_name == "aggregate_paragraph_reviews.py":
+                    atomic_write_jsonl(paths["paragraph_scores"], [{"paragraph_id": "p_1", "score": 0.95}])
+                    atomic_write_jsonl(paths["rework_queue"], [])
+
+            with patch("scripts.translation_toolchain._exec_phase_command", side_effect=_stub_exec):
+                run_phase_d(
+                    paths,
+                    run_id="run_1",
+                    max_paragraph_attempts=4,
+                    phase_timeout_seconds=0,
+                    should_abort=lambda: None,
+                    model="gpt-4o-mini",
+                    reviewer_models=["gpt-4o-mini"],
+                )
+
+            self.assertEqual(
+                scripts_called,
+                [
+                    "grammar_auditor.py",
+                    "typographic_precision_review.py",
+                    "critics_runner.py",
+                    "map_review_to_paragraphs.py",
+                    "map_review_to_paragraphs.py",
+                    "normalize_review_output.py",
+                    "aggregate_paragraph_reviews.py",
+                ],
+            )
+            self.assertTrue((root / "review" / "grammar" / "grammar_review.json").exists())
+            self.assertTrue((root / "review" / "mapped" / "typographic.jsonl").exists())
+            self.assertTrue((root / "review" / "mapped" / "critics.jsonl").exists())
+            self.assertTrue((root / "review" / "normalized" / "all_reviews.jsonl").exists())
+
+
+    def test_phase_d_raises_when_no_reviewers_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state_path = root / "state" / "paragraph_state.jsonl"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_jsonl(
+                state_path,
+                [{"paragraph_id": "p_1", "status": "candidate_assembled", "attempt": 0, "excluded_by_policy": False, "failure_history": [], "content_hash": "sha256:" + "9" * 64}],
+            )
+            candidate_map = root / "final" / "candidate_map.jsonl"
+            candidate_map.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_jsonl(candidate_map, [{"paragraph_id": "p_1", "paragraph_index": 1, "start_line": 1, "end_line": 1}])
+            final_candidate = root / "final" / "candidate.md"
+            final_candidate.write_text("text", encoding="utf-8")
+            paths = {
+                "run_root": root,
+                "pass1_pre": root / "pass1_pre",
+                "pass2_pre": root / "pass2_pre",
+                "paragraph_state": state_path,
+                "final_candidate": final_candidate,
+                "candidate_map": candidate_map,
+                "review_normalized": root / "review" / "normalized",
+                "paragraph_scores": root / "state" / "paragraph_scores.jsonl",
+                "rework_queue": root / "state" / "rework_queue.jsonl",
+            }
+            with self.assertRaises(RuntimeError):
+                run_phase_d(
+                    paths,
+                    run_id="run_1",
+                    max_paragraph_attempts=4,
+                    phase_timeout_seconds=0,
+                    should_abort=lambda: None,
+                    run_grammar_reviewer=False,
+                    run_typographic_reviewer=False,
+                    run_critics_reviewer=False,
+                )
+
+    def test_phase_d_raises_when_manuscript_reviewer_output_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state_path = root / "state" / "paragraph_state.jsonl"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_jsonl(
+                state_path,
+                [{"paragraph_id": "p_1", "status": "candidate_assembled", "attempt": 0, "excluded_by_policy": False, "failure_history": [], "content_hash": "sha256:" + "9" * 64}],
+            )
+            candidate_map = root / "final" / "candidate_map.jsonl"
+            candidate_map.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_jsonl(candidate_map, [{"paragraph_id": "p_1", "paragraph_index": 1, "start_line": 1, "end_line": 1}])
+            final_candidate = root / "final" / "candidate.md"
+            final_candidate.write_text("text", encoding="utf-8")
+            (root / "pass1_pre").mkdir(parents=True, exist_ok=True)
+            atomic_write_jsonl(root / "pass1_pre" / "paragraphs.jsonl", [{"paragraph_id": "p_1", "text": "text"}])
+
+            paths = {
+                "run_root": root,
+                "pass1_pre": root / "pass1_pre",
+                "pass2_pre": root / "pass2_pre",
+                "paragraph_state": state_path,
+                "final_candidate": final_candidate,
+                "candidate_map": candidate_map,
+                "review_normalized": root / "review" / "normalized",
+                "paragraph_scores": root / "state" / "paragraph_scores.jsonl",
+                "rework_queue": root / "state" / "rework_queue.jsonl",
+            }
+
+            def _stub_exec(command, **kwargs):
+                script_name = Path(command[1]).name
+                if script_name == "grammar_auditor.py":
+                    out_dir = Path(command[command.index("--output-dir") + 1])
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    (out_dir / "grammar_audit_issues_20260101T000000Z.json").write_text(
+                        json.dumps([{"paragraph_id": "p_1", "scores": {"grammar": 1.0}, "issues": []}]),
+                        encoding="utf-8",
+                    )
+                elif script_name == "critics_runner.py":
+                    out_path = Path(command[command.index("--output") + 1])
+                    out_path.parent.mkdir(parents=True, exist_ok=True)
+                    out_path.write_text(json.dumps({"issues": []}), encoding="utf-8")
+                elif script_name == "map_review_to_paragraphs.py":
+                    out_path = Path(command[command.index("--output") + 1])
+                    atomic_write_jsonl(out_path, [])
+                elif script_name == "normalize_review_output.py":
+                    out_path = Path(command[command.index("--output") + 1])
+                    atomic_write_jsonl(out_path, [])
+                elif script_name == "aggregate_paragraph_reviews.py":
+                    atomic_write_jsonl(paths["paragraph_scores"], [])
+                    atomic_write_jsonl(paths["rework_queue"], [])
+
+            with patch("scripts.translation_toolchain._exec_phase_command", side_effect=_stub_exec):
+                with self.assertRaises(RuntimeError):
+                    run_phase_d(
+                        paths,
+                        run_id="run_1",
+                        max_paragraph_attempts=4,
+                        phase_timeout_seconds=0,
+                        should_abort=lambda: None,
+                        model="gpt-4o-mini",
+                        run_typographic_reviewer=True,
+                        run_critics_reviewer=True,
+                    )
+
+    def test_phase_d_raises_when_normalization_does_not_emit_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state_path = root / "state" / "paragraph_state.jsonl"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_jsonl(
+                state_path,
+                [{"paragraph_id": "p_1", "status": "candidate_assembled", "attempt": 0, "excluded_by_policy": False, "failure_history": [], "content_hash": "sha256:" + "9" * 64}],
+            )
+            candidate_map = root / "final" / "candidate_map.jsonl"
+            candidate_map.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_jsonl(candidate_map, [{"paragraph_id": "p_1", "paragraph_index": 1, "start_line": 1, "end_line": 1}])
+            final_candidate = root / "final" / "candidate.md"
+            final_candidate.write_text("text", encoding="utf-8")
+            (root / "pass1_pre").mkdir(parents=True, exist_ok=True)
+            atomic_write_jsonl(root / "pass1_pre" / "paragraphs.jsonl", [{"paragraph_id": "p_1", "text": "text"}])
+
+            paths = {
+                "run_root": root,
+                "pass1_pre": root / "pass1_pre",
+                "pass2_pre": root / "pass2_pre",
+                "paragraph_state": state_path,
+                "final_candidate": final_candidate,
+                "candidate_map": candidate_map,
+                "review_normalized": root / "review" / "normalized",
+                "paragraph_scores": root / "state" / "paragraph_scores.jsonl",
+                "rework_queue": root / "state" / "rework_queue.jsonl",
+            }
+
+            def _stub_exec(command, **kwargs):
+                script_name = Path(command[1]).name
+                if script_name == "grammar_auditor.py":
+                    out_dir = Path(command[command.index("--output-dir") + 1])
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    (out_dir / "grammar_audit_issues_20260101T000000Z.json").write_text(
+                        json.dumps([{"paragraph_id": "p_1", "scores": {"grammar": 1.0}, "issues": []}]),
+                        encoding="utf-8",
+                    )
+                elif script_name == "normalize_review_output.py":
+                    return
+                elif script_name == "aggregate_paragraph_reviews.py":
+                    self.fail("aggregate must not run when normalization output is missing")
+
+            with patch("scripts.translation_toolchain._exec_phase_command", side_effect=_stub_exec):
+                with self.assertRaises(RuntimeError):
+                    run_phase_d(
+                        paths,
+                        run_id="run_1",
+                        max_paragraph_attempts=4,
+                        phase_timeout_seconds=0,
+                        should_abort=lambda: None,
+                        model="gpt-4o-mini",
+                        run_typographic_reviewer=False,
+                        run_critics_reviewer=False,
+                    )
+
+
+    def test_phase_d_raises_when_mapping_does_not_emit_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state_path = root / "state" / "paragraph_state.jsonl"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_jsonl(
+                state_path,
+                [{"paragraph_id": "p_1", "status": "candidate_assembled", "attempt": 0, "excluded_by_policy": False, "failure_history": [], "content_hash": "sha256:" + "9" * 64}],
+            )
+            candidate_map = root / "final" / "candidate_map.jsonl"
+            candidate_map.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_jsonl(candidate_map, [{"paragraph_id": "p_1", "paragraph_index": 1, "start_line": 1, "end_line": 1}])
+            final_candidate = root / "final" / "candidate.md"
+            final_candidate.write_text("text", encoding="utf-8")
+            (root / "pass1_pre").mkdir(parents=True, exist_ok=True)
+            atomic_write_jsonl(root / "pass1_pre" / "paragraphs.jsonl", [{"paragraph_id": "p_1", "text": "text"}])
+
+            paths = {
+                "run_root": root,
+                "pass1_pre": root / "pass1_pre",
+                "pass2_pre": root / "pass2_pre",
+                "paragraph_state": state_path,
+                "final_candidate": final_candidate,
+                "candidate_map": candidate_map,
+                "review_normalized": root / "review" / "normalized",
+                "paragraph_scores": root / "state" / "paragraph_scores.jsonl",
+                "rework_queue": root / "state" / "rework_queue.jsonl",
+            }
+
+            def _stub_exec(command, **kwargs):
+                script_name = Path(command[1]).name
+                if script_name == "grammar_auditor.py":
+                    out_dir = Path(command[command.index("--output-dir") + 1])
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    (out_dir / "grammar_audit_issues_20260101T000000Z.json").write_text(
+                        json.dumps([{"paragraph_id": "p_1", "scores": {"grammar": 1.0}, "issues": []}]),
+                        encoding="utf-8",
+                    )
+                elif script_name == "typographic_precision_review.py":
+                    out_path = Path(command[command.index("--output") + 1])
+                    out_path.parent.mkdir(parents=True, exist_ok=True)
+                    out_path.write_text(json.dumps({"issues": [{"issue_id": "i1", "line": 1, "description": "x"}]}), encoding="utf-8")
+                elif script_name == "map_review_to_paragraphs.py":
+                    return
+
+            with patch("scripts.translation_toolchain._exec_phase_command", side_effect=_stub_exec):
+                with self.assertRaises(RuntimeError):
+                    run_phase_d(
+                        paths,
+                        run_id="run_1",
+                        max_paragraph_attempts=4,
+                        phase_timeout_seconds=0,
+                        should_abort=lambda: None,
+                        model="gpt-4o-mini",
+                        run_critics_reviewer=False,
+                    )
+
+    def test_phase_d_raises_when_aggregation_does_not_emit_expected_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state_path = root / "state" / "paragraph_state.jsonl"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_jsonl(
+                state_path,
+                [{"paragraph_id": "p_1", "status": "candidate_assembled", "attempt": 0, "excluded_by_policy": False, "failure_history": [], "content_hash": "sha256:" + "9" * 64}],
+            )
+            candidate_map = root / "final" / "candidate_map.jsonl"
+            candidate_map.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_jsonl(candidate_map, [{"paragraph_id": "p_1", "paragraph_index": 1, "start_line": 1, "end_line": 1}])
+            final_candidate = root / "final" / "candidate.md"
+            final_candidate.write_text("text", encoding="utf-8")
+            (root / "pass1_pre").mkdir(parents=True, exist_ok=True)
+            atomic_write_jsonl(root / "pass1_pre" / "paragraphs.jsonl", [{"paragraph_id": "p_1", "text": "text"}])
+
+            paths = {
+                "run_root": root,
+                "pass1_pre": root / "pass1_pre",
+                "pass2_pre": root / "pass2_pre",
+                "paragraph_state": state_path,
+                "final_candidate": final_candidate,
+                "candidate_map": candidate_map,
+                "review_normalized": root / "review" / "normalized",
+                "paragraph_scores": root / "state" / "paragraph_scores.jsonl",
+                "rework_queue": root / "state" / "rework_queue.jsonl",
+            }
+
+            def _stub_exec(command, **kwargs):
+                script_name = Path(command[1]).name
+                if script_name == "grammar_auditor.py":
+                    out_dir = Path(command[command.index("--output-dir") + 1])
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    (out_dir / "grammar_audit_issues_20260101T000000Z.json").write_text(
+                        json.dumps([{"paragraph_id": "p_1", "scores": {"grammar": 1.0}, "issues": []}]),
+                        encoding="utf-8",
+                    )
+                elif script_name == "normalize_review_output.py":
+                    out_path = Path(command[command.index("--output") + 1])
+                    atomic_write_jsonl(out_path, [])
+                elif script_name == "aggregate_paragraph_reviews.py":
+                    return
+
+            with patch("scripts.translation_toolchain._exec_phase_command", side_effect=_stub_exec):
+                with self.assertRaises(RuntimeError):
+                    run_phase_d(
+                        paths,
+                        run_id="run_1",
+                        max_paragraph_attempts=4,
+                        phase_timeout_seconds=0,
+                        should_abort=lambda: None,
+                        model="gpt-4o-mini",
+                        run_typographic_reviewer=False,
+                        run_critics_reviewer=False,
+                    )
 
     def test_phase_c5_rerun_does_not_backslide_review_in_progress_rows(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -741,6 +1180,9 @@ class TranslationToolchainQueueTests(unittest.TestCase):
                 ],
             )
             paths = {
+                "run_root": root,
+                "pass1_pre": root / "pass1_pre",
+                "pass2_pre": root / "pass2_pre",
                 "paragraph_state": state_path,
                 "rework_queue": root / "state" / "rework_queue.jsonl",
             }
@@ -759,6 +1201,9 @@ class TranslationToolchainQueueTests(unittest.TestCase):
                 [{"paragraph_id": "p_1", "status": "rework_queued", "attempt": 0, "excluded_by_policy": False, "failure_history": [], "content_hash": "sha256:" + "f" * 64}],
             )
             paths = {
+                "run_root": root,
+                "pass1_pre": root / "pass1_pre",
+                "pass2_pre": root / "pass2_pre",
                 "paragraph_state": state_path,
                 "rework_queue": root / "state" / "rework_queue.jsonl",
             }
@@ -993,6 +1438,13 @@ class TranslationToolchainQueueTests(unittest.TestCase):
             pass2_language="Tifinagh",
             model="gpt-4o-mini",
             rework_run_phase_f=False,
+            reviewer_models=[],
+            grammar_reviewer_model=None,
+            typographic_reviewer_model=None,
+            critics_reviewer_model=None,
+            skip_grammar_reviewer=True,
+            skip_typographic_reviewer=True,
+            skip_critics_reviewer=True,
         )
         with tempfile.TemporaryDirectory() as tmp:
             manifest = Path(tmp) / "manifest.json"
@@ -1018,6 +1470,13 @@ class TranslationToolchainQueueTests(unittest.TestCase):
             pass2_language="Tifinagh",
             model="gpt-4o-mini",
             rework_run_phase_f=True,
+            reviewer_models=[],
+            grammar_reviewer_model=None,
+            typographic_reviewer_model=None,
+            critics_reviewer_model=None,
+            skip_grammar_reviewer=True,
+            skip_typographic_reviewer=True,
+            skip_critics_reviewer=True,
         )
         with tempfile.TemporaryDirectory() as tmp:
             manifest = Path(tmp) / "manifest.json"
@@ -1390,6 +1849,9 @@ class TranslationToolchainQueueTests(unittest.TestCase):
                 encoding="utf-8",
             )
             paths = {
+                "run_root": root,
+                "pass1_pre": root / "pass1_pre",
+                "pass2_pre": root / "pass2_pre",
                 "paragraph_state": state_path,
                 "rework_queue": root / "rework_queue.jsonl",
             }
@@ -1438,6 +1900,42 @@ class TranslationToolchainQueueTests(unittest.TestCase):
                 Namespace(pipeline_profile=None, pass1_language=None, pass2_language=None)
             )
         self.assertEqual(exc.exception.code, 5)
+
+
+    def test_parse_args_accepts_phase_d_reviewer_options(self) -> None:
+        argv = [
+            "translation_toolchain.py",
+            "--mode",
+            "full",
+            "--run-id",
+            "run_1",
+            "--source",
+            "book.md",
+            "--pass1-language",
+            "Tamazight",
+            "--model",
+            "gpt-base",
+            "--reviewer-model",
+            "gpt-r1",
+            "--reviewer-model",
+            "gpt-r2",
+            "--grammar-reviewer-model",
+            "gpt-g",
+            "--typographic-reviewer-model",
+            "gpt-t",
+            "--critics-reviewer-model",
+            "gpt-c",
+            "--skip-typographic-reviewer",
+        ]
+        with patch.object(sys, "argv", argv):
+            parsed = parse_args()
+
+        self.assertEqual(parsed.reviewer_models, ["gpt-r1", "gpt-r2"])
+        self.assertEqual(parsed.grammar_reviewer_model, "gpt-g")
+        self.assertEqual(parsed.typographic_reviewer_model, "gpt-t")
+        self.assertEqual(parsed.critics_reviewer_model, "gpt-c")
+        self.assertTrue(parsed.skip_typographic_reviewer)
+
 
 
 if __name__ == "__main__":

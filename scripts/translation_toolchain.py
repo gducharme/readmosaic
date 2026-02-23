@@ -1631,19 +1631,69 @@ def run_phase_c5(paths: dict[str, Path]) -> None:
     _mutate_paragraph_statuses(paths, next_status="candidate_assembled", eligible_statuses={"translated_pass1", "translated_pass2"})
 
 
+def _resolve_review_preprocessed_dir(paths: dict[str, Path]) -> Path:
+    """Return the canonical preprocessed review input bundle.
+
+    pass2_pre is treated as the canonical final pre bundle when present (including
+    single-pass runs where pass1 artifacts may be copied into pass2_pre).
+    """
+    pass2_rows = paths["pass2_pre"] / "paragraphs.jsonl"
+    if pass2_rows.exists():
+        return paths["pass2_pre"]
+    return paths["pass1_pre"]
+
+
+def _resolve_reviewer_model(
+    explicit_model: str | None,
+    reviewer_models: list[str] | None,
+    default_model: str | None,
+    *,
+    reviewer_name: str,
+) -> str:
+    if explicit_model and explicit_model.strip():
+        return explicit_model.strip()
+    if reviewer_models:
+        for model in reviewer_models:
+            cleaned = model.strip()
+            if cleaned:
+                return cleaned
+    if default_model and default_model.strip():
+        return default_model.strip()
+    raise ValueError(f"Missing model for {reviewer_name} reviewer in Phase D.")
+
+
 def run_phase_d(
-    paths: dict[str, Path], *, max_paragraph_attempts: int, phase_timeout_seconds: int, should_abort: Callable[[], Exception | None]
+    paths: dict[str, Path],
+    *,
+    run_id: str,
+    max_paragraph_attempts: int,
+    phase_timeout_seconds: int,
+    should_abort: Callable[[], Exception | None],
+    model: str | None = None,
+    reviewer_models: list[str] | None = None,
+    grammar_reviewer_model: str | None = None,
+    typographic_reviewer_model: str | None = None,
+    critics_reviewer_model: str | None = None,
+    run_grammar_reviewer: bool = True,
+    run_typographic_reviewer: bool = True,
+    run_critics_reviewer: bool = True,
 ) -> None:
     if not paths["final_candidate"].exists() or not paths["candidate_map"].exists():
         raise FileNotFoundError(
             "Missing canonical assembler outputs required for manuscript-level review mapping: "
             f"{paths['final_candidate']} and {paths['candidate_map']}"
         )
+    review_root = paths["run_root"] / "review"
+    grammar_dir = review_root / "grammar"
+    manuscript_dir = review_root / "manuscript"
+    mapped_dir = review_root / "mapped"
     paths["review_normalized"].mkdir(parents=True, exist_ok=True)
+    grammar_dir.mkdir(parents=True, exist_ok=True)
+    manuscript_dir.mkdir(parents=True, exist_ok=True)
+    mapped_dir.mkdir(parents=True, exist_ok=True)
     paths["paragraph_scores"].parent.mkdir(parents=True, exist_ok=True)
     normalized_rows = paths["review_normalized"] / "all_reviews.jsonl"
-    if not normalized_rows.exists():
-        atomic_write_jsonl(normalized_rows, [])
+    review_pre_dir = _resolve_review_preprocessed_dir(paths)
 
     candidate_map_rows = read_jsonl(paths["candidate_map"], strict=True)
     reviewable_ids = {
@@ -1671,6 +1721,149 @@ def run_phase_d(
         paragraph_ids=reviewable_ids,
     )
 
+    grammar_output = grammar_dir / "grammar_review.json"
+    mapped_outputs: list[Path] = []
+
+    if run_grammar_reviewer:
+        grammar_model = _resolve_reviewer_model(
+            grammar_reviewer_model,
+            reviewer_models,
+            model,
+            reviewer_name="grammar",
+        )
+        _exec_phase_command(
+            [
+                sys.executable,
+                "scripts/grammar_auditor.py",
+                "--preprocessed",
+                str(review_pre_dir),
+                "--model",
+                grammar_model,
+                "--output-dir",
+                str(grammar_dir),
+            ],
+            timeout_seconds=phase_timeout_seconds or None,
+            should_abort=should_abort,
+        )
+        grammar_candidates = list(grammar_dir.glob("grammar_audit_issues_*.json"))
+        if not grammar_candidates:
+            raise RuntimeError("grammar reviewer produced no output")
+        latest_grammar_report = max(grammar_candidates, key=lambda path: path.stat().st_mtime)
+        shutil.copy2(latest_grammar_report, grammar_output)
+
+    manuscript_reviewers: list[tuple[str, list[str], Path]] = []
+
+    if run_typographic_reviewer:
+        typographic_model = _resolve_reviewer_model(
+            typographic_reviewer_model,
+            reviewer_models,
+            model,
+            reviewer_name="typographic",
+        )
+        typographic_output = manuscript_dir / "typographic_review.json"
+        manuscript_reviewers.append(
+            (
+                "typographic",
+                [
+                    sys.executable,
+                    "scripts/typographic_precision_review.py",
+                    "--file",
+                    str(paths["final_candidate"]),
+                    "--model",
+                    typographic_model,
+                    "--output",
+                    str(typographic_output),
+                ],
+                typographic_output,
+            )
+        )
+
+    if run_critics_reviewer:
+        critics_model = _resolve_reviewer_model(
+            critics_reviewer_model,
+            reviewer_models,
+            model,
+            reviewer_name="critics",
+        )
+        critics_output = manuscript_dir / "critics_review.json"
+        manuscript_reviewers.append(
+            (
+                "critics",
+                [
+                    sys.executable,
+                    "scripts/critics_runner.py",
+                    "--model",
+                    critics_model,
+                    "--manuscript",
+                    str(paths["final_candidate"]),
+                    "--output",
+                    str(critics_output),
+                ],
+                critics_output,
+            )
+        )
+
+    review_sources: list[tuple[str, Path, str]] = []
+
+    if run_grammar_reviewer:
+        review_sources.append(("grammar", grammar_output, "grammar"))
+
+    for reviewer_name, command, output_path in manuscript_reviewers:
+        _exec_phase_command(
+            command,
+            timeout_seconds=phase_timeout_seconds or None,
+            should_abort=should_abort,
+        )
+        if not output_path.exists():
+            raise RuntimeError(f"{reviewer_name} reviewer produced no output")
+        review_sources.append((reviewer_name, output_path, "manuscript"))
+
+    if not review_sources:
+        raise RuntimeError("No reviewers enabled for Phase D")
+
+    for reviewer_name, output_path, source_kind in review_sources:
+        if source_kind != "manuscript":
+            continue
+        mapped_output = mapped_dir / f"{reviewer_name}.jsonl"
+        _exec_phase_command(
+            [
+                sys.executable,
+                "scripts/map_review_to_paragraphs.py",
+                "--run-id",
+                run_id,
+                "--review-input",
+                str(output_path),
+                "--output",
+                str(mapped_output),
+                "--reviewer",
+                reviewer_name,
+            ],
+            timeout_seconds=phase_timeout_seconds or None,
+            should_abort=should_abort,
+        )
+        if not mapped_output.exists():
+            raise RuntimeError(f"Mapping produced no output for {reviewer_name}")
+        mapped_outputs.append(mapped_output)
+
+    normalize_command = [
+        sys.executable,
+        "scripts/normalize_review_output.py",
+        "--output",
+        str(normalized_rows),
+    ]
+    if run_grammar_reviewer:
+        normalize_command.extend(["--grammar-input", str(grammar_output)])
+    for mapped_output in mapped_outputs:
+        normalize_command.extend(["--mapped-input", str(mapped_output)])
+
+    _exec_phase_command(
+        normalize_command,
+        timeout_seconds=phase_timeout_seconds or None,
+        should_abort=should_abort,
+    )
+    if not normalized_rows.exists():
+        raise RuntimeError("Normalization did not produce output")
+
     _exec_phase_command(
         [
             sys.executable,
@@ -1689,8 +1882,8 @@ def run_phase_d(
         timeout_seconds=phase_timeout_seconds or None,
         should_abort=should_abort,
     )
-    if not paths["paragraph_scores"].exists():
-        atomic_write_jsonl(paths["paragraph_scores"], [])
+    if not paths["paragraph_scores"].exists() or not paths["rework_queue"].exists():
+        raise RuntimeError("Aggregation did not produce expected outputs")
 
 
 def run_phase_e(
@@ -1929,9 +2122,18 @@ def _run_full_pipeline(
         "D",
         lambda: run_phase_d(
             paths,
+            run_id=args.run_id,
             max_paragraph_attempts=args.max_paragraph_attempts,
             phase_timeout_seconds=args.phase_timeout_seconds,
             should_abort=should_abort,
+            model=args.model,
+            reviewer_models=args.reviewer_models,
+            grammar_reviewer_model=args.grammar_reviewer_model,
+            typographic_reviewer_model=args.typographic_reviewer_model,
+            critics_reviewer_model=args.critics_reviewer_model,
+            run_grammar_reviewer=not args.skip_grammar_reviewer,
+            run_typographic_reviewer=not args.skip_typographic_reviewer,
+            run_critics_reviewer=not args.skip_critics_reviewer,
         ),
     )
     run_phase(
@@ -1967,9 +2169,18 @@ def _run_rework_only(
         "D",
         lambda: run_phase_d(
             paths,
+            run_id=args.run_id,
             max_paragraph_attempts=args.max_paragraph_attempts,
             phase_timeout_seconds=args.phase_timeout_seconds,
             should_abort=should_abort,
+            model=model,
+            reviewer_models=args.reviewer_models,
+            grammar_reviewer_model=args.grammar_reviewer_model,
+            typographic_reviewer_model=args.typographic_reviewer_model,
+            critics_reviewer_model=args.critics_reviewer_model,
+            run_grammar_reviewer=not args.skip_grammar_reviewer,
+            run_typographic_reviewer=not args.skip_typographic_reviewer,
+            run_critics_reviewer=not args.skip_critics_reviewer,
         ),
     )
     run_phase(
@@ -2013,6 +2224,31 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--source", help="Source manuscript path for --mode full.")
     parser.add_argument("--model", help="Model identifier for active execution modes.")
+    parser.add_argument(
+        "--reviewer-model",
+        dest="reviewer_models",
+        action="append",
+        default=None,
+        help="Reviewer model fallback(s) for Phase D; first provided value is used.",
+    )
+    parser.add_argument("--grammar-reviewer-model", help="Optional override for grammar reviewer model.")
+    parser.add_argument("--typographic-reviewer-model", help="Optional override for typographic reviewer model.")
+    parser.add_argument("--critics-reviewer-model", help="Optional override for critics reviewer model.")
+    parser.add_argument(
+        "--skip-grammar-reviewer",
+        action="store_true",
+        help="Skip grammar reviewer execution in Phase D.",
+    )
+    parser.add_argument(
+        "--skip-typographic-reviewer",
+        action="store_true",
+        help="Skip typographic reviewer execution in Phase D.",
+    )
+    parser.add_argument(
+        "--skip-critics-reviewer",
+        action="store_true",
+        help="Skip critics reviewer execution in Phase D.",
+    )
     parser.add_argument(
         "--max-paragraph-attempts",
         type=int,
