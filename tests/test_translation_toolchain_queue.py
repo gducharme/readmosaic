@@ -514,10 +514,20 @@ class TranslationToolchainQueueTests(unittest.TestCase):
     def test_resolve_pipeline_languages_rejects_unknown_profile(self) -> None:
         from argparse import Namespace
 
-        with self.assertRaises(SystemExit):
+        with self.assertRaises(SystemExit) as exc:
             _resolve_pipeline_languages(
                 Namespace(pipeline_profile="unknown_profile", pass1_language=None, pass2_language=None)
             )
+        self.assertEqual(exc.exception.code, 5)
+
+    def test_resolve_pipeline_languages_requires_pass1_with_usage_exit_code(self) -> None:
+        from argparse import Namespace
+
+        with self.assertRaises(SystemExit) as exc:
+            _resolve_pipeline_languages(
+                Namespace(pipeline_profile=None, pass1_language=None, pass2_language=None)
+            )
+        self.assertEqual(exc.exception.code, 5)
 
 
 if __name__ == "__main__":

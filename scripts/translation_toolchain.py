@@ -1269,11 +1269,17 @@ def _normalize_optional_language(value: str | None) -> str | None:
     return cleaned
 
 
+
+
+def _raise_usage_error(message: str) -> None:
+    print(message, file=sys.stderr)
+    raise SystemExit(EXIT_USAGE_ERROR)
+
 def _resolve_pipeline_languages(args: argparse.Namespace) -> tuple[str, str | None]:
     preset_defaults: dict[str, str | None] = {}
     if args.pipeline_profile:
         if args.pipeline_profile not in PIPELINE_PRESET_CONFIG:
-            raise SystemExit(f"Unknown pipeline preset: {args.pipeline_profile}")
+            _raise_usage_error(f"Unknown pipeline preset: {args.pipeline_profile}")
         preset_defaults = PIPELINE_PRESET_CONFIG[args.pipeline_profile]
 
     resolved_pass1_language = _normalize_optional_language(args.pass1_language)
@@ -1285,9 +1291,7 @@ def _resolve_pipeline_languages(args: argparse.Namespace) -> tuple[str, str | No
         resolved_pass2_language = _normalize_optional_language(preset_defaults.get("pass2_language"))
 
     if resolved_pass1_language is None:
-        raise SystemExit(
-            "pass1 language is required; provide --pass1-language or a known preset with pass1 language"
-        )
+        _raise_usage_error("pass1 language is required; provide --pass1-language or a known preset with pass1 language")
 
     return resolved_pass1_language, resolved_pass2_language
 
@@ -1309,6 +1313,8 @@ def main() -> None:
         resolved_pass1_language, resolved_pass2_language = _resolve_pipeline_languages(args)
         args.pass1_language = resolved_pass1_language
         args.pass2_language = resolved_pass2_language
+        if not args.pipeline_profile:
+            args.pipeline_profile = "explicit_languages"
     paths = _run_paths(args.run_id)
     run_dir = paths["run_root"]
 
