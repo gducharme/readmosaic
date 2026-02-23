@@ -3,66 +3,107 @@
   "$id": "https://readmosaic/schemas/translation_toolchain/defs.schema.json",
   "title": "Translation toolchain shared definitions",
   "$defs": {
-    "schema_version": {
-      "type": "string",
-      "pattern": "^1\\.\\d+\\.\\d+$",
-      "description": "Semantic version for this row contract. Major version 1 is required for compatibility."
-    },
     "content_hash": {
       "type": "string",
       "pattern": "^sha256:[a-f0-9]{64}$",
       "description": "Hash identifier formatted as sha256:<64 lowercase hex chars>."
     },
+    "paragraph_id": {
+      "type": "string",
+      "pattern": "^p_[0-9]+$",
+      "description": "Canonical paragraph identifier emitted by preprocessing (example: p_0001; zero-padding is a formatting convention, not a hard requirement)."
+    },
     "paragraph_index": {
       "type": "integer",
       "minimum": 1,
-      "description": "1-based paragraph position in the source document."
+      "description": "1-based ordinal for the paragraph within the run's canonical paragraph ordering (including final/candidate.md mapping)."
     },
-    "language_code": {
-      "type": "string",
-      "pattern": "^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$",
-      "maxLength": 35,
-      "description": "Loosely validated BCP47-like language tag used by the pipeline (examples: en, en-US, en-us, zh-Hans)."
+    "line_number": {
+      "type": "integer",
+      "minimum": 1
     },
-    "paragraph_state": {
+    "paragraph_status": {
       "type": "string",
       "enum": [
         "ingested",
         "translated_pass1",
-        "reviewed_pass1",
-        "rework_required",
         "translated_pass2",
-        "reviewed_pass2",
-        "approved",
-        "rejected"
+        "candidate_assembled",
+        "review_in_progress",
+        "review_failed",
+        "rework_queued",
+        "reworked",
+        "ready_to_merge",
+        "manual_review_required",
+        "merged"
       ],
-      "description": "Lifecycle state for a paragraph within the translation pipeline."
+      "description": "Canonical paragraph lifecycle status used by the runtime state machine."
     },
-    "selection_outcome": {
-      "type": "string",
-      "enum": [
-        "approved",
-        "rejected"
+    "failure_history_entry": {
+      "type": "object",
+      "required": [
+        "issues",
+        "attempt",
+        "timestamp"
       ],
-      "description": "Final candidate selection decision."
+      "properties": {
+        "issues": {
+          "$ref": "#/$defs/string_list"
+        },
+        "attempt": {
+          "type": ["integer", "null"],
+          "description": "Failure-attempt index (1-based) for this failure event. Kept nullable only for legacy sentinel rows when timestamp is also null."
+        },
+        "timestamp": {
+          "type": ["string", "null"],
+          "description": "Failure-event timestamp in ISO-8601. Kept nullable only for legacy sentinel rows when attempt is also null."
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "attempt": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "timestamp": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        {
+          "properties": {
+            "attempt": {
+              "type": "null"
+            },
+            "timestamp": {
+              "type": "null"
+            }
+          }
+        }
+      ],
+      "additionalProperties": true
     },
-    "severity": {
-      "type": "string",
-      "enum": [
-        "low",
-        "medium",
-        "high",
-        "critical"
-      ]
+    "failure_history": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/failure_history_entry"
+      }
     },
-    "priority_level": {
-      "$ref": "#/$defs/severity",
-      "description": "Queue prioritization level for rework processing (alias of severity scale)."
+    "string_list": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
     },
-    "unit_interval_number": {
-      "type": "number",
-      "minimum": 0,
-      "maximum": 1
+    "score_payload": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "number"
+      }
     }
   }
 }

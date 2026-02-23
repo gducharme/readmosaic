@@ -4,71 +4,32 @@
   "title": "state/paragraph_scores.jsonl row",
   "type": "object",
   "required": [
-    "schema_version",
-    "run_id",
-    "document_id",
-    "paragraph_index",
-    "candidate_content_hash",
-    "state",
+    "paragraph_id",
+    "status",
+    "attempt",
     "scores",
-    "scored_at"
+    "blocking_issues",
+    "updated_at"
   ],
   "properties": {
-    "schema_version": {
-      "$ref": "defs.schema.json#/$defs/schema_version"
+    "paragraph_id": {
+      "$ref": "defs.schema.json#/$defs/paragraph_id"
     },
-    "run_id": {
-      "type": "string",
-      "minLength": 1
+    "status": {
+      "$ref": "defs.schema.json#/$defs/paragraph_status"
     },
-    "document_id": {
-      "type": "string",
-      "minLength": 1
-    },
-    "paragraph_index": {
-      "$ref": "defs.schema.json#/$defs/paragraph_index"
-    },
-    "candidate_content_hash": {
-      "$ref": "defs.schema.json#/$defs/content_hash"
-    },
-    "state": {
-      "$ref": "defs.schema.json#/$defs/paragraph_state"
+    "attempt": {
+      "type": "integer",
+      "minimum": 0
     },
     "scores": {
-      "type": "object",
-      "required": [
-        "adequacy",
-        "fluency"
-      ],
-      "properties": {
-        "adequacy": {
-          "$ref": "defs.schema.json#/$defs/unit_interval_number"
-        },
-        "fluency": {
-          "$ref": "defs.schema.json#/$defs/unit_interval_number"
-        },
-        "terminology": {
-          "$ref": "defs.schema.json#/$defs/unit_interval_number"
-        },
-        "style": {
-          "$ref": "defs.schema.json#/$defs/unit_interval_number"
-        },
-        "composite": {
-          "$ref": "defs.schema.json#/$defs/unit_interval_number"
-        }
-      },
-      "additionalProperties": {
-        "$ref": "defs.schema.json#/$defs/unit_interval_number"
-      }
+      "$ref": "defs.schema.json#/$defs/score_payload"
     },
-    "thresholds": {
-      "type": "object",
-      "additionalProperties": {
-        "$ref": "defs.schema.json#/$defs/unit_interval_number"
-      }
+    "blocking_issues": {
+      "$ref": "defs.schema.json#/$defs/string_list"
     },
-    "scored_at": {
-      "type": "string",
+    "updated_at": {
+      "type": ["string", "null"],
       "format": "date-time"
     }
   },

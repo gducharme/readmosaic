@@ -4,49 +4,63 @@
   "title": "state/paragraph_state.jsonl row",
   "type": "object",
   "required": [
-    "schema_version",
-    "run_id",
-    "document_id",
-    "paragraph_index",
-    "source_content_hash",
-    "state",
-    "updated_at"
+    "paragraph_id",
+    "status",
+    "attempt",
+    "failure_history",
+    "excluded_by_policy",
+    "content_hash"
   ],
   "properties": {
-    "schema_version": {
-      "$ref": "defs.schema.json#/$defs/schema_version"
+    "paragraph_id": {
+      "$ref": "defs.schema.json#/$defs/paragraph_id"
     },
-    "run_id": {
+    "status": {
+      "$ref": "defs.schema.json#/$defs/paragraph_status"
+    },
+    "attempt": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "failure_history": {
+      "$ref": "defs.schema.json#/$defs/failure_history"
+    },
+    "excluded_by_policy": {
+      "type": "boolean"
+    },
+    "exclude_reason": {
       "type": "string",
       "minLength": 1
     },
-    "document_id": {
-      "type": "string",
-      "minLength": 1
-    },
-    "paragraph_index": {
-      "$ref": "defs.schema.json#/$defs/paragraph_index"
+    "content_hash": {
+      "$ref": "defs.schema.json#/$defs/content_hash"
     },
     "source_content_hash": {
       "$ref": "defs.schema.json#/$defs/content_hash"
     },
-    "state": {
-      "$ref": "defs.schema.json#/$defs/paragraph_state"
+    "candidate_content_hash": {
+      "$ref": "defs.schema.json#/$defs/content_hash"
     },
-    "attempt": {
-      "type": "integer",
-      "minimum": 1,
-      "description": "Translation/review attempt number."
+    "scores": {
+      "$ref": "defs.schema.json#/$defs/score_payload"
     },
-    "actor": {
-      "type": "string",
-      "description": "Agent or service that wrote the state transition."
+    "blocking_issues": {
+      "$ref": "defs.schema.json#/$defs/string_list"
     },
-    "notes": {
-      "type": "string"
+    "reviewed_at": {
+      "type": ["string", "null"],
+      "format": "date-time"
     },
     "updated_at": {
-      "type": "string",
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "last_failed_at": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "last_success_at": {
+      "type": ["string", "null"],
       "format": "date-time"
     }
   },
@@ -54,25 +68,14 @@
     {
       "if": {
         "properties": {
-          "state": {
-            "const": "ingested"
+          "excluded_by_policy": {
+            "const": true
           }
         },
-        "required": [
-          "state"
-        ]
+        "required": ["excluded_by_policy"]
       },
       "then": {
-        "not": {
-          "required": [
-            "attempt"
-          ]
-        }
-      },
-      "else": {
-        "required": [
-          "attempt"
-        ]
+        "required": ["exclude_reason"]
       }
     }
   ],

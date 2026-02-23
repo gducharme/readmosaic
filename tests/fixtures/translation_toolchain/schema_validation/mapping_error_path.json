@@ -1,0 +1,47 @@
+{
+  "paragraph_state_row": {
+    "paragraph_id": "p_0101",
+    "status": "manual_review_required",
+    "attempt": 2,
+    "failure_history": [
+      {
+        "attempt": 2,
+        "issues": ["mapping_error"],
+        "timestamp": "2026-02-01T10:00:00Z"
+      }
+    ],
+    "excluded_by_policy": false,
+    "content_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "scores": {"semantic_fidelity": 0.88},
+    "blocking_issues": ["mapping_error"],
+    "reviewed_at": "2026-02-01T10:00:00Z",
+    "updated_at": "2026-02-01T10:00:00Z",
+    "last_failed_at": "2026-02-01T10:00:00Z",
+    "last_success_at": null
+  },
+  "normalized_review_row": {
+    "paragraph_id": "p_0101",
+    "scores": {},
+    "issues": [{"code": "mapping_error", "category": "mapping_error", "reason": "line_not_found"}],
+    "blocking_issues": ["mapping_error"],
+    "hard_fail": true,
+    "issue_count": 1,
+    "critical_count": 0,
+    "blocker_count": 1
+  },
+  "candidate_map_row": {
+    "paragraph_id": "p_0101",
+    "paragraph_index": 101,
+    "start_line": 333,
+    "end_line": 336
+  },
+  "manifest": {
+    "run_id": "tx_mapping_error_001",
+    "pipeline_profile": "tamazight_two_pass",
+    "source": "manuscript/source.md",
+    "model": "gpt-4o",
+    "pass1_language": "Tamazight",
+    "pass2_language": "Tifinagh",
+    "created_at": "2026-02-01T09:55:00Z"
+  }
+}
