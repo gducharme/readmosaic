@@ -47,7 +47,7 @@ class TranslationToolchainPhaseFTests(unittest.TestCase):
                 ],
             )
 
-            run_phase_f(paths, run_id="tx_001")
+            run_phase_f(paths, run_id="tx_001", merge_require_approval=True, merge_approval_present=False)
 
             gate_report = json.loads(paths["gate_report"].read_text(encoding="utf-8"))
             self.assertFalse(gate_report["can_merge"])
@@ -55,6 +55,86 @@ class TranslationToolchainPhaseFTests(unittest.TestCase):
             self.assertFalse(paths["final_output"].exists())
 
 
+
+
+    def test_phase_f_eligible_but_unapproved_does_not_write_final(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_root = Path(tmpdir) / "runs" / "tx_001"
+            paths = {
+                "run_root": run_root,
+                "manifest": run_root / "manifest.json",
+                "source_pre": run_root / "source_pre",
+                "pass1_pre": run_root / "pass1_pre",
+                "pass2_pre": run_root / "pass2_pre",
+                "paragraph_state": run_root / "state" / "paragraph_state.jsonl",
+                "final_dir": run_root / "final",
+                "final_output": run_root / "final" / "final.md",
+                "final_pre": run_root / "final" / "final_pre",
+                "gate_dir": run_root / "gate",
+                "gate_report": run_root / "gate" / "gate_report.json",
+            }
+
+            paths["manifest"].parent.mkdir(parents=True, exist_ok=True)
+            paths["manifest"].write_text(json.dumps({"run_id": "tx_001", "pipeline_profile": "tamazight_two_pass", "review_pre_dir": "pass2_pre"}), encoding="utf-8")
+            atomic_write_jsonl(
+                paths["source_pre"] / "paragraphs.jsonl",
+                [{"paragraph_id": "p_1", "paragraph_index": 1, "text": "s1", "content_hash": "sha256:" + "a" * 64}],
+            )
+            atomic_write_jsonl(
+                paths["pass2_pre"] / "paragraphs.jsonl",
+                [{"paragraph_id": "p_1", "paragraph_index": 1, "text": "t1", "content_hash": "sha256:" + "a" * 64}],
+            )
+            atomic_write_jsonl(
+                paths["paragraph_state"],
+                [{"paragraph_id": "p_1", "status": "ready_to_merge", "excluded_by_policy": False, "content_hash": "sha256:" + "a" * 64}],
+            )
+
+            run_phase_f(paths, run_id="tx_001", merge_require_approval=True, merge_approval_present=False)
+
+            self.assertTrue(paths["gate_report"].exists())
+            self.assertFalse(paths["final_output"].exists())
+            manifest = json.loads(paths["manifest"].read_text(encoding="utf-8"))
+            self.assertEqual(manifest["status_metadata"]["merge"]["decision"], "awaiting_approval")
+            self.assertTrue(manifest["status_metadata"]["merge"]["merge_eligible"])
+
+    def test_phase_f_eligible_and_approved_writes_final(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_root = Path(tmpdir) / "runs" / "tx_001"
+            paths = {
+                "run_root": run_root,
+                "manifest": run_root / "manifest.json",
+                "source_pre": run_root / "source_pre",
+                "pass1_pre": run_root / "pass1_pre",
+                "pass2_pre": run_root / "pass2_pre",
+                "paragraph_state": run_root / "state" / "paragraph_state.jsonl",
+                "final_dir": run_root / "final",
+                "final_output": run_root / "final" / "final.md",
+                "final_pre": run_root / "final" / "final_pre",
+                "gate_dir": run_root / "gate",
+                "gate_report": run_root / "gate" / "gate_report.json",
+            }
+
+            paths["manifest"].parent.mkdir(parents=True, exist_ok=True)
+            paths["manifest"].write_text(json.dumps({"run_id": "tx_001", "pipeline_profile": "tamazight_two_pass", "review_pre_dir": "pass2_pre"}), encoding="utf-8")
+            atomic_write_jsonl(
+                paths["source_pre"] / "paragraphs.jsonl",
+                [{"paragraph_id": "p_1", "paragraph_index": 1, "text": "s1", "content_hash": "sha256:" + "a" * 64}],
+            )
+            atomic_write_jsonl(
+                paths["pass2_pre"] / "paragraphs.jsonl",
+                [{"paragraph_id": "p_1", "paragraph_index": 1, "text": "t1", "content_hash": "sha256:" + "a" * 64}],
+            )
+            atomic_write_jsonl(
+                paths["paragraph_state"],
+                [{"paragraph_id": "p_1", "status": "ready_to_merge", "excluded_by_policy": False, "content_hash": "sha256:" + "a" * 64}],
+            )
+
+            run_phase_f(paths, run_id="tx_001", merge_require_approval=True, merge_approval_present=True)
+
+            self.assertEqual(paths["final_output"].read_text(encoding="utf-8"), "t1")
+            manifest = json.loads(paths["manifest"].read_text(encoding="utf-8"))
+            self.assertEqual(manifest["status_metadata"]["merge"]["decision"], "merged")
+            self.assertTrue(manifest["status_metadata"]["merge"]["approval_present"])
 
     def test_phase_f_blocks_merge_when_run_level_mapping_blocker_exists(self) -> None:
         fixture_dir = Path(__file__).parent / "fixtures" / "translation_toolchain" / "mapping_error_unresolved"
