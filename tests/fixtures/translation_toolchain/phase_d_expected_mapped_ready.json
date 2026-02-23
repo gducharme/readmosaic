@@ -1,0 +1,22 @@
+{
+  "issues": [
+    {
+      "issue_id": "voice_001",
+      "description": "Opening line loses tone.",
+      "line": 1,
+      "severity": "major",
+      "category": "voice",
+      "reviewer": "critic_voice",
+      "critic_name": "critic_voice"
+    },
+    {
+      "issue_id": "fidelity_001",
+      "description": "Metaphor was flattened.",
+      "quote": "the moon drank the tide",
+      "severity": "critical",
+      "category": "semantic_fidelity",
+      "reviewer": "critic_fidelity",
+      "critic_name": "critic_fidelity"
+    }
+  ]
+}
