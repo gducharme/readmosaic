@@ -118,12 +118,16 @@ Required fields:
 - `failure_reasons`
 - `failure_history`
 - `required_fixes`
+- `current_text` (nullable string)
+- `source_text` (nullable string)
 
 Behavioral notes:
 
 - Queue rows are a projection of current `status == rework_queued` state rows.
 - Projection lineage invariant: `paragraph_id + content_hash + attempt` in each queue row must match its source paragraph-state row.
 - `failure_history` is carried forward to preserve retry lineage.
+- `source_text` is projected from `source_pre/paragraphs.jsonl` by matching `paragraph_id`; null when no match/text exists.
+- `current_text` is projected from the active review input stage (`pass2_pre` for `tamazight_two_pass`, otherwise `pass1_pre`); null when no match/text exists.
 
 ### `state/paragraph_scores.jsonl`
 

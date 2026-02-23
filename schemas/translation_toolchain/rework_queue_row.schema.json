@@ -9,7 +9,9 @@
     "attempt",
     "failure_reasons",
     "failure_history",
-    "required_fixes"
+    "required_fixes",
+    "current_text",
+    "source_text"
   ],
   "properties": {
     "paragraph_id": {
@@ -30,6 +32,18 @@
     },
     "required_fixes": {
       "$ref": "defs.schema.json#/$defs/string_list"
+    },
+    "current_text": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "source_text": {
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "additionalProperties": false
