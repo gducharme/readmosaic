@@ -2074,6 +2074,7 @@ def run_phase_d(
 
     typography_review_output = review_typography_dir / "typography_review.json"
     critics_review_output = review_critics_dir / "critics_review.json"
+    critics_review_normalized_output = review_critics_dir / "critics_review_normalized.json"
 
     _exec_phase_command(
         [
@@ -2130,13 +2131,26 @@ def run_phase_d(
     _exec_phase_command(
         [
             sys.executable,
+            "scripts/normalize_critics_runner_output.py",
+            "--input",
+            str(critics_review_output),
+            "--output",
+            str(critics_review_normalized_output),
+        ],
+        timeout_seconds=timeout_seconds,
+        should_abort=should_abort,
+    )
+
+    _exec_phase_command(
+        [
+            sys.executable,
             "scripts/map_review_to_paragraphs.py",
             "--run-id",
             run_id,
             "--reviewer",
             "critics",
             "--review-input",
-            str(critics_review_output),
+            str(critics_review_normalized_output),
             "--output",
             str(critics_mapped_output),
         ],
