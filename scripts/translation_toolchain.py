@@ -24,6 +24,8 @@ if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from lib.paragraph_state_machine import assert_pipeline_state_allowed
+from scripts.assemble_candidate import assemble_candidate
+from scripts.normalize_translation_output import normalize_translation_output
 
 LOCK_FILE_NAME = "RUNNING.lock"
 LOCK_HEARTBEAT_WRITE_INTERVAL_SECONDS = 10
@@ -659,83 +661,8 @@ def _exec_phase_command(
                 process.wait()
 
 
-def _materialize_preprocessed_from_translation(
-    source_pre: Path,
-    translation_json: Path,
-    output_pre: Path,
-) -> None:
-    if not translation_json.exists():
-        raise FileNotFoundError(f"Missing translation output: {translation_json}")
-
-    payload = json.loads(translation_json.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        raise ValueError(f"Invalid translation payload in {translation_json}: expected a JSON object")
-    records = payload.get("records")
-
-    source_rows = read_jsonl(source_pre / "paragraphs.jsonl", strict=True)
-
-    translated: list[str]
-    if isinstance(records, list):
-        if not records:
-            if "paragraph_translations" not in payload:
-                raise ValueError(
-                    f"Invalid translation payload in {translation_json}: records is empty and paragraph_translations is missing"
-                )
-            translated = payload.get("paragraph_translations", [])
-        else:
-            by_index: dict[int, str] = {}
-            for record in records:
-                if not isinstance(record, dict):
-                    raise ValueError(f"Invalid translation record in {translation_json}: expected object rows")
-                idx = record.get("paragraph_index")
-                if not isinstance(idx, int):
-                    raise ValueError(f"Invalid translation record in {translation_json}: missing integer paragraph_index")
-                if idx in by_index:
-                    raise ValueError(
-                        f"Invalid translation records in {translation_json}: duplicate paragraph_index={idx}"
-                    )
-                translation_value = record.get("translation", "")
-                by_index[idx] = "" if translation_value is None else str(translation_value)
-
-            keys = set(by_index.keys())
-            expected_len = len(source_rows)
-            if len(by_index) != expected_len:
-                raise ValueError(
-                    f"Invalid translation records in {translation_json}: expected {expected_len} unique indices, got {len(by_index)}"
-                )
-
-            if keys == set(range(1, expected_len + 1)):
-                translated = [by_index[i] for i in range(1, expected_len + 1)]
-            elif keys == set(range(0, expected_len)):
-                translated = [by_index[i] for i in range(0, expected_len)]
-            else:
-                raise ValueError(
-                    "Invalid translation record indices in "
-                    f"{translation_json}: expected contiguous 0-based or 1-based indices"
-                )
-    else:
-        translated = payload.get("paragraph_translations", [])
-
-    if not isinstance(translated, list):
-        raise ValueError(f"Invalid translation payload in {translation_json}: paragraph_translations must be a list")
-
-    if len(source_rows) != len(translated):
-        raise ValueError(
-            "Translated paragraph count mismatch: "
-            f"source={len(source_rows)} translated={len(translated)} in {translation_json}"
-        )
-
-    output_pre.mkdir(parents=True, exist_ok=True)
-    translated_rows: list[dict[str, Any]] = []
-    for row, text in zip(source_rows, translated):
-        next_row = dict(row)
-        next_row["text"] = str(text)
-        translated_rows.append(next_row)
-
-    atomic_write_jsonl(output_pre / "paragraphs.jsonl", translated_rows)
-    source_sentences = source_pre / "sentences.jsonl"
-    if source_sentences.exists():
-        shutil.copy2(source_sentences, output_pre / "sentences.jsonl")
+def _materialize_preprocessed_from_translation(source_pre: Path, translation_json: Path, output_pre: Path) -> None:
+    normalize_translation_output(source_pre, translation_json, output_pre)
 
 
 def _hash_content(text: str) -> str:
@@ -1016,15 +943,24 @@ def run_phase_c(
         return
 
     paths["pass2_pre"].mkdir(parents=True, exist_ok=True)
-    shutil.copy2(paths["pass1_pre"] / "paragraphs.jsonl", paths["pass2_pre"] / "paragraphs.jsonl")
-    source_sentences = paths["pass1_pre"] / "sentences.jsonl"
-    if source_sentences.exists():
-        shutil.copy2(source_sentences, paths["pass2_pre"] / "sentences.jsonl")
+    for artifact_name in ("paragraphs.jsonl", "sentences.jsonl", "words.jsonl", "manuscript_tokens.json"):
+        source_path = paths["pass1_pre"] / artifact_name
+        if source_path.exists():
+            shutil.copy2(source_path, paths["pass2_pre"] / artifact_name)
+
+
+def run_phase_c5(paths: dict[str, Path]) -> None:
+    assemble_candidate(paths["pass2_pre"] / "paragraphs.jsonl", paths["final_candidate"], paths["candidate_map"])
 
 
 def run_phase_d(
     paths: dict[str, Path], *, max_paragraph_attempts: int, phase_timeout_seconds: int, should_abort: Callable[[], Exception | None]
 ) -> None:
+    if not paths["final_candidate"].exists() or not paths["candidate_map"].exists():
+        raise FileNotFoundError(
+            "Missing canonical assembler outputs required for manuscript-level review mapping: "
+            f"{paths['final_candidate']} and {paths['candidate_map']}"
+        )
     paths["review_normalized"].mkdir(parents=True, exist_ok=True)
     paths["paragraph_scores"].parent.mkdir(parents=True, exist_ok=True)
     normalized_rows = paths["review_normalized"] / "all_reviews.jsonl"
@@ -1148,6 +1084,7 @@ def _run_full_pipeline(
             should_abort=should_abort,
         ),
     )
+    run_phase("C5", lambda: run_phase_c5(paths))
     run_phase(
         "D",
         lambda: run_phase_d(
