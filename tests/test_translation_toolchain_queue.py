@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
+from unittest.mock import patch
 
 from scripts.translation_toolchain import (
     atomic_write_jsonl,
@@ -16,7 +17,11 @@ from scripts.translation_toolchain import (
     read_jsonl,
     _compute_status_report,
     _materialize_preprocessed_from_translation,
+    run_phase_b,
     run_phase_c,
+    run_phase_c5,
+    run_phase_d,
+    run_phase_e,
     _ensure_manifest,
     _language_output_dir_name,
     resolve_paragraph_review_state,
@@ -341,6 +346,221 @@ class TranslationToolchainQueueTests(unittest.TestCase):
 
             self.assertTrue((paths["pass2_pre"] / "paragraphs.jsonl").exists())
             self.assertTrue((paths["pass2_pre"] / "sentences.jsonl").exists())
+
+    def test_phase_b_marks_non_excluded_rows_translated_pass1(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state_path = root / "state" / "paragraph_state.jsonl"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_jsonl(
+                state_path,
+                [
+                    {
+                        "paragraph_id": "p_1",
+                        "status": "ingested",
+                        "attempt": 0,
+                        "excluded_by_policy": False,
+                        "failure_history": [],
+                        "content_hash": "sha256:" + "a" * 64,
+                    },
+                    {
+                        "paragraph_id": "p_2",
+                        "status": "ingested",
+                        "attempt": 0,
+                        "excluded_by_policy": True,
+                        "exclude_reason": "policy",
+                        "failure_history": [],
+                        "content_hash": "sha256:" + "b" * 64,
+                    },
+                ],
+            )
+            source_pre = root / "source_pre"
+            source_pre.mkdir(parents=True, exist_ok=True)
+            (source_pre / "paragraphs.jsonl").write_text('{"paragraph_id":"p_1","paragraph_index":1,"text":"a"}\n', encoding="utf-8")
+            paths = {
+                "run_root": root,
+                "source_pre": source_pre,
+                "pass1_pre": root / "pass1_pre",
+                "paragraph_state": state_path,
+            }
+
+            with patch("scripts.translation_toolchain._exec_phase_command", return_value=None), patch(
+                "scripts.translation_toolchain._materialize_preprocessed_from_translation", return_value=None
+            ):
+                run_phase_b(
+                    paths,
+                    pass1_language="French",
+                    model="dummy",
+                    phase_timeout_seconds=0,
+                    should_abort=lambda: None,
+                )
+
+            rows = read_jsonl(state_path)
+            self.assertEqual(rows[0]["status"], "translated_pass1")
+            self.assertEqual(rows[1]["status"], "ingested")
+
+    def test_phase_c_sets_pass2_status_or_preserves_pass1_in_single_pass(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state_path = root / "state" / "paragraph_state.jsonl"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_jsonl(
+                state_path,
+                [
+                    {
+                        "paragraph_id": "p_1",
+                        "status": "translated_pass1",
+                        "attempt": 0,
+                        "excluded_by_policy": False,
+                        "failure_history": [],
+                        "content_hash": "sha256:" + "c" * 64,
+                    }
+                ],
+            )
+            pass1_pre = root / "pass1_pre"
+            pass1_pre.mkdir(parents=True, exist_ok=True)
+            (pass1_pre / "paragraphs.jsonl").write_text('{"paragraph_id":"p_1","text":"a"}\n', encoding="utf-8")
+
+            paths = {
+                "run_root": root,
+                "pass1_pre": pass1_pre,
+                "pass2_pre": root / "pass2_pre",
+                "paragraph_state": state_path,
+            }
+
+            with patch("scripts.translation_toolchain._exec_phase_command", return_value=None), patch(
+                "scripts.translation_toolchain._materialize_preprocessed_from_translation", return_value=None
+            ):
+                run_phase_c(paths, pass2_language="Tifinagh", model="dummy", phase_timeout_seconds=0, should_abort=lambda: None)
+            self.assertEqual(read_jsonl(state_path)[0]["status"], "translated_pass2")
+
+            atomic_write_jsonl(state_path, [{**read_jsonl(state_path)[0], "status": "translated_pass1"}])
+            run_phase_c(paths, pass2_language=None, model="dummy", phase_timeout_seconds=0, should_abort=lambda: None)
+            self.assertEqual(read_jsonl(state_path)[0]["status"], "translated_pass1")
+
+    def test_phase_c5_marks_candidate_assembled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state_path = root / "state" / "paragraph_state.jsonl"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_jsonl(
+                state_path,
+                [{"paragraph_id": "p_1", "status": "translated_pass2", "attempt": 0, "excluded_by_policy": False, "failure_history": [], "content_hash": "sha256:" + "d" * 64}],
+            )
+            paths = {
+                "pass2_pre": root / "pass2_pre",
+                "final_candidate": root / "final" / "candidate.md",
+                "candidate_map": root / "final" / "candidate_map.jsonl",
+                "paragraph_state": state_path,
+            }
+            with patch("scripts.translation_toolchain.assemble_candidate", return_value=None):
+                run_phase_c5(paths)
+            self.assertEqual(read_jsonl(state_path)[0]["status"], "candidate_assembled")
+
+    def test_phase_d_marks_review_in_progress_before_aggregation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state_path = root / "state" / "paragraph_state.jsonl"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_jsonl(
+                state_path,
+                [{"paragraph_id": "p_1", "status": "candidate_assembled", "attempt": 0, "excluded_by_policy": False, "failure_history": [], "content_hash": "sha256:" + "e" * 64}],
+            )
+            candidate_map = root / "final" / "candidate_map.jsonl"
+            candidate_map.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_jsonl(candidate_map, [{"paragraph_id": "p_1", "paragraph_index": 1, "start_line": 1, "end_line": 1}])
+            final_candidate = root / "final" / "candidate.md"
+            final_candidate.write_text("text", encoding="utf-8")
+            paths = {
+                "paragraph_state": state_path,
+                "final_candidate": final_candidate,
+                "candidate_map": candidate_map,
+                "review_normalized": root / "review_normalized",
+                "paragraph_scores": root / "state" / "paragraph_scores.jsonl",
+                "rework_queue": root / "state" / "rework_queue.jsonl",
+            }
+
+            def _stub_exec(*args, **kwargs):
+                self.assertEqual(read_jsonl(state_path)[0]["status"], "review_in_progress")
+                atomic_write_jsonl(paths["paragraph_scores"], [])
+                atomic_write_jsonl(paths["rework_queue"], [])
+
+            with patch("scripts.translation_toolchain._exec_phase_command", side_effect=_stub_exec):
+                run_phase_d(paths, max_paragraph_attempts=4, phase_timeout_seconds=0, should_abort=lambda: None)
+
+
+    def test_phase_d_only_marks_candidate_map_rows_review_in_progress(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state_path = root / "state" / "paragraph_state.jsonl"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_jsonl(
+                state_path,
+                [
+                    {"paragraph_id": "p_1", "status": "candidate_assembled", "attempt": 0, "excluded_by_policy": False, "failure_history": [], "content_hash": "sha256:" + "1" * 64},
+                    {"paragraph_id": "p_2", "status": "candidate_assembled", "attempt": 0, "excluded_by_policy": False, "failure_history": [], "content_hash": "sha256:" + "2" * 64},
+                ],
+            )
+            candidate_map = root / "final" / "candidate_map.jsonl"
+            candidate_map.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_jsonl(candidate_map, [{"paragraph_id": "p_1", "paragraph_index": 1, "start_line": 1, "end_line": 1}])
+            final_candidate = root / "final" / "candidate.md"
+            final_candidate.write_text("text", encoding="utf-8")
+            paths = {
+                "paragraph_state": state_path,
+                "final_candidate": final_candidate,
+                "candidate_map": candidate_map,
+                "review_normalized": root / "review_normalized",
+                "paragraph_scores": root / "state" / "paragraph_scores.jsonl",
+                "rework_queue": root / "state" / "rework_queue.jsonl",
+            }
+
+            def _stub_exec(*args, **kwargs):
+                atomic_write_jsonl(paths["paragraph_scores"], [])
+                atomic_write_jsonl(paths["rework_queue"], [])
+
+            with patch("scripts.translation_toolchain._exec_phase_command", side_effect=_stub_exec):
+                run_phase_d(paths, max_paragraph_attempts=4, phase_timeout_seconds=0, should_abort=lambda: None)
+
+            rows = {row["paragraph_id"]: row for row in read_jsonl(state_path)}
+            self.assertEqual(rows["p_1"]["status"], "review_in_progress")
+            self.assertEqual(rows["p_2"]["status"], "candidate_assembled")
+
+    def test_phase_c5_rerun_does_not_backslide_review_in_progress_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state_path = root / "state" / "paragraph_state.jsonl"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_jsonl(
+                state_path,
+                [{"paragraph_id": "p_1", "status": "review_in_progress", "attempt": 0, "excluded_by_policy": False, "failure_history": [], "content_hash": "sha256:" + "d" * 64}],
+            )
+            paths = {
+                "pass2_pre": root / "pass2_pre",
+                "final_candidate": root / "final" / "candidate.md",
+                "candidate_map": root / "final" / "candidate_map.jsonl",
+                "paragraph_state": state_path,
+            }
+            with patch("scripts.translation_toolchain.assemble_candidate", return_value=None):
+                run_phase_c5(paths)
+            self.assertEqual(read_jsonl(state_path)[0]["status"], "review_in_progress")
+
+    def test_phase_e_marks_reworked_for_rows_leaving_queue(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state_path = root / "state" / "paragraph_state.jsonl"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_jsonl(
+                state_path,
+                [{"paragraph_id": "p_1", "status": "rework_queued", "attempt": 0, "excluded_by_policy": False, "failure_history": [], "content_hash": "sha256:" + "f" * 64}],
+            )
+            paths = {
+                "paragraph_state": state_path,
+                "rework_queue": root / "state" / "rework_queue.jsonl",
+            }
+
+            run_phase_e(paths, max_paragraph_attempts=4, bump_attempts=True, should_abort=lambda: None)
+            self.assertEqual(read_jsonl(state_path)[0]["status"], "reworked")
 
 
 
