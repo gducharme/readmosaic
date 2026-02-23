@@ -1298,32 +1298,35 @@ def run_phase_e(
             if abort_error is not None:
                 raise abort_error
         paragraph_id = str(row.get("paragraph_id", "<unknown>"))
+        excluded = row.get("excluded_by_policy", False) is True
+        row_changed = False
         current_attempt = _coerce_attempt(row.get("attempt", 0), paragraph_id=paragraph_id)
         next_attempt = current_attempt + 1 if bump_attempts else current_attempt
         if row.get("attempt") != next_attempt:
-            did_change = True
+            row_changed = True
         row["attempt"] = next_attempt
-        row["updated_at"] = now_iso
-        did_change = True
         if row["attempt"] >= max_paragraph_attempts:
-            prior_status = row.get("status")
+            current_status = str(row.get("status", ""))
+            assert_pipeline_transition_allowed(current_status, "manual_review_required", excluded)
             row["status"] = "manual_review_required"
-            if prior_status != row["status"]:
-                did_change = True
+            row_changed = True
             blockers = list(row.get("blocking_issues", [])) if isinstance(row.get("blocking_issues"), list) else []
             if "max_attempts_reached" not in blockers:
                 blockers.append("max_attempts_reached")
                 row["blocking_issues"] = blockers
-                did_change = True
-        assert_pipeline_state_allowed(row["status"], row.get("excluded_by_policy", False) is True)
+                row_changed = True
+        assert_pipeline_state_allowed(row["status"], excluded)
 
         if row["status"] == "rework_queued":
-            excluded = row.get("excluded_by_policy", False) is True
-            assert_pipeline_transition_allowed("rework_queued", "reworked", excluded)
+            current_status = str(row["status"])
+            assert_pipeline_transition_allowed(current_status, "reworked", excluded)
             row["status"] = "reworked"
+            row_changed = True
+            assert_pipeline_state_allowed(row["status"], excluded)
+
+        if row_changed:
             row["updated_at"] = now_iso
             did_change = True
-            assert_pipeline_state_allowed(row["status"], excluded)
 
     if did_change:
         atomic_write_jsonl(paths["paragraph_state"], rows)
