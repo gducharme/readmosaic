@@ -18,6 +18,8 @@ from scripts.translation_toolchain import (
     _ensure_manifest,
     _language_output_dir_name,
     resolve_paragraph_review_state,
+    _run_rework_only,
+    _is_stale,
 )
 
 
@@ -433,6 +435,46 @@ class TranslationToolchainQueueTests(unittest.TestCase):
         out = build_rework_queue_rows(state_rows, existing)
         self.assertEqual(len(out), 1)
         self.assertEqual(out[0]["attempt"], 2)
+
+
+    def test_run_rework_only_executes_phase_d_then_e(self) -> None:
+        phase_calls: list[str] = []
+
+        def run_phase(name: str, runner):
+            phase_calls.append(name)
+
+        from argparse import Namespace
+
+        args = Namespace(
+            max_paragraph_attempts=4,
+            phase_timeout_seconds=0,
+            no_bump_attempts=False,
+        )
+        _run_rework_only(paths={}, args=args, run_phase=run_phase, should_abort=lambda: None)
+        self.assertEqual(phase_calls, ["D", "E"])
+
+    def test_phase_e_raises_for_missing_content_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state_path = root / "paragraph_state.jsonl"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(
+                '{"paragraph_id":"p_1","status":"rework_queued","attempt":0,"content_hash":""}\n',
+                encoding="utf-8",
+            )
+            paths = {
+                "paragraph_state": state_path,
+                "rework_queue": root / "rework_queue.jsonl",
+            }
+            from scripts.translation_toolchain import run_phase_e
+            with self.assertRaises(ValueError):
+                run_phase_e(paths, max_paragraph_attempts=4, bump_attempts=True, should_abort=lambda: None)
+
+    def test_is_stale_treats_future_heartbeat_as_not_stale(self) -> None:
+        import time
+        future = time.time() + 3600
+        payload = {"last_heartbeat_at": __import__("datetime").datetime.fromtimestamp(future, __import__("datetime").timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")}
+        self.assertFalse(_is_stale(payload))
 
 
 if __name__ == "__main__":

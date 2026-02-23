@@ -383,7 +383,7 @@ def _cleanup_stale_temp_lock_files(run_dir: Path) -> None:
 
 def _is_stale(payload: dict[str, Any]) -> bool:
     heartbeat_ts = _parse_iso8601(payload["last_heartbeat_at"])
-    age_seconds = time.time() - heartbeat_ts
+    age_seconds = max(0.0, time.time() - heartbeat_ts)
     return age_seconds > LOCK_STALE_TTL_SECONDS
 
 
@@ -1065,6 +1065,12 @@ def run_phase_e(
     # Attempts are incremented only in phase E. Phase D computes review-state
     # transitions without mutating attempts so policy ownership stays centralized.
     rows = read_jsonl(paths["paragraph_state"], strict=True)
+    for row in rows:
+        paragraph_id = str(row.get("paragraph_id", "<unknown>"))
+        content_hash = row.get("content_hash")
+        if not isinstance(content_hash, str) or not content_hash.strip():
+            raise ValueError(f"Invalid paragraph_state row for '{paragraph_id}': missing non-empty content_hash")
+
     rework_rows = [row for row in rows if row.get("status") == "rework_queued"]
     for row in rework_rows:
         if should_abort is not None:
@@ -1172,6 +1178,15 @@ def _run_rework_only(
     should_abort: Callable[[], Exception | None],
 ) -> None:
     run_phase(
+        "D",
+        lambda: run_phase_d(
+            paths,
+            max_paragraph_attempts=args.max_paragraph_attempts,
+            phase_timeout_seconds=args.phase_timeout_seconds,
+            should_abort=should_abort,
+        ),
+    )
+    run_phase(
         "E",
         lambda: run_phase_e(
             paths,
@@ -1189,8 +1204,8 @@ def parse_args() -> argparse.Namespace:
         required=True,
         choices=("full", "rework-only", "status"),
         help=(
-            "Execution mode. rework-only does not re-aggregate reviews; "
-            "it only updates attempts for currently rework_queued rows and rebuilds queue projection."
+            "Execution mode. rework-only re-aggregates reviews (phase D), then "
+            "updates attempts for currently rework_queued rows and rebuilds queue projection (phase E)."
         ),
     )
     parser.add_argument("--run-id", required=True, help="Run identifier under runs/<run_id>.")
@@ -1464,6 +1479,19 @@ def main() -> None:
                     print(f"Warning: heartbeat failed during phase {phase_name}: {warning_heartbeat_error}", file=sys.stderr)
         if not phase_succeeded:
             return
+
+        if fatal_heartbeat_error is not None:
+            _write_progress(
+                paths,
+                run_id=args.run_id,
+                mode=args.mode,
+                current_phase=phase_name,
+                phase_state="error",
+                phase_started_at=phase_started_at,
+                phase_finished_at=_utc_now_iso(),
+                last_heartbeat_at=progress_state["last_heartbeat_at"],
+            )
+            raise fatal_heartbeat_error
 
         _write_progress(
             paths,
