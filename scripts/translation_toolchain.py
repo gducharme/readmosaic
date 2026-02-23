@@ -44,7 +44,9 @@ LOCK_FILE_FIELDS = (
     "run_id",
 )
 
-PIPELINE_PROFILE_CONFIG: dict[str, dict[str, str | None]] = {
+# Convenience presets only (non-exhaustive): callers may provide explicit --pass1-language/--pass2-language
+# for arbitrary language flows without using presets.
+PIPELINE_PRESET_CONFIG: dict[str, dict[str, str | None]] = {
     "tamazight_two_pass": {"pass1_language": "Tamazight", "pass2_language": "Tifinagh"},
     "standard_single_pass": {"pass1_language": "Tamazight", "pass2_language": None},
 }
@@ -1222,11 +1224,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run-id", required=True, help="Run identifier under runs/<run_id>.")
     parser.add_argument(
         "--pipeline-profile",
-        help="Optional profile defaults for --mode full; explicit language args can be used without a profile.",
+        "--pipeline-preset",
+        dest="pipeline_profile",
+        help="Optional preset defaults for --mode full; explicit language args can be used without a preset.",
     )
     parser.add_argument(
         "--pass1-language",
-        help="Optional first-pass language override. Defaults to profile pass1 language.",
+        help="Optional first-pass language override. Defaults to preset pass1 language.",
     )
     parser.add_argument(
         "--pass2-language",
@@ -1266,23 +1270,23 @@ def _normalize_optional_language(value: str | None) -> str | None:
 
 
 def _resolve_pipeline_languages(args: argparse.Namespace) -> tuple[str, str | None]:
-    profile_defaults: dict[str, str | None] = {}
+    preset_defaults: dict[str, str | None] = {}
     if args.pipeline_profile:
-        if args.pipeline_profile not in PIPELINE_PROFILE_CONFIG:
-            raise SystemExit(f"Unknown --pipeline-profile: {args.pipeline_profile}")
-        profile_defaults = PIPELINE_PROFILE_CONFIG[args.pipeline_profile]
+        if args.pipeline_profile not in PIPELINE_PRESET_CONFIG:
+            raise SystemExit(f"Unknown pipeline preset: {args.pipeline_profile}")
+        preset_defaults = PIPELINE_PRESET_CONFIG[args.pipeline_profile]
 
     resolved_pass1_language = _normalize_optional_language(args.pass1_language)
     if resolved_pass1_language is None:
-        resolved_pass1_language = _normalize_optional_language(profile_defaults.get("pass1_language"))
+        resolved_pass1_language = _normalize_optional_language(preset_defaults.get("pass1_language"))
 
     resolved_pass2_language = _normalize_optional_language(args.pass2_language)
     if args.pass2_language is None:
-        resolved_pass2_language = _normalize_optional_language(profile_defaults.get("pass2_language"))
+        resolved_pass2_language = _normalize_optional_language(preset_defaults.get("pass2_language"))
 
     if resolved_pass1_language is None:
         raise SystemExit(
-            "pass1 language is required; provide --pass1-language or a known --pipeline-profile with pass1 language"
+            "pass1 language is required; provide --pass1-language or a known preset with pass1 language"
         )
 
     return resolved_pass1_language, resolved_pass2_language
