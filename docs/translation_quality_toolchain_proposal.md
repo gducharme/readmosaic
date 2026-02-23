@@ -191,7 +191,7 @@ Review aggregation requires paragraph-addressable outputs.
 ### Pipeline-profile conditional review inputs
 Define relative `review_pre_dir` by `pipeline_profile`:
 - `tamazight_two_pass` -> `review_pre_dir = pass2_pre`
-- `standard_single_pass` -> `review_pre_dir = pass1_pre`
+- `standard_single_pass` -> `review_pre_dir = pass1_pre` (single-pass profile does not imply a default pass1 language; pass1 must be explicit or manifest-derived).
 
 All paragraph-scoped reviewers must read from `runs/<run_id>/<review_pre_dir>` (never hard-code `pass2_pre`).
 
@@ -415,6 +415,7 @@ Each run should include:
 `manifest.json` should minimally record:
 - `run_id`, `language`
 - `pipeline_profile` (`standard_single_pass` | `tamazight_two_pass`)
+- for `standard_single_pass`, `pass1_language` is required from CLI (`--pass1-language`) or existing manifest metadata
 - `semantic_language` (e.g., `tamazight`)
 - `script_mode` (`latin` pass1, `tifinagh` pass2)
 - stage input/output paths
