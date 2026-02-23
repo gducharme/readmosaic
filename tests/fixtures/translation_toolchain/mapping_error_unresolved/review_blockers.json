@@ -2,13 +2,17 @@
   "run_level_blockers": [
     {
       "reason": "mapping_error_unresolved",
-      "paragraph_id": "__unmapped__",
-      "detail": "quote_not_found",
+      "paragraph_id": "p_0101",
+      "detail": "ambiguous_line_membership",
+      "paragraph_ids": [
+        "p_0101",
+        "p_0102"
+      ],
       "issues": [
         {
           "code": "mapping_error",
           "category": "mapping_error",
-          "reason": "quote_not_found",
+          "reason": "ambiguous_line_membership",
           "mapping_status": "mapping_error",
           "reviewer": "critics"
         }

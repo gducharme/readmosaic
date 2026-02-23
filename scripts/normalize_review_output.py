@@ -24,6 +24,20 @@ UNMAPPED_PARAGRAPH_ID = "__unmapped__"
 RUN_LEVEL_BLOCKER_REASON = "mapping_error_unresolved"
 
 
+def _mapping_error_requires_run_blocker(reason: str | None) -> bool:
+    if not isinstance(reason, str):
+        return False
+    normalized = reason.strip().lower()
+    if not normalized:
+        return False
+    return (
+        normalized.startswith("ambiguous_")
+        or normalized.endswith("_not_found")
+        or normalized.startswith("invalid_")
+        or normalized == "missing_anchor"
+    )
+
+
 def _read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -159,8 +173,10 @@ def _normalize_mapped_rows(rows: list[dict[str, Any]], reviewer_name: str) -> li
             issue_out["category"] = "mapping_error"
             issue_out["code"] = "mapping_error"
             reason = row.get("reason")
+            reason_detail: str | None = None
             if isinstance(reason, str) and reason.strip():
-                issue_out.setdefault("reason", reason)
+                reason_detail = reason.strip()
+                issue_out.setdefault("reason", reason_detail)
 
             candidates = row.get("candidates") if isinstance(row.get("candidates"), list) else []
             candidate_ids = [
@@ -172,18 +188,24 @@ def _normalize_mapped_rows(rows: list[dict[str, Any]], reviewer_name: str) -> li
             ]
             candidate_ids = list(dict.fromkeys(candidate_ids))
 
+            blocker_paragraph_ids: list[str] = []
             if isinstance(paragraph_id, str) and paragraph_id.strip():
                 _add_issue(paragraph_id, issue_out, hard_fail=True)
+                blocker_paragraph_ids = [paragraph_id]
             elif candidate_ids:
                 for candidate_id in candidate_ids:
                     _add_issue(candidate_id, issue_out, hard_fail=True)
+                blocker_paragraph_ids = candidate_ids
             else:
                 _add_issue(UNMAPPED_PARAGRAPH_ID, issue_out, hard_fail=True)
-                bucket = grouped[UNMAPPED_PARAGRAPH_ID]
-                bucket["run_level_blocker"] = True
-                bucket["run_level_blocker_reason"] = RUN_LEVEL_BLOCKER_REASON
-                if isinstance(reason, str) and reason.strip():
-                    bucket["run_level_blocker_detail"] = reason.strip()
+                blocker_paragraph_ids = [UNMAPPED_PARAGRAPH_ID]
+
+            if _mapping_error_requires_run_blocker(reason_detail):
+                for blocker_paragraph_id in blocker_paragraph_ids:
+                    bucket = grouped[blocker_paragraph_id]
+                    bucket["run_level_blocker"] = True
+                    bucket["run_level_blocker_reason"] = RUN_LEVEL_BLOCKER_REASON
+                    bucket["run_level_blocker_detail"] = reason_detail
             continue
 
     return list(grouped.values())

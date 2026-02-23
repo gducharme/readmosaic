@@ -78,34 +78,61 @@ def _apply_threshold_failures(
 
 
 def _collect_run_level_blockers(review_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    blockers: list[dict[str, Any]] = []
+    grouped: dict[tuple[str, str], dict[str, Any]] = {}
+
     for row in review_rows:
         if row.get("run_level_blocker") is not True:
             continue
 
-        blocker: dict[str, Any] = {
-            "reason": str(row.get("run_level_blocker_reason") or "mapping_error_unresolved"),
-            "paragraph_id": str(row.get("paragraph_id") or ""),
-        }
+        reason = str(row.get("run_level_blocker_reason") or "mapping_error_unresolved")
+        detail = str(row.get("run_level_blocker_detail") or "").strip()
+        key = (reason, detail)
 
-        detail = row.get("run_level_blocker_detail")
-        if isinstance(detail, str) and detail.strip():
-            blocker["detail"] = detail.strip()
+        blocker = grouped.setdefault(
+            key,
+            {
+                "reason": reason,
+                "detail": detail,
+                "paragraph_ids": [],
+                "issues": [],
+            },
+        )
+
+        paragraph_id = str(row.get("paragraph_id") or "")
+        if paragraph_id and paragraph_id not in blocker["paragraph_ids"]:
+            blocker["paragraph_ids"].append(paragraph_id)
 
         issues = row.get("issues")
         if isinstance(issues, list):
-            blocker["issues"] = [issue for issue in issues if isinstance(issue, dict)]
-
-        blockers.append(blocker)
+            for issue in issues:
+                if isinstance(issue, dict):
+                    fingerprint = json.dumps(issue, sort_keys=True, ensure_ascii=False)
+                    if fingerprint not in {
+                        json.dumps(existing, sort_keys=True, ensure_ascii=False)
+                        for existing in blocker["issues"]
+                    }:
+                        blocker["issues"].append(issue)
 
     deduped: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for blocker in blockers:
-        key = json.dumps(blocker, sort_keys=True, ensure_ascii=False)
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(blocker)
+    for _, blocker in sorted(grouped.items(), key=lambda item: item[0]):
+        paragraph_ids = sorted(str(pid) for pid in blocker["paragraph_ids"] if pid)
+        issue_payload = sorted(
+            blocker["issues"],
+            key=lambda issue: json.dumps(issue, sort_keys=True, ensure_ascii=False),
+        )
+
+        out: dict[str, Any] = {
+            "reason": blocker["reason"],
+            "paragraph_id": paragraph_ids[0] if paragraph_ids else "",
+        }
+        if blocker["detail"]:
+            out["detail"] = blocker["detail"]
+        if paragraph_ids:
+            out["paragraph_ids"] = paragraph_ids
+        if issue_payload:
+            out["issues"] = issue_payload
+        deduped.append(out)
+
     return deduped
 
 
