@@ -7,15 +7,18 @@ from __future__ import annotations
 
 import argparse
 import errno
+import hashlib
 import json
 import os
+import shutil
 import random
 import socket
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -43,6 +46,7 @@ EXIT_OK = 0
 EXIT_ACTIVE_LOCK = 2
 EXIT_INVALID_LOCK = 3
 EXIT_LOCK_RACE = 4
+EXIT_USAGE_ERROR = 5
 
 LockIdentity = tuple[int, int]
 
@@ -66,7 +70,9 @@ def _utc_now_iso() -> str:
 
 
 def _parse_iso8601(timestamp: str) -> float:
-    normalized = timestamp.strip().replace("Z", "+00:00")
+    normalized = timestamp.strip()
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
     return datetime.fromisoformat(normalized).timestamp()
 
 
@@ -515,26 +521,599 @@ def resolve_paragraph_review_state(
     return next_state
 
 
+def _coerce_attempt(value: Any, *, paragraph_id: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"paragraph '{paragraph_id}' has invalid boolean attempt value")
+    if isinstance(value, int):
+        return max(0, value)
+    if value is None:
+        return 0
+    raise ValueError(f"paragraph '{paragraph_id}' has non-integer attempt value: {value!r}")
+
+
+def _run_root(run_id: str) -> Path:
+    return Path("runs") / run_id
+
+
+def _run_paths(run_id: str) -> dict[str, Path]:
+    run_root = _run_root(run_id)
+    return {
+        "run_root": run_root,
+        "manifest": run_root / "manifest.json",
+        "state_dir": run_root / "state",
+        "progress": run_root / "state" / "progress.json",
+        "paragraph_state": run_root / "state" / "paragraph_state.jsonl",
+        "rework_queue": run_root / "state" / "rework_queue.jsonl",
+        "paragraph_scores": run_root / "state" / "paragraph_scores.jsonl",
+        "source_pre": run_root / "source_pre",
+        "pass1_pre": run_root / "pass1_pre",
+        "pass2_pre": run_root / "pass2_pre",
+        "final_dir": run_root / "final",
+        "final_candidate": run_root / "final" / "candidate.md",
+        "candidate_map": run_root / "final" / "candidate_map.jsonl",
+        "final_output": run_root / "final" / "final.md",
+        "review_normalized": run_root / "review" / "normalized",
+        "gate_dir": run_root / "gate",
+        "gate_report": run_root / "gate" / "gate_report.json",
+    }
+
+
+def _ensure_manifest(paths: dict[str, Path], *, run_id: str, pipeline_profile: str, source: str, model: str) -> None:
+    desired = {
+        "run_id": run_id,
+        "pipeline_profile": pipeline_profile,
+        "source": source,
+        "model": model,
+    }
+    if paths["manifest"].exists():
+        existing = json.loads(paths["manifest"].read_text(encoding="utf-8"))
+        drift_fields = [field for field, expected in desired.items() if existing.get(field) != expected]
+        if drift_fields:
+            mismatches = ", ".join(
+                f"{field}: existing={existing.get(field)!r} expected={desired[field]!r}" for field in drift_fields
+            )
+            raise ValueError(f"manifest drift detected for run '{run_id}': {mismatches}")
+        return
+    paths["run_root"].mkdir(parents=True, exist_ok=True)
+    payload = {**desired, "created_at": _utc_now_iso()}
+    _atomic_write_json(paths["manifest"], payload)
+
+
+def _exec_phase_command(command: list[str], *, heartbeat: Callable[[], None] | None = None) -> None:
+    if heartbeat is None:
+        subprocess.run(command, check=True)
+        return
+
+    process = subprocess.Popen(command, stdout=sys.stdout, stderr=sys.stderr)
+    try:
+        while True:
+            code = process.poll()
+            if code is not None:
+                if code != 0:
+                    raise subprocess.CalledProcessError(code, command)
+                return
+            heartbeat()
+            time.sleep(1)
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+
+
+def _materialize_preprocessed_from_translation(
+    source_pre: Path,
+    translation_json: Path,
+    output_pre: Path,
+) -> None:
+    if not translation_json.exists():
+        raise FileNotFoundError(f"Missing translation output: {translation_json}")
+
+    payload = json.loads(translation_json.read_text(encoding="utf-8"))
+    records = payload.get("records")
+
+    source_rows = read_jsonl(source_pre / "paragraphs.jsonl", strict=True)
+
+    translated: list[str]
+    if isinstance(records, list) and records:
+        by_index: dict[int, str] = {}
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            idx = record.get("paragraph_index")
+            if not isinstance(idx, int):
+                continue
+            by_index[idx] = str(record.get("translation", ""))
+
+        keys = set(by_index.keys())
+        expected_len = len(source_rows)
+        if by_index and len(by_index) == expected_len:
+            if keys == set(range(1, expected_len + 1)):
+                translated = [by_index[i] for i in range(1, expected_len + 1)]
+            elif keys == set(range(0, expected_len)):
+                translated = [by_index[i] for i in range(0, expected_len)]
+            else:
+                translated = payload.get("paragraph_translations", [])
+        else:
+            translated = payload.get("paragraph_translations", [])
+    else:
+        translated = payload.get("paragraph_translations", [])
+
+    if not isinstance(translated, list):
+        raise ValueError(f"Invalid translation payload in {translation_json}: paragraph_translations must be a list")
+
+    if len(source_rows) != len(translated):
+        raise ValueError(
+            "Translated paragraph count mismatch: "
+            f"source={len(source_rows)} translated={len(translated)} in {translation_json}"
+        )
+
+    output_pre.mkdir(parents=True, exist_ok=True)
+    translated_rows: list[dict[str, Any]] = []
+    for row, text in zip(source_rows, translated):
+        next_row = dict(row)
+        next_row["text"] = str(text)
+        translated_rows.append(next_row)
+
+    atomic_write_jsonl(output_pre / "paragraphs.jsonl", translated_rows)
+    source_sentences = source_pre / "sentences.jsonl"
+    if source_sentences.exists():
+        shutil.copy2(source_sentences, output_pre / "sentences.jsonl")
+
+
+def _hash_content(text: str) -> str:
+    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _format_duration(seconds: float) -> str:
+    total = max(0, int(seconds))
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+def _write_progress(
+    paths: dict[str, Path],
+    *,
+    run_id: str,
+    mode: str,
+    current_phase: str,
+    phase_state: str,
+    phase_started_at: str,
+    phase_finished_at: str | None,
+    last_heartbeat_at: str | None,
+) -> None:
+    payload = {
+        "run_id": run_id,
+        "mode": mode,
+        "current_phase": current_phase,
+        "phase_state": phase_state,
+        "phase_started_at": phase_started_at,
+        "phase_finished_at": phase_finished_at,
+        "last_heartbeat_at": last_heartbeat_at,
+        "updated_at": _utc_now_iso(),
+    }
+    _atomic_write_json(paths["progress"], payload)
+
+
+def _read_progress(paths: dict[str, Path]) -> dict[str, Any] | None:
+    progress_path = paths["progress"]
+    if not progress_path.exists():
+        return None
+    try:
+        payload = json.loads(progress_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload
+
+
+def _compute_status_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    status_counts: dict[str, int] = {}
+    required_merge_blockers = 0
+    required_total = 0
+    done = 0
+    blocker_states = {"rework_queued", "manual_review_required"}
+
+    for row in rows:
+        status = row.get("status", "unknown")
+        if isinstance(status, str):
+            status_counts[status] = status_counts.get(status, 0) + 1
+
+        excluded = bool(row.get("excluded_by_policy", False))
+        if excluded:
+            continue
+        required_total += 1
+        if status == "ready_to_merge":
+            done += 1
+        if status in blocker_states:
+            required_merge_blockers += 1
+
+    in_flight = max(0, required_total - done - required_merge_blockers)
+    progress_percent = 0.0 if required_total == 0 else (done / required_total) * 100
+
+    return {
+        "total": len(rows),
+        "required_total": required_total,
+        "required_merge_blockers": required_merge_blockers,
+        "done": done,
+        "in_flight": in_flight,
+        "progress_percent": progress_percent,
+        "status_counts": dict(sorted(status_counts.items())),
+    }
+
+
+def _print_status_report(report: dict[str, Any], *, run_id: str) -> None:
+    print(f"run_id={run_id}")
+    print(
+        "progress="
+        f"{report['progress_percent']:.1f}% "
+        f"done={report['done']} "
+        f"blocked={report['required_merge_blockers']} "
+        f"inflight={report['in_flight']} "
+        f"total_required={report['required_total']}"
+    )
+    print(f"total={report['total']}")
+    print(f"required_total={report['required_total']}")
+    print(f"required_merge_blockers={report['required_merge_blockers']}")
+    for status, count in report["status_counts"].items():
+        print(f"status[{status}]={count}")
+
+
+def run_phase_a(
+    paths: dict[str, Path],
+    *,
+    run_id: str,
+    pipeline_profile: str,
+    source: str,
+    model: str,
+    heartbeat: Callable[[], None],
+) -> None:
+    paths["source_pre"].mkdir(parents=True, exist_ok=True)
+    paths["state_dir"].mkdir(parents=True, exist_ok=True)
+    _ensure_manifest(paths, run_id=run_id, pipeline_profile=pipeline_profile, source=source, model=model)
+
+    _exec_phase_command(
+        [sys.executable, "scripts/pre_processing.py", source, "--output-dir", str(paths["source_pre"])],
+        heartbeat=heartbeat,
+    )
+
+    if not paths["paragraph_state"].exists():
+        paragraph_rows = read_jsonl(paths["source_pre"] / "paragraphs.jsonl", strict=True)
+        state_rows = []
+        skipped_rows = 0
+        for row in paragraph_rows:
+            paragraph_id = row.get("paragraph_id") or row.get("id")
+            text = str(row.get("text", ""))
+            if not isinstance(paragraph_id, str) or not paragraph_id.strip():
+                skipped_rows += 1
+                continue
+            state_rows.append(
+                {
+                    "paragraph_id": paragraph_id,
+                    "status": "ingested",
+                    "attempt": 0,
+                    "content_hash": _hash_content(text),
+                    "excluded_by_policy": False,
+                }
+            )
+        if skipped_rows:
+            print(
+                f"Warning: skipped {skipped_rows} paragraph row(s) without valid paragraph_id while seeding state.",
+                file=sys.stderr,
+            )
+        if not state_rows and paragraph_rows:
+            raise ValueError("Unable to seed paragraph state: no valid paragraph IDs found in source_pre/paragraphs.jsonl")
+        atomic_write_jsonl(paths["paragraph_state"], state_rows)
+
+
+def run_phase_b(paths: dict[str, Path], *, model: str, heartbeat: Callable[[], None]) -> None:
+    translate_output = paths["run_root"] / "translate_pass1"
+    _exec_phase_command(
+        [
+            sys.executable,
+            "scripts/translate.py",
+            "--language",
+            "Tamazight",
+            "--model",
+            model,
+            "--preprocessed",
+            str(paths["source_pre"]),
+            "--output-root",
+            str(translate_output),
+        ]
+        ,
+        heartbeat=heartbeat,
+    )
+    translation_json = translate_output / "tamazight" / "translation.json"
+    _materialize_preprocessed_from_translation(paths["source_pre"], translation_json, paths["pass1_pre"])
+
+
+def run_phase_c(paths: dict[str, Path], *, pipeline_profile: str, model: str, heartbeat: Callable[[], None]) -> None:
+    if pipeline_profile == "tamazight_two_pass":
+        translate_output = paths["run_root"] / "translate_pass2"
+        _exec_phase_command(
+            [
+                sys.executable,
+                "scripts/translate.py",
+                "--language",
+                "Tifinagh",
+                "--model",
+                model,
+                "--preprocessed",
+                str(paths["pass1_pre"]),
+                "--output-root",
+                str(translate_output),
+            ]
+            ,
+            heartbeat=heartbeat,
+        )
+        translation_json = translate_output / "tifinagh" / "translation.json"
+        _materialize_preprocessed_from_translation(paths["pass1_pre"], translation_json, paths["pass2_pre"])
+
+
+def run_phase_d(paths: dict[str, Path], *, max_paragraph_attempts: int, heartbeat: Callable[[], None]) -> None:
+    paths["review_normalized"].mkdir(parents=True, exist_ok=True)
+    paths["paragraph_scores"].parent.mkdir(parents=True, exist_ok=True)
+    normalized_rows = paths["review_normalized"] / "all_reviews.jsonl"
+    if not normalized_rows.exists():
+        atomic_write_jsonl(normalized_rows, [])
+    _exec_phase_command(
+        [
+            sys.executable,
+            "scripts/aggregate_paragraph_reviews.py",
+            "--state",
+            str(paths["paragraph_state"]),
+            "--review-rows",
+            str(normalized_rows),
+            "--scores-out",
+            str(paths["paragraph_scores"]),
+            "--queue-out",
+            str(paths["rework_queue"]),
+            "--max-attempts",
+            str(max_paragraph_attempts),
+        ]
+        ,
+        heartbeat=heartbeat,
+    )
+    if not paths["paragraph_scores"].exists():
+        atomic_write_jsonl(paths["paragraph_scores"], [])
+
+
+def run_phase_e(paths: dict[str, Path], *, max_paragraph_attempts: int, bump_attempts: bool = True) -> None:
+    rows = read_jsonl(paths["paragraph_state"], strict=True)
+    rework_rows = [row for row in rows if row.get("status") == "rework_queued"]
+    for row in rework_rows:
+        paragraph_id = str(row.get("paragraph_id", "<unknown>"))
+        current_attempt = _coerce_attempt(row.get("attempt", 0), paragraph_id=paragraph_id)
+        row["attempt"] = current_attempt + 1 if bump_attempts else current_attempt
+        row["updated_at"] = _utc_now_iso()
+        if row["attempt"] >= max_paragraph_attempts:
+            row["status"] = "manual_review_required"
+            blockers = list(row.get("blocking_issues", [])) if isinstance(row.get("blocking_issues"), list) else []
+            if "max_attempts_reached" not in blockers:
+                blockers.append("max_attempts_reached")
+            row["blocking_issues"] = blockers
+
+    atomic_write_jsonl(paths["paragraph_state"], rows)
+    existing_queue = read_jsonl(paths["rework_queue"], strict=False) if paths["rework_queue"].exists() else []
+    queue_rows = build_rework_queue_rows(rows, existing_queue_rows=existing_queue)
+    atomic_write_jsonl(paths["rework_queue"], queue_rows)
+
+
+def run_phase_f(paths: dict[str, Path], *, run_id: str) -> None:
+    paths["final_dir"].mkdir(parents=True, exist_ok=True)
+    report = _compute_status_report(read_jsonl(paths["paragraph_state"], strict=True))
+    paths["gate_dir"].mkdir(parents=True, exist_ok=True)
+    _atomic_write_json(paths["gate_report"], {"run_id": run_id, **report})
+
+
+def _run_full_pipeline(
+    paths: dict[str, Path],
+    args: argparse.Namespace,
+    heartbeat: Callable[[], None],
+    run_phase: Callable[[str, Callable[[], None]], None],
+) -> None:
+    run_phase(
+        "A",
+        lambda: run_phase_a(
+            paths,
+            run_id=args.run_id,
+            pipeline_profile=args.pipeline_profile,
+            source=args.source,
+            model=args.model,
+            heartbeat=heartbeat,
+        ),
+    )
+    run_phase("B", lambda: run_phase_b(paths, model=args.model, heartbeat=heartbeat))
+    run_phase(
+        "C",
+        lambda: run_phase_c(
+            paths,
+            pipeline_profile=args.pipeline_profile,
+            model=args.model,
+            heartbeat=heartbeat,
+        ),
+    )
+    run_phase(
+        "D",
+        lambda: run_phase_d(
+            paths,
+            max_paragraph_attempts=args.max_paragraph_attempts,
+            heartbeat=heartbeat,
+        ),
+    )
+    run_phase("E", lambda: run_phase_e(paths, max_paragraph_attempts=args.max_paragraph_attempts))
+    run_phase("F", lambda: run_phase_f(paths, run_id=args.run_id))
+
+
+def _run_rework_only(
+    paths: dict[str, Path],
+    args: argparse.Namespace,
+    run_phase: Callable[[str, Callable[[], None]], None],
+) -> None:
+    run_phase(
+        "E",
+        lambda: run_phase_e(
+            paths,
+            max_paragraph_attempts=args.max_paragraph_attempts,
+            bump_attempts=not args.no_bump_attempts,
+        ),
+    )
+
+
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Acquire/release translation toolchain run lock.")
-    parser.add_argument("--run-dir", type=Path, required=True, help="Run directory containing RUNNING.lock.")
-    parser.add_argument("--run-id", required=True, help="Run identifier recorded in lock metadata.")
+    parser = argparse.ArgumentParser(description="Translation toolchain mode orchestrator.")
+    parser.add_argument("--mode", required=True, choices=("full", "rework-only", "status"))
+    parser.add_argument("--run-id", required=True, help="Run identifier under runs/<run_id>.")
     parser.add_argument(
-        "--hold-seconds",
+        "--pipeline-profile",
+        choices=("tamazight_two_pass", "standard_single_pass"),
+        help="Pipeline profile for --mode full.",
+    )
+    parser.add_argument("--source", help="Source manuscript path for --mode full.")
+    parser.add_argument("--model", help="Model identifier for active execution modes.")
+    parser.add_argument(
+        "--max-paragraph-attempts",
         type=int,
-        default=0,
-        help="Optionally hold the lock and emit heartbeat updates before releasing.",
+        default=4,
+        help="Maximum attempts before manual review is required.",
+    )
+    parser.add_argument(
+        "--no-bump-attempts",
+        action="store_true",
+        help="For --mode rework-only, rebuild queue/state projection without incrementing attempts.",
     )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    if args.hold_seconds < 0:
-        raise SystemExit("--hold-seconds must be >= 0")
+    if args.max_paragraph_attempts <= 0:
+        raise SystemExit("--max-paragraph-attempts must be > 0")
+
+    if args.mode == "full":
+        if not args.pipeline_profile:
+            raise SystemExit("--pipeline-profile is required for --mode full")
+        if not args.source:
+            raise SystemExit("--source is required for --mode full")
+        if not args.model:
+            raise SystemExit("--model is required for --mode full")
+    paths = _run_paths(args.run_id)
+    run_dir = paths["run_root"]
+
+    if args.mode == "status":
+        state_path = paths["paragraph_state"]
+        if not state_path.exists():
+            print("status=run_not_initialized")
+            rows: list[dict[str, Any]] = []
+        else:
+            rows = read_jsonl(state_path, strict=False)
+        progress = _read_progress(paths)
+        if progress:
+            phase = progress.get("current_phase", "unknown")
+            phase_state = progress.get("phase_state", "unknown")
+            started_at = progress.get("phase_started_at")
+            last_heartbeat = progress.get("last_heartbeat_at")
+            elapsed_display = "00:00:00"
+            if isinstance(started_at, str) and started_at.strip():
+                try:
+                    elapsed_display = _format_duration(time.time() - _parse_iso8601(started_at))
+                except ValueError:
+                    elapsed_display = "invalid"
+            print(
+                f"phase={phase} "
+                f"phase_state={phase_state} "
+                f"phase_elapsed={elapsed_display} "
+                f"last_heartbeat={last_heartbeat or 'n/a'}"
+            )
+        _print_status_report(_compute_status_report(rows), run_id=args.run_id)
+        return
+
+    lock_path: Path | None = None
+    payload: dict[str, Any] | None = None
+    lock_identity: LockIdentity | None = None
+    last_heartbeat = time.monotonic()
+    progress_state: dict[str, Any] = {
+        "phase": "setup",
+        "phase_state": "running",
+        "phase_started_at": _utc_now_iso(),
+        "phase_finished_at": None,
+        "last_heartbeat_at": None,
+    }
+
+    def maybe_heartbeat() -> None:
+        nonlocal payload, lock_identity, last_heartbeat, progress_state
+        assert lock_path is not None and payload is not None and lock_identity is not None
+        now = time.monotonic()
+        if now - last_heartbeat < LOCK_HEARTBEAT_WRITE_INTERVAL_SECONDS:
+            return
+        payload, lock_identity = write_lock_heartbeat(lock_path, payload, args.run_id, lock_identity)
+        last_heartbeat = now
+        progress_state["last_heartbeat_at"] = payload["last_heartbeat_at"]
+        _write_progress(
+            paths,
+            run_id=args.run_id,
+            mode=args.mode,
+            current_phase=progress_state["phase"],
+            phase_state=progress_state["phase_state"],
+            phase_started_at=progress_state["phase_started_at"],
+            phase_finished_at=progress_state["phase_finished_at"],
+            last_heartbeat_at=progress_state["last_heartbeat_at"],
+        )
+
+    def run_phase_with_progress(phase_name: str, runner: Callable[[], None]) -> None:
+        nonlocal progress_state
+        phase_started_at = _utc_now_iso()
+        progress_state = {
+            "phase": phase_name,
+            "phase_state": "running",
+            "phase_started_at": phase_started_at,
+            "phase_finished_at": None,
+            "last_heartbeat_at": progress_state.get("last_heartbeat_at"),
+            "heartbeat": maybe_heartbeat,
+        }
+        _write_progress(
+            paths,
+            run_id=args.run_id,
+            mode=args.mode,
+            current_phase=phase_name,
+            phase_state="running",
+            phase_started_at=phase_started_at,
+            phase_finished_at=None,
+            last_heartbeat_at=progress_state["last_heartbeat_at"],
+        )
+        try:
+            runner()
+        except Exception:
+            _write_progress(
+                paths,
+                run_id=args.run_id,
+                mode=args.mode,
+                current_phase=phase_name,
+                phase_state="error",
+                phase_started_at=phase_started_at,
+                phase_finished_at=_utc_now_iso(),
+                last_heartbeat_at=progress_state["last_heartbeat_at"],
+            )
+            raise
+        _write_progress(
+            paths,
+            run_id=args.run_id,
+            mode=args.mode,
+            current_phase=phase_name,
+            phase_state="done",
+            phase_started_at=phase_started_at,
+            phase_finished_at=_utc_now_iso(),
+            last_heartbeat_at=progress_state["last_heartbeat_at"],
+        )
 
     try:
-        lock_path, payload, lock_identity = acquire_run_lock(args.run_dir, args.run_id)
+        lock_path, payload, lock_identity = acquire_run_lock(run_dir, args.run_id)
     except ActiveRunLockError as exc:
         print(f"{exc}", file=sys.stderr)
         raise SystemExit(EXIT_ACTIVE_LOCK) from exc
@@ -546,23 +1125,17 @@ def main() -> None:
         raise SystemExit(EXIT_LOCK_RACE) from exc
 
     print(f"Acquired lock: {lock_path}")
-
+    progress_state["last_heartbeat_at"] = payload["last_heartbeat_at"]
     try:
-        remaining = args.hold_seconds
-        while remaining > 0:
-            sleep_for = min(LOCK_HEARTBEAT_WRITE_INTERVAL_SECONDS, remaining)
-            time.sleep(sleep_for)
-            payload, lock_identity = write_lock_heartbeat(
-                lock_path,
-                payload,
-                args.run_id,
-                lock_identity,
-            )
-            remaining -= sleep_for
-            print(f"Heartbeat written at {payload['last_heartbeat_at']}")
+        if args.mode == "full":
+            _run_full_pipeline(paths, args, maybe_heartbeat, run_phase_with_progress)
+        elif args.mode == "rework-only":
+            _run_rework_only(paths, args, run_phase_with_progress)
+        else:
+            raise SystemExit(EXIT_USAGE_ERROR)
     finally:
         try:
-            if release_run_lock(lock_path, args.run_id):
+            if lock_path is not None and release_run_lock(lock_path, args.run_id):
                 print(f"Released lock: {lock_path}")
         except InvalidRunLockError as exc:
             print(f"Failed to release lock safely: {exc}", file=sys.stderr)
