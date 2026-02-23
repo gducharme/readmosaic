@@ -17,6 +17,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+if __package__ is None or __package__ == "":
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from lib.paragraph_state_machine import (
+    ParagraphPolicyConfig,
+    ParagraphReviewAggregate,
+    assert_pipeline_state_allowed,
+    resolve_review_transition,
+)
+
 LOCK_FILE_NAME = "RUNNING.lock"
 LOCK_HEARTBEAT_WRITE_INTERVAL_SECONDS = 10
 LOCK_STALE_TTL_SECONDS = 120
@@ -307,6 +317,31 @@ def release_run_lock(lock_path: Path, run_id: str) -> bool:
         raise
     _fsync_directory(lock_path.parent)
     return True
+
+
+def resolve_paragraph_review_state(
+    prior_state: dict[str, Any],
+    review_aggregate: dict[str, Any],
+    max_attempts: int,
+) -> dict[str, Any]:
+    """Apply canonical paragraph review transition policy.
+
+    This helper keeps toolchain callers on the same state machine used by
+    aggregate_paragraph_reviews.py.
+    """
+
+    review = ParagraphReviewAggregate(
+        hard_fail=bool(review_aggregate.get("hard_fail", False)),
+        blocking_issues=tuple(review_aggregate.get("blocking_issues", [])),
+        scores=dict(review_aggregate.get("scores", {})),
+    )
+    policy = ParagraphPolicyConfig(max_attempts=max_attempts)
+    transition = resolve_review_transition(prior_state, review, policy)
+    next_state = dict(prior_state)
+    next_state["status"] = transition.next_state
+    next_state.update(transition.metadata_updates)
+    assert_pipeline_state_allowed(next_state["status"], bool(next_state.get("excluded_by_policy", False)))
+    return next_state
 
 
 def parse_args() -> argparse.Namespace:
