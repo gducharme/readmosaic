@@ -35,6 +35,7 @@ class TranslationToolchainSchemaContractTests(unittest.TestCase):
             "happy_path.json",
             "rework_path.json",
             "mapping_error_path.json",
+            "ingested_seed_path.json",
         ]
 
         for fixture_name in fixture_names:
@@ -46,10 +47,13 @@ class TranslationToolchainSchemaContractTests(unittest.TestCase):
                 _validate(state_row, "paragraph_state_row.schema.json", store)
 
                 self.assertGreaterEqual(int(state_row["attempt"]), 0)
-                for entry in state_row["failure_history"]:
+                for entry in state_row.get("failure_history", []):
                     attempt_value = entry["attempt"]
                     if attempt_value is not None:
                         self.assertGreaterEqual(int(attempt_value), 1)
+
+                if fixture_name == "ingested_seed_path.json":
+                    self.assertNotIn("failure_history", state_row)
 
             with self.subTest(fixture=fixture_name, schema="normalized_review_row"):
                 _validate(fixture["normalized_review_row"], "normalized_review_row.schema.json", store)
