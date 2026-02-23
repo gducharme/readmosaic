@@ -180,6 +180,13 @@ class TranslationToolchainQueueTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 read_jsonl(path)
 
+
+    def test_read_jsonl_empty_file_returns_no_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "empty.jsonl"
+            path.write_text("", encoding="utf-8")
+            self.assertEqual(read_jsonl(path), [])
+
     def test_duplicate_existing_rows_reuse_matching_candidate(self) -> None:
         state_rows = [
             {

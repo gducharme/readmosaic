@@ -1,0 +1,1 @@
+{"paragraph_id": "p_0601", "content_hash": "sha256:6666666666666666666666666666666666666666666666666666666666666666", "attempt": 1, "failure_reasons": ["critical_grammar"], "failure_history": [{"attempt": 1, "issues": ["critical_grammar"], "timestamp": "2026-02-01T10:00:00Z"}], "required_fixes": ["critical_grammar"]}

@@ -1,0 +1,3 @@
+{"paragraph_id": "p_0401", "status": "review_in_progress", "attempt": 0, "failure_history": [], "excluded_by_policy": false, "content_hash": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}
+{"paragraph_id": "p_0402", "status": "ingested", "attempt": 0, "failure_history": [], "excluded_by_policy": true, "exclude_reason": "policy_exclusion", "content_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111"}
+{"paragraph_id": "p_0403", "status": "merged", "attempt": 1, "failure_history": [], "excluded_by_policy": false, "content_hash": "sha256:2222222222222222222222222222222222222222222222222222222222222222"}
