@@ -42,6 +42,43 @@
     },
     "source_content_hash": {
       "$ref": "defs.schema.json#/$defs/content_hash"
+    },
+    "exclusion_policy": {
+      "type": "object",
+      "properties": {
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": ["string", "number", "boolean", "null"]
+          }
+        },
+        "rules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["paragraph_id", "reason"],
+            "properties": {
+              "paragraph_id": {"$ref": "defs.schema.json#/$defs/paragraph_id"},
+              "reason": {"type": "string", "minLength": 1}
+            },
+            "additionalProperties": false
+          }
+        },
+        "templates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["pattern", "reason"],
+            "properties": {
+              "pattern": {"type": "string", "minLength": 1},
+              "reason": {"type": "string", "minLength": 1},
+              "ignore_case": {"type": "boolean"}
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false
