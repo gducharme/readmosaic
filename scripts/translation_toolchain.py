@@ -33,6 +33,8 @@ LOCK_FILE_NAME = "RUNNING.lock"
 LOCK_HEARTBEAT_WRITE_INTERVAL_SECONDS = 10
 LOCK_STALE_TTL_SECONDS = 120
 LOCK_STALE_RETRY_BASE_SLEEP_SECONDS = 0.05
+LOCK_HEARTBEAT_MAX_CONSECUTIVE_FAILURES = 3
+LOCK_HEARTBEAT_STALE_ABORT_SECONDS = max(30, LOCK_STALE_TTL_SECONDS - 30)
 LOCK_FILE_FIELDS = (
     "pid",
     "host",
@@ -602,11 +604,41 @@ def _ensure_manifest(paths: dict[str, Path], *, run_id: str, pipeline_profile: s
     _atomic_write_json(paths["manifest"], payload)
 
 
-def _exec_phase_command(command: list[str], *, timeout_seconds: int | None = None) -> None:
+def _exec_phase_command(
+    command: list[str],
+    *,
+    timeout_seconds: int | None = None,
+    should_abort: Callable[[], Exception | None] | None = None,
+) -> None:
+    process = subprocess.Popen(command)
+    start_monotonic = time.monotonic()
+
     try:
-        subprocess.run(command, check=True, timeout=timeout_seconds)
-    except subprocess.TimeoutExpired as exc:
-        raise TimeoutError(f"Phase command timed out after {timeout_seconds}s: {' '.join(command)}") from exc
+        while True:
+            if should_abort is not None:
+                abort_error = should_abort()
+                if abort_error is not None:
+                    raise abort_error
+
+            code = process.poll()
+            if code is not None:
+                if code != 0:
+                    raise subprocess.CalledProcessError(code, command)
+                return
+
+            if timeout_seconds is not None and timeout_seconds > 0:
+                if time.monotonic() - start_monotonic > timeout_seconds:
+                    raise TimeoutError(f"Phase command timed out after {timeout_seconds}s: {' '.join(command)}")
+
+            time.sleep(0.2)
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
 
 
 def _materialize_preprocessed_from_translation(
@@ -618,6 +650,8 @@ def _materialize_preprocessed_from_translation(
         raise FileNotFoundError(f"Missing translation output: {translation_json}")
 
     payload = json.loads(translation_json.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"Invalid translation payload in {translation_json}: expected a JSON object")
     records = payload.get("records")
 
     source_rows = read_jsonl(source_pre / "paragraphs.jsonl", strict=True)
@@ -823,6 +857,7 @@ def run_phase_a(
     source: str,
     model: str,
     phase_timeout_seconds: int,
+    should_abort: Callable[[], Exception | None],
 ) -> None:
     paths["source_pre"].mkdir(parents=True, exist_ok=True)
     paths["state_dir"].mkdir(parents=True, exist_ok=True)
@@ -831,6 +866,7 @@ def run_phase_a(
     _exec_phase_command(
         [sys.executable, "scripts/pre_processing.py", source, "--output-dir", str(paths["source_pre"])],
         timeout_seconds=phase_timeout_seconds or None,
+        should_abort=should_abort,
     )
 
     paragraph_rows = read_jsonl(paths["source_pre"] / "paragraphs.jsonl", strict=True)
@@ -877,6 +913,7 @@ def run_phase_b(
     pipeline_profile: str,
     model: str,
     phase_timeout_seconds: int,
+    should_abort: Callable[[], Exception | None],
 ) -> None:
     pass1_language = PIPELINE_PROFILE_CONFIG[pipeline_profile]["pass1_language"]
     if pass1_language is None:
@@ -897,13 +934,14 @@ def run_phase_b(
             str(translate_output),
         ],
         timeout_seconds=phase_timeout_seconds or None,
+        should_abort=should_abort,
     )
     translation_json = translate_output / _language_output_dir_name(pass1_language) / "translation.json"
     _materialize_preprocessed_from_translation(paths["source_pre"], translation_json, paths["pass1_pre"])
 
 
 def run_phase_c(
-    paths: dict[str, Path], *, pipeline_profile: str, model: str, phase_timeout_seconds: int
+    paths: dict[str, Path], *, pipeline_profile: str, model: str, phase_timeout_seconds: int, should_abort: Callable[[], Exception | None]
 ) -> None:
     pass2_language = PIPELINE_PROFILE_CONFIG[pipeline_profile]["pass2_language"]
     if pass2_language:
@@ -922,6 +960,7 @@ def run_phase_c(
                 str(translate_output),
             ],
             timeout_seconds=phase_timeout_seconds or None,
+            should_abort=should_abort,
         )
         translation_json = translate_output / _language_output_dir_name(pass2_language) / "translation.json"
         _materialize_preprocessed_from_translation(paths["pass1_pre"], translation_json, paths["pass2_pre"])
@@ -935,7 +974,7 @@ def run_phase_c(
 
 
 def run_phase_d(
-    paths: dict[str, Path], *, max_paragraph_attempts: int, phase_timeout_seconds: int
+    paths: dict[str, Path], *, max_paragraph_attempts: int, phase_timeout_seconds: int, should_abort: Callable[[], Exception | None]
 ) -> None:
     paths["review_normalized"].mkdir(parents=True, exist_ok=True)
     paths["paragraph_scores"].parent.mkdir(parents=True, exist_ok=True)
@@ -958,6 +997,7 @@ def run_phase_d(
             str(max_paragraph_attempts),
         ],
         timeout_seconds=phase_timeout_seconds or None,
+        should_abort=should_abort,
     )
     if not paths["paragraph_scores"].exists():
         atomic_write_jsonl(paths["paragraph_scores"], [])
@@ -998,6 +1038,7 @@ def _run_full_pipeline(
     paths: dict[str, Path],
     args: argparse.Namespace,
     run_phase: Callable[[str, Callable[[], None]], None],
+    should_abort: Callable[[], Exception | None],
 ) -> None:
     run_phase(
         "A",
@@ -1008,6 +1049,7 @@ def _run_full_pipeline(
             source=args.source,
             model=args.model,
             phase_timeout_seconds=args.phase_timeout_seconds,
+            should_abort=should_abort,
         ),
     )
     run_phase(
@@ -1017,6 +1059,7 @@ def _run_full_pipeline(
             pipeline_profile=args.pipeline_profile,
             model=args.model,
             phase_timeout_seconds=args.phase_timeout_seconds,
+            should_abort=should_abort,
         ),
     )
     run_phase(
@@ -1026,6 +1069,7 @@ def _run_full_pipeline(
             pipeline_profile=args.pipeline_profile,
             model=args.model,
             phase_timeout_seconds=args.phase_timeout_seconds,
+            should_abort=should_abort,
         ),
     )
     run_phase(
@@ -1034,6 +1078,7 @@ def _run_full_pipeline(
             paths,
             max_paragraph_attempts=args.max_paragraph_attempts,
             phase_timeout_seconds=args.phase_timeout_seconds,
+            should_abort=should_abort,
         ),
     )
     run_phase("E", lambda: run_phase_e(paths, max_paragraph_attempts=args.max_paragraph_attempts))
@@ -1120,7 +1165,11 @@ def main() -> None:
             print("status=run_not_initialized")
             rows: list[dict[str, Any]] = []
         else:
-            rows = read_jsonl(state_path, strict=False)
+            try:
+                rows = read_jsonl(state_path, strict=True)
+            except ValueError as exc:
+                print(f"status=corrupt_state error={exc}", file=sys.stderr)
+                raise SystemExit(EXIT_INVALID_LOCK) from exc
         progress = _read_progress(paths)
         if progress:
             phase = progress.get("current_phase", "unknown")
@@ -1153,6 +1202,12 @@ def main() -> None:
         "phase_finished_at": None,
         "last_heartbeat_at": None,
     }
+    current_phase_abort_checker: Callable[[], Exception | None] | None = None
+
+    def current_abort_error() -> Exception | None:
+        if current_phase_abort_checker is None:
+            return None
+        return current_phase_abort_checker()
 
     def maybe_heartbeat() -> None:
         nonlocal payload, lock_identity, last_heartbeat, progress_state
@@ -1175,7 +1230,7 @@ def main() -> None:
         )
 
     def run_phase_with_progress(phase_name: str, runner: Callable[[], None]) -> None:
-        nonlocal progress_state
+        nonlocal progress_state, current_phase_abort_checker
         phase_started_at = _utc_now_iso()
         progress_state = {
             "current_phase": phase_name,
@@ -1199,25 +1254,32 @@ def main() -> None:
         warning_heartbeat_error: Exception | None = None
         warning_heartbeat_consecutive_failures = 0
         heartbeat_degraded = False
+        last_heartbeat_success_monotonic = time.monotonic()
 
         def _safe_maybe_heartbeat() -> None:
-            nonlocal fatal_heartbeat_error, warning_heartbeat_error, warning_heartbeat_consecutive_failures, heartbeat_degraded
+            nonlocal fatal_heartbeat_error, warning_heartbeat_error, warning_heartbeat_consecutive_failures, heartbeat_degraded, last_heartbeat_success_monotonic
             try:
                 maybe_heartbeat()
                 warning_heartbeat_consecutive_failures = 0
+                last_heartbeat_success_monotonic = time.monotonic()
             except InvalidRunLockError as exc:
                 fatal_heartbeat_error = exc
                 raise
             except Exception as exc:  # noqa: BLE001
                 warning_heartbeat_error = exc
                 warning_heartbeat_consecutive_failures += 1
-                if warning_heartbeat_consecutive_failures >= 3:
+                if warning_heartbeat_consecutive_failures >= LOCK_HEARTBEAT_MAX_CONSECUTIVE_FAILURES:
                     heartbeat_degraded = True
+                    fatal_heartbeat_error = RuntimeError("Heartbeat degraded after repeated failures; refusing to risk stale lock")
                     heartbeat_stop.set()
 
         def _heartbeat_loop() -> None:
             nonlocal fatal_heartbeat_error
             while not heartbeat_stop.wait(1):
+                if time.monotonic() - last_heartbeat_success_monotonic > LOCK_HEARTBEAT_STALE_ABORT_SECONDS:
+                    fatal_heartbeat_error = RuntimeError("Heartbeat stalled near stale-lock threshold; aborting to preserve lock authority")
+                    heartbeat_stop.set()
+                    break
                 try:
                     _safe_maybe_heartbeat()
                 except InvalidRunLockError:
@@ -1226,10 +1288,18 @@ def main() -> None:
 
         heartbeat_thread = threading.Thread(target=_heartbeat_loop, daemon=True)
         heartbeat_thread.start()
+        def _phase_abort_error() -> Exception | None:
+            if fatal_heartbeat_error is not None:
+                return fatal_heartbeat_error
+            if time.monotonic() - last_heartbeat_success_monotonic > LOCK_HEARTBEAT_STALE_ABORT_SECONDS:
+                return RuntimeError("Heartbeat stalled near stale-lock threshold; aborting to preserve lock authority")
+            return None
+
         try:
             _safe_maybe_heartbeat()
             if fatal_heartbeat_error is not None:
                 raise fatal_heartbeat_error
+            current_phase_abort_checker = _phase_abort_error
             runner()
             if fatal_heartbeat_error is not None:
                 raise fatal_heartbeat_error
@@ -1247,6 +1317,7 @@ def main() -> None:
             raise
         finally:
             heartbeat_stop.set()
+            current_phase_abort_checker = None
             heartbeat_thread.join(timeout=2)
             if warning_heartbeat_error is not None:
                 if heartbeat_degraded:
@@ -1299,7 +1370,7 @@ def main() -> None:
     progress_state["last_heartbeat_at"] = payload["last_heartbeat_at"]
     try:
         if args.mode == "full":
-            _run_full_pipeline(paths, args, run_phase_with_progress)
+            _run_full_pipeline(paths, args, run_phase_with_progress, current_abort_error)
         elif args.mode == "rework-only":
             _run_rework_only(paths, args, run_phase_with_progress)
         else:

@@ -186,6 +186,19 @@ class TranslationToolchainQueueTests(unittest.TestCase):
                 }
             )
 
+    def test_materialize_raises_for_non_object_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_pre = root / "source_pre"
+            source_pre.mkdir(parents=True, exist_ok=True)
+            (source_pre / "paragraphs.jsonl").write_text('{"paragraph_id":"p_1","text":"a"}\n', encoding="utf-8")
+
+            translation_json = root / "translation.json"
+            translation_json.write_text(json.dumps(["bad"]), encoding="utf-8")
+
+            with self.assertRaises(ValueError):
+                _materialize_preprocessed_from_translation(source_pre, translation_json, root / "out")
+
     def test_materialize_raises_when_records_empty_and_no_paragraph_translations(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -242,7 +255,13 @@ class TranslationToolchainQueueTests(unittest.TestCase):
                 "pass1_pre": pass1_pre,
                 "pass2_pre": root / "pass2_pre",
             }
-            run_phase_c(paths, pipeline_profile="standard_single_pass", model="dummy", phase_timeout_seconds=0)
+            run_phase_c(
+                paths,
+                pipeline_profile="standard_single_pass",
+                model="dummy",
+                phase_timeout_seconds=0,
+                should_abort=lambda: None,
+            )
 
             self.assertTrue((paths["pass2_pre"] / "paragraphs.jsonl").exists())
             self.assertTrue((paths["pass2_pre"] / "sentences.jsonl").exists())
