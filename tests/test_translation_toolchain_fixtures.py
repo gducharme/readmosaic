@@ -10,7 +10,11 @@ from lib.paragraph_state_machine import (
     assert_pipeline_state_allowed,
     resolve_review_transition,
 )
-from scripts.aggregate_paragraph_reviews import _merge_reviews
+from scripts.aggregate_paragraph_reviews import (
+    _apply_threshold_failures,
+    _merge_reviews,
+    _resolve_score_thresholds,
+)
 from scripts.translation_toolchain import build_rework_queue_rows, read_jsonl
 
 FIXTURES_ROOT = Path(__file__).parent / "fixtures" / "translation_toolchain"
@@ -73,6 +77,8 @@ class TranslationToolchainFixtureTests(unittest.TestCase):
         state_rows = read_jsonl(fixture_dir / "input_state.jsonl")
         review_rows = read_jsonl(fixture_dir / "review_rows.jsonl")
         merged_reviews = _merge_reviews(review_rows)
+        score_thresholds = _resolve_score_thresholds(policy, review_rows)
+        _apply_threshold_failures(merged_reviews, score_thresholds)
 
         updated_state_rows: list[dict] = []
         score_rows: list[dict] = []

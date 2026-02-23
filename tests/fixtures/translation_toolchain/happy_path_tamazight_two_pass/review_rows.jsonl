@@ -1,2 +1,2 @@
-{"paragraph_id": "p_0001", "hard_fail": false, "blocking_issues": [], "scores": {"semantic_fidelity": 0.94, "grammar": 0.91}}
-{"paragraph_id": "p_0002", "hard_fail": false, "blocking_issues": [], "scores": {"semantic_fidelity": 0.9, "grammar": 0.92}}
+{"paragraph_id": "p_0001", "hard_fail": false, "blocking_issues": [], "scores": {"grammar": 0.91, "vocabulary": 0.9, "style": 0.9, "voice": 0.89, "semantic_fidelity": 0.94}}
+{"paragraph_id": "p_0002", "hard_fail": false, "blocking_issues": [], "scores": {"grammar": 0.92, "vocabulary": 0.9, "style": 0.9, "voice": 0.88, "semantic_fidelity": 0.9}}

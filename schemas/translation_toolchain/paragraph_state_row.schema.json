@@ -47,20 +47,52 @@
       "$ref": "defs.schema.json#/$defs/string_list"
     },
     "reviewed_at": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "format": "date-time"
     },
     "updated_at": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "format": "date-time"
     },
     "last_failed_at": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "format": "date-time"
     },
     "last_success_at": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "format": "date-time"
+    },
+    "review_state": {
+      "$ref": "defs.schema.json#/$defs/paragraph_status"
+    },
+    "routing_state": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "rework_queued",
+        "manual_review_required",
+        null
+      ]
+    },
+    "review_transition_trace": {
+      "type": "array",
+      "items": {
+        "$ref": "defs.schema.json#/$defs/paragraph_status"
+      }
     }
   },
   "allOf": [
@@ -71,10 +103,14 @@
             "const": true
           }
         },
-        "required": ["excluded_by_policy"]
+        "required": [
+          "excluded_by_policy"
+        ]
       },
       "then": {
-        "required": ["exclude_reason"]
+        "required": [
+          "exclude_reason"
+        ]
       }
     }
   ],

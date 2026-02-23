@@ -9,6 +9,7 @@ from lib.paragraph_state_machine import (
     assert_pipeline_state_allowed,
     assert_pipeline_transition_allowed,
     KNOWN_STATES,
+    evaluate_score_threshold_issues,
     resolve_review_transition,
 )
 
@@ -76,6 +77,53 @@ class ParagraphStateMachineTests(unittest.TestCase):
         result = resolve_review_transition(prior, review, ParagraphPolicyConfig(max_attempts=4), now_iso="2026-02-23T00:00:00Z")
         self.assertEqual(result.next_state, "ready_to_merge")
         self.assertEqual(result.metadata_updates["attempt"], 1)
+
+
+    def test_score_threshold_issues_include_missing_required_metrics(self) -> None:
+        issues = evaluate_score_threshold_issues(
+            {"grammar": 0.9, "semantic_fidelity": 0.9},
+            {
+                "grammar": 0.8,
+                "vocabulary": 0.8,
+                "style": 0.8,
+                "voice": 0.8,
+                "semantic_fidelity": 0.85,
+            },
+        )
+        self.assertEqual(
+            issues,
+            [
+                "score_below_threshold:vocabulary",
+                "score_below_threshold:style",
+                "score_below_threshold:voice",
+            ],
+        )
+
+    def test_score_threshold_issues_include_below_threshold_metrics(self) -> None:
+        issues = evaluate_score_threshold_issues(
+            {
+                "grammar": 0.79,
+                "vocabulary": 0.8,
+                "style": 0.81,
+                "voice": 0.7,
+                "semantic_fidelity": 0.84,
+            },
+            {
+                "grammar": 0.8,
+                "vocabulary": 0.8,
+                "style": 0.8,
+                "voice": 0.8,
+                "semantic_fidelity": 0.85,
+            },
+        )
+        self.assertEqual(
+            issues,
+            [
+                "score_below_threshold:grammar",
+                "score_below_threshold:voice",
+                "score_below_threshold:semantic_fidelity",
+            ],
+        )
 
     def test_excluded_merged_state_is_preserved(self) -> None:
         prior = {"status": "merged", "attempt": 1, "failure_history": [], "excluded_by_policy": True}

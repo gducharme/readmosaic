@@ -1,2 +1,2 @@
-{"paragraph_id": "p_0001", "status": "ready_to_merge", "attempt": 1, "scores": {"semantic_fidelity": 0.94, "grammar": 0.91}, "blocking_issues": [], "updated_at": "2026-02-01T10:00:00Z"}
-{"paragraph_id": "p_0002", "status": "ready_to_merge", "attempt": 1, "scores": {"semantic_fidelity": 0.9, "grammar": 0.92}, "blocking_issues": [], "updated_at": "2026-02-01T10:00:00Z"}
+{"paragraph_id": "p_0001", "status": "ready_to_merge", "attempt": 1, "scores": {"grammar": 0.91, "vocabulary": 0.9, "style": 0.9, "voice": 0.89, "semantic_fidelity": 0.94}, "blocking_issues": [], "updated_at": "2026-02-01T10:00:00Z"}
+{"paragraph_id": "p_0002", "status": "ready_to_merge", "attempt": 1, "scores": {"grammar": 0.92, "vocabulary": 0.9, "style": 0.9, "voice": 0.88, "semantic_fidelity": 0.9}, "blocking_issues": [], "updated_at": "2026-02-01T10:00:00Z"}
