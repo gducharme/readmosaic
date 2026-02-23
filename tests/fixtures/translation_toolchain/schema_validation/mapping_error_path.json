@@ -6,14 +6,20 @@
     "failure_history": [
       {
         "attempt": 2,
-        "issues": ["mapping_error"],
+        "issues": [
+          "mapping_error"
+        ],
         "timestamp": "2026-02-01T10:00:00Z"
       }
     ],
     "excluded_by_policy": false,
     "content_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-    "scores": {"semantic_fidelity": 0.88},
-    "blocking_issues": ["mapping_error"],
+    "scores": {
+      "semantic_fidelity": 0.88
+    },
+    "blocking_issues": [
+      "mapping_error"
+    ],
     "reviewed_at": "2026-02-01T10:00:00Z",
     "updated_at": "2026-02-01T10:00:00Z",
     "last_failed_at": "2026-02-01T10:00:00Z",
@@ -22,8 +28,16 @@
   "normalized_review_row": {
     "paragraph_id": "p_0101",
     "scores": {},
-    "issues": [{"code": "mapping_error", "category": "mapping_error", "reason": "line_not_found"}],
-    "blocking_issues": ["mapping_error"],
+    "issues": [
+      {
+        "code": "mapping_error",
+        "category": "mapping_error",
+        "reason": "line_not_found"
+      }
+    ],
+    "blocking_issues": [
+      "mapping_error"
+    ],
     "hard_fail": true,
     "issue_count": 1,
     "critical_count": 0,
@@ -43,5 +57,37 @@
     "pass1_language": "Tamazight",
     "pass2_language": "Tifinagh",
     "created_at": "2026-02-01T09:55:00Z"
+  },
+  "paragraph_scores_row": {
+    "paragraph_id": "p_0101",
+    "status": "manual_review_required",
+    "attempt": 2,
+    "scores": {
+      "semantic_fidelity": 0.88
+    },
+    "blocking_issues": [
+      "mapping_error"
+    ],
+    "updated_at": "2026-02-01T10:00:00Z"
+  },
+  "rework_queue_row": {
+    "paragraph_id": "p_0101",
+    "content_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "attempt": 2,
+    "failure_reasons": [
+      "mapping_error"
+    ],
+    "failure_history": [
+      {
+        "attempt": 2,
+        "issues": [
+          "mapping_error"
+        ],
+        "timestamp": "2026-02-01T10:00:00Z"
+      }
+    ],
+    "required_fixes": [
+      "resolve_mapping"
+    ]
   }
 }

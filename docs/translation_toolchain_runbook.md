@@ -4,6 +4,8 @@
 
 All translation toolchain contracts live under `schemas/translation_toolchain/`.
 
+Schema → artifact mapping:
+
 - `paragraph_state_row.schema.json` → `state/paragraph_state.jsonl`
 - `paragraph_scores_row.schema.json` → `state/paragraph_scores.jsonl`
 - `rework_queue_row.schema.json` → `state/rework_queue.jsonl`

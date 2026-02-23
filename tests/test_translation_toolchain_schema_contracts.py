@@ -54,16 +54,20 @@ class TranslationToolchainSchemaContractTests(unittest.TestCase):
             with self.subTest(fixture=fixture_name, schema="normalized_review_row"):
                 _validate(fixture["normalized_review_row"], "normalized_review_row.schema.json", store)
 
+            with self.subTest(fixture=fixture_name, schema="paragraph_scores_row"):
+                _validate(fixture["paragraph_scores_row"], "paragraph_scores_row.schema.json", store)
+
             with self.subTest(fixture=fixture_name, schema="candidate_map_row"):
                 candidate_map_row = fixture["candidate_map_row"]
                 _validate(candidate_map_row, "candidate_map_row.schema.json", store)
                 self.assertGreaterEqual(candidate_map_row["end_line"], candidate_map_row["start_line"])
 
+            if "rework_queue_row" in fixture:
+                with self.subTest(fixture=fixture_name, schema="rework_queue_row"):
+                    _validate(fixture["rework_queue_row"], "rework_queue_row.schema.json", store)
+
             with self.subTest(fixture=fixture_name, schema="manifest"):
                 _validate(fixture["manifest"], "manifest.schema.json", store)
-
-
-
 
     def test_failure_history_oneof_modern_or_legacy_sentinel(self) -> None:
         store = _schema_store()
@@ -89,6 +93,7 @@ class TranslationToolchainSchemaContractTests(unittest.TestCase):
 
         with self.assertRaises(Exception):
             _validate(bad_row, "paragraph_state_row.schema.json", store)
+
 
 if __name__ == "__main__":
     unittest.main()

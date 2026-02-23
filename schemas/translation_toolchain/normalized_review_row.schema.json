@@ -15,8 +15,7 @@
   ],
   "properties": {
     "paragraph_id": {
-      "type": "string",
-      "minLength": 1
+      "$ref": "defs.schema.json#/$defs/paragraph_id"
     },
     "content_hash": {
       "$ref": "defs.schema.json#/$defs/content_hash"
