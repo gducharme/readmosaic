@@ -27,6 +27,7 @@ from lib.paragraph_state_machine import (
     ParagraphPolicyConfig,
     ParagraphReviewAggregate,
     assert_pipeline_state_allowed,
+    assert_pipeline_transition_allowed,
     resolve_review_transition,
 )
 from scripts.assemble_candidate import assemble_candidate
@@ -213,6 +214,52 @@ def atomic_write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
                 pass
 
     _fsync_directory(path.parent)
+
+
+def _mutate_paragraph_statuses(
+    paths: dict[str, Path],
+    *,
+    next_status: str,
+    eligible_statuses: set[str] | None = None,
+    paragraph_ids: set[str] | None = None,
+) -> None:
+    if "paragraph_state" not in paths:
+        print("Warning: paragraph_state path missing; skipping phase status mutation.", file=sys.stderr)
+        return
+
+    rows = read_jsonl(paths["paragraph_state"], strict=True)
+    now_iso = _utc_now_iso()
+    updated_rows: list[dict[str, Any]] = []
+    did_change = False
+
+    for row in rows:
+        paragraph_id = str(row.get("paragraph_id", ""))
+        if paragraph_ids is not None and not paragraph_id.strip():
+            raise ValueError("Invalid paragraph_state row: missing non-empty paragraph_id for targeted mutation")
+        excluded = row.get("excluded_by_policy", False) is True
+        if "status" not in row:
+            raise ValueError(f"Invalid paragraph_state row for '{paragraph_id}': missing required status")
+        current_status = str(row["status"])
+        assert_pipeline_state_allowed(current_status, excluded)
+
+        should_update = (
+            not excluded
+            and (eligible_statuses is None or current_status in eligible_statuses)
+            and (paragraph_ids is None or paragraph_id in paragraph_ids)
+        )
+
+        if should_update and current_status != next_status:
+            assert_pipeline_transition_allowed(current_status, next_status, excluded)
+            next_row = dict(row)
+            next_row["status"] = next_status
+            next_row["updated_at"] = now_iso
+            updated_rows.append(next_row)
+            did_change = True
+        else:
+            updated_rows.append(row)
+
+    if did_change:
+        atomic_write_jsonl(paths["paragraph_state"], updated_rows)
 
 
 def _coerce_optional_list_field(
@@ -1122,6 +1169,7 @@ def run_phase_b(
     )
     translation_json = translate_output / _language_output_dir_name(pass1_language) / "translation.json"
     _materialize_preprocessed_from_translation(paths["source_pre"], translation_json, paths["pass1_pre"])
+    _mutate_paragraph_statuses(paths, next_status="translated_pass1", eligible_statuses={"ingested", "reworked"})
 
 
 def run_phase_c(
@@ -1147,6 +1195,7 @@ def run_phase_c(
         )
         translation_json = translate_output / _language_output_dir_name(pass2_language) / "translation.json"
         _materialize_preprocessed_from_translation(paths["pass1_pre"], translation_json, paths["pass2_pre"])
+        _mutate_paragraph_statuses(paths, next_status="translated_pass2", eligible_statuses={"translated_pass1"})
         return
 
     paths["pass2_pre"].mkdir(parents=True, exist_ok=True)
@@ -1154,10 +1203,12 @@ def run_phase_c(
         source_path = paths["pass1_pre"] / artifact_name
         if source_path.exists():
             shutil.copy2(source_path, paths["pass2_pre"] / artifact_name)
+    # Single-pass mode preserves translated_pass1 status by design; no state mutation needed here.
 
 
 def run_phase_c5(paths: dict[str, Path]) -> None:
     assemble_candidate(paths["pass2_pre"] / "paragraphs.jsonl", paths["final_candidate"], paths["candidate_map"])
+    _mutate_paragraph_statuses(paths, next_status="candidate_assembled", eligible_statuses={"translated_pass1", "translated_pass2"})
 
 
 def run_phase_d(
@@ -1173,6 +1224,33 @@ def run_phase_d(
     normalized_rows = paths["review_normalized"] / "all_reviews.jsonl"
     if not normalized_rows.exists():
         atomic_write_jsonl(normalized_rows, [])
+
+    candidate_map_rows = read_jsonl(paths["candidate_map"], strict=True)
+    reviewable_ids = {
+        str(row.get("paragraph_id"))
+        for row in candidate_map_rows
+        if isinstance(row.get("paragraph_id"), str) and str(row.get("paragraph_id")).strip()
+    }
+    state_rows = read_jsonl(paths["paragraph_state"], strict=True)
+    state_ids = {
+        str(row.get("paragraph_id"))
+        for row in state_rows
+        if isinstance(row.get("paragraph_id"), str) and str(row.get("paragraph_id")).strip()
+    }
+    unknown_candidate_ids = sorted(reviewable_ids - state_ids)
+    if unknown_candidate_ids:
+        raise ValueError(
+            "candidate_map.jsonl contains paragraph_id values not present in paragraph_state.jsonl: "
+            + ", ".join(unknown_candidate_ids)
+        )
+
+    _mutate_paragraph_statuses(
+        paths,
+        next_status="review_in_progress",
+        eligible_statuses={"candidate_assembled", "reworked"},
+        paragraph_ids=reviewable_ids,
+    )
+
     _exec_phase_command(
         [
             sys.executable,
@@ -1205,6 +1283,8 @@ def run_phase_e(
     # Attempts are incremented only in phase E. Phase D computes review-state
     # transitions without mutating attempts so policy ownership stays centralized.
     rows = read_jsonl(paths["paragraph_state"], strict=True)
+    now_iso = _utc_now_iso()
+    did_change = False
     for row in rows:
         paragraph_id = str(row.get("paragraph_id", "<unknown>"))
         content_hash = row.get("content_hash")
@@ -1218,18 +1298,38 @@ def run_phase_e(
             if abort_error is not None:
                 raise abort_error
         paragraph_id = str(row.get("paragraph_id", "<unknown>"))
+        excluded = row.get("excluded_by_policy", False) is True
+        row_changed = False
         current_attempt = _coerce_attempt(row.get("attempt", 0), paragraph_id=paragraph_id)
-        row["attempt"] = current_attempt + 1 if bump_attempts else current_attempt
-        row["updated_at"] = _utc_now_iso()
+        next_attempt = current_attempt + 1 if bump_attempts else current_attempt
+        if row.get("attempt") != next_attempt:
+            row_changed = True
+        row["attempt"] = next_attempt
         if row["attempt"] >= max_paragraph_attempts:
+            current_status = str(row.get("status", ""))
+            assert_pipeline_transition_allowed(current_status, "manual_review_required", excluded)
             row["status"] = "manual_review_required"
+            row_changed = True
             blockers = list(row.get("blocking_issues", [])) if isinstance(row.get("blocking_issues"), list) else []
             if "max_attempts_reached" not in blockers:
                 blockers.append("max_attempts_reached")
-            row["blocking_issues"] = blockers
-        assert_pipeline_state_allowed(row["status"], row.get("excluded_by_policy", False) is True)
+                row["blocking_issues"] = blockers
+                row_changed = True
+        assert_pipeline_state_allowed(row["status"], excluded)
 
-    atomic_write_jsonl(paths["paragraph_state"], rows)
+        if row["status"] == "rework_queued":
+            current_status = str(row["status"])
+            assert_pipeline_transition_allowed(current_status, "reworked", excluded)
+            row["status"] = "reworked"
+            row_changed = True
+            assert_pipeline_state_allowed(row["status"], excluded)
+
+        if row_changed:
+            row["updated_at"] = now_iso
+            did_change = True
+
+    if did_change:
+        atomic_write_jsonl(paths["paragraph_state"], rows)
     existing_queue = read_jsonl(paths["rework_queue"], strict=False) if paths["rework_queue"].exists() else []
     queue_rows = build_rework_queue_rows(rows, existing_queue_rows=existing_queue)
     atomic_write_jsonl(paths["rework_queue"], queue_rows)

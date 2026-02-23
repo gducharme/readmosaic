@@ -34,6 +34,22 @@ EXCLUSION_DISALLOWED_STATES = {
 
 PRESERVED_EXCLUDED_STATES = {"merged"}
 
+ALLOWED_STATUS_EVOLUTION: dict[str, set[str]] = {
+    "ingested": {"translated_pass1"},
+    "translated_pass1": {"translated_pass2", "candidate_assembled"},
+    "translated_pass2": {"candidate_assembled"},
+    "candidate_assembled": {"review_in_progress"},
+    "review_in_progress": {"ready_to_merge", "rework_queued", "manual_review_required"},
+    # review_failed is emitted as the immediate review outcome by resolve_review_transition
+    # before routing to rework_queued/manual_review_required in persisted status.
+    "review_failed": {"rework_queued", "manual_review_required"},
+    "rework_queued": {"reworked", "manual_review_required"},
+    "reworked": {"translated_pass1", "review_in_progress"},
+    "ready_to_merge": {"merged"},
+    "manual_review_required": set(),
+    "merged": set(),
+}
+
 
 @dataclass(frozen=True)
 class ParagraphPolicyConfig:
@@ -173,3 +189,22 @@ def assert_pipeline_state_allowed(state: str, excluded_by_policy: bool) -> None:
     _validate_state(state)
     if excluded_by_policy and state in EXCLUSION_DISALLOWED_STATES:
         raise ValueError(f"Excluded paragraph cannot transition into active pipeline state '{state}'.")
+
+
+def assert_pipeline_transition_allowed(
+    current_state: str,
+    next_state: str,
+    excluded_by_policy: bool,
+) -> None:
+    assert_pipeline_state_allowed(current_state, excluded_by_policy)
+    assert_pipeline_state_allowed(next_state, excluded_by_policy)
+
+    if current_state == next_state:
+        return
+
+    allowed_next_states = ALLOWED_STATUS_EVOLUTION.get(current_state)
+    if allowed_next_states is None:
+        raise ValueError(f"Unknown transition source state '{current_state}'.")
+
+    if next_state not in allowed_next_states:
+        raise ValueError(f"Disallowed paragraph transition '{current_state}' -> '{next_state}'.")

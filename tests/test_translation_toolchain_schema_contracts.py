@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from jsonschema import Draft202012Validator, RefResolver
+from lib.paragraph_state_machine import ALLOWED_STATUS_EVOLUTION, KNOWN_STATES
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_ROOT = REPO_ROOT / "schemas" / "translation_toolchain"
@@ -29,6 +30,18 @@ def _validate(payload: dict, schema_name: str, store: dict[str, dict]) -> None:
 
 
 class TranslationToolchainSchemaContractTests(unittest.TestCase):
+    def test_status_evolution_contract_is_known_and_ordered(self) -> None:
+        store = _schema_store()
+        defs_schema = store["defs.schema.json"]
+        status_enum = set(defs_schema["$defs"]["paragraph_status"]["enum"])
+        self.assertEqual(status_enum, set(ALLOWED_STATUS_EVOLUTION.keys()))
+        self.assertEqual(status_enum, KNOWN_STATES)
+
+        for prior, next_states in ALLOWED_STATUS_EVOLUTION.items():
+            for next_state in next_states:
+                with self.subTest(prior=prior, next_state=next_state):
+                    self.assertIn(next_state, status_enum)
+
     def test_representative_contract_fixtures(self) -> None:
         store = _schema_store()
         fixture_names = [

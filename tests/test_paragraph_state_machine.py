@@ -5,7 +5,10 @@ import unittest
 from lib.paragraph_state_machine import (
     ParagraphPolicyConfig,
     ParagraphReviewAggregate,
+    ALLOWED_STATUS_EVOLUTION,
     assert_pipeline_state_allowed,
+    assert_pipeline_transition_allowed,
+    KNOWN_STATES,
     resolve_review_transition,
 )
 
@@ -83,6 +86,17 @@ class ParagraphStateMachineTests(unittest.TestCase):
     def test_exclusion_disallowed_state_guard(self) -> None:
         with self.assertRaises(ValueError):
             assert_pipeline_state_allowed("review_in_progress", excluded_by_policy=True)
+
+    def test_disallowed_transition_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            assert_pipeline_transition_allowed("ingested", "ready_to_merge", excluded_by_policy=False)
+
+    def test_transition_map_covers_known_states(self) -> None:
+        self.assertEqual(set(ALLOWED_STATUS_EVOLUTION), KNOWN_STATES)
+
+    def test_unknown_state_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            assert_pipeline_state_allowed("unknown_state", excluded_by_policy=False)
 
 
 if __name__ == "__main__":
