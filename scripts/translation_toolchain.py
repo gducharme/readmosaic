@@ -1413,14 +1413,14 @@ def main() -> None:
         warning_heartbeat_error: Exception | None = None
         warning_heartbeat_consecutive_failures = 0
         heartbeat_degraded = False
-        last_heartbeat_write_monotonic = time.monotonic()
+        last_heartbeat_write_monotonic = time.monotonic() - LOCK_HEARTBEAT_STALE_ABORT_SECONDS
 
         def _safe_maybe_heartbeat() -> None:
             nonlocal fatal_heartbeat_error, warning_heartbeat_error, warning_heartbeat_consecutive_failures, heartbeat_degraded, last_heartbeat_write_monotonic
             try:
                 wrote_heartbeat = maybe_heartbeat()
-                warning_heartbeat_consecutive_failures = 0
                 if wrote_heartbeat:
+                    warning_heartbeat_consecutive_failures = 0
                     last_heartbeat_write_monotonic = time.monotonic()
             except InvalidRunLockError as exc:
                 fatal_heartbeat_error = exc
