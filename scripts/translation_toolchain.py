@@ -1227,6 +1227,19 @@ def run_phase_d(
         for row in candidate_map_rows
         if isinstance(row.get("paragraph_id"), str) and str(row.get("paragraph_id")).strip()
     }
+    state_rows = read_jsonl(paths["paragraph_state"], strict=True)
+    state_ids = {
+        str(row.get("paragraph_id"))
+        for row in state_rows
+        if isinstance(row.get("paragraph_id"), str) and str(row.get("paragraph_id")).strip()
+    }
+    unknown_candidate_ids = sorted(reviewable_ids - state_ids)
+    if unknown_candidate_ids:
+        raise ValueError(
+            "candidate_map.jsonl contains paragraph_id values not present in paragraph_state.jsonl: "
+            + ", ".join(unknown_candidate_ids)
+        )
+
     _mutate_paragraph_statuses(
         paths,
         next_status="review_in_progress",
@@ -1291,9 +1304,11 @@ def run_phase_e(
         assert_pipeline_state_allowed(row["status"], row.get("excluded_by_policy", False) is True)
 
         if row["status"] == "rework_queued":
+            excluded = row.get("excluded_by_policy", False) is True
+            assert_pipeline_transition_allowed("rework_queued", "reworked", excluded)
             row["status"] = "reworked"
             row["updated_at"] = _utc_now_iso()
-            assert_pipeline_state_allowed(row["status"], row.get("excluded_by_policy", False) is True)
+            assert_pipeline_state_allowed(row["status"], excluded)
 
     atomic_write_jsonl(paths["paragraph_state"], rows)
     existing_queue = read_jsonl(paths["rework_queue"], strict=False) if paths["rework_queue"].exists() else []

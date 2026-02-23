@@ -526,6 +526,33 @@ class TranslationToolchainQueueTests(unittest.TestCase):
             self.assertEqual(rows["p_1"]["status"], "review_in_progress")
             self.assertEqual(rows["p_2"]["status"], "candidate_assembled")
 
+
+    def test_phase_d_rejects_candidate_map_ids_missing_in_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state_path = root / "state" / "paragraph_state.jsonl"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_jsonl(
+                state_path,
+                [{"paragraph_id": "p_1", "status": "candidate_assembled", "attempt": 0, "excluded_by_policy": False, "failure_history": [], "content_hash": "sha256:" + "1" * 64}],
+            )
+            candidate_map = root / "final" / "candidate_map.jsonl"
+            candidate_map.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_jsonl(candidate_map, [{"paragraph_id": "p_9999", "paragraph_index": 1, "start_line": 1, "end_line": 1}])
+            final_candidate = root / "final" / "candidate.md"
+            final_candidate.write_text("text", encoding="utf-8")
+            paths = {
+                "paragraph_state": state_path,
+                "final_candidate": final_candidate,
+                "candidate_map": candidate_map,
+                "review_normalized": root / "review_normalized",
+                "paragraph_scores": root / "state" / "paragraph_scores.jsonl",
+                "rework_queue": root / "state" / "rework_queue.jsonl",
+            }
+
+            with self.assertRaises(ValueError):
+                run_phase_d(paths, max_paragraph_attempts=4, phase_timeout_seconds=0, should_abort=lambda: None)
+
     def test_phase_c5_rerun_does_not_backslide_review_in_progress_rows(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
