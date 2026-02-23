@@ -28,6 +28,7 @@ from scripts.translation_toolchain import (
     _run_rework_only,
     _is_stale,
     _resolve_pipeline_languages,
+    _resolve_subset_paragraph_ids,
     run_rework_translation_stage,
 )
 
@@ -447,6 +448,106 @@ class TranslationToolchainQueueTests(unittest.TestCase):
             run_phase_c(paths, pass2_language=None, model="dummy", phase_timeout_seconds=0, should_abort=lambda: None)
             self.assertEqual(read_jsonl(state_path)[0]["status"], "translated_pass1")
 
+
+    def test_phase_b_subset_translation_merges_only_selected_paragraphs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_pre = root / "source_pre"
+            source_pre.mkdir(parents=True, exist_ok=True)
+            atomic_write_jsonl(
+                source_pre / "paragraphs.jsonl",
+                [
+                    {"paragraph_id": "p_1", "paragraph_index": 1, "text": "source one", "content_hash": "sha256:" + "1" * 64},
+                    {"paragraph_id": "p_2", "paragraph_index": 2, "text": "source two", "content_hash": "sha256:" + "2" * 64},
+                ],
+            )
+            state_path = root / "state" / "paragraph_state.jsonl"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_jsonl(
+                state_path,
+                [
+                    {"paragraph_id": "p_1", "status": "ingested", "attempt": 0, "excluded_by_policy": False, "failure_history": [], "content_hash": "sha256:" + "1" * 64},
+                    {"paragraph_id": "p_2", "status": "ingested", "attempt": 0, "excluded_by_policy": False, "failure_history": [], "content_hash": "sha256:" + "2" * 64},
+                ],
+            )
+            paths = {
+                "run_root": root,
+                "source_pre": source_pre,
+                "pass1_pre": root / "pass1_pre",
+                "paragraph_state": state_path,
+            }
+
+            def _stub_exec(cmd, **kwargs):
+                preprocessed_arg = cmd[cmd.index("--preprocessed") + 1]
+                self.assertNotEqual(preprocessed_arg, str(source_pre))
+
+            def _stub_materialize(source_path: Path, _translation_json: Path, out_path: Path):
+                rows = read_jsonl(source_path / "paragraphs.jsonl")
+                updated = []
+                for row in rows:
+                    next_row = dict(row)
+                    next_row["text"] = "translated " + str(row.get("paragraph_id"))
+                    updated.append(next_row)
+                atomic_write_jsonl(out_path / "paragraphs.jsonl", updated)
+
+            with patch("scripts.translation_toolchain._exec_phase_command", side_effect=_stub_exec), patch(
+                "scripts.translation_toolchain._materialize_preprocessed_from_translation", side_effect=_stub_materialize
+            ):
+                run_phase_b(
+                    paths,
+                    pass1_language="French",
+                    model="dummy",
+                    phase_timeout_seconds=0,
+                    should_abort=lambda: None,
+                    subset_paragraph_ids={"p_2"},
+                )
+
+            merged = read_jsonl(paths["pass1_pre"] / "paragraphs.jsonl")
+            self.assertEqual([row["paragraph_id"] for row in merged], ["p_1", "p_2"])
+            self.assertEqual(merged[0]["text"], "source one")
+            self.assertEqual(merged[1]["text"], "translated p_2")
+            self.assertEqual(merged[1]["paragraph_index"], 2)
+            self.assertEqual(merged[1]["content_hash"], "sha256:" + "2" * 64)
+
+            state_rows = {row["paragraph_id"]: row for row in read_jsonl(state_path)}
+            self.assertEqual(state_rows["p_1"]["status"], "ingested")
+            self.assertEqual(state_rows["p_2"]["status"], "translated_pass1")
+
+    def test_phase_b_subset_from_empty_queue_noops(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_pre = root / "source_pre"
+            source_pre.mkdir(parents=True, exist_ok=True)
+            atomic_write_jsonl(
+                source_pre / "paragraphs.jsonl",
+                [{"paragraph_id": "p_1", "paragraph_index": 1, "text": "source", "content_hash": "sha256:" + "1" * 64}],
+            )
+            state_path = root / "state" / "paragraph_state.jsonl"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_jsonl(
+                state_path,
+                [{"paragraph_id": "p_1", "status": "ingested", "attempt": 0, "excluded_by_policy": False, "failure_history": [], "content_hash": "sha256:" + "1" * 64}],
+            )
+            paths = {
+                "run_root": root,
+                "source_pre": source_pre,
+                "pass1_pre": root / "pass1_pre",
+                "paragraph_state": state_path,
+            }
+
+            with patch("scripts.translation_toolchain._exec_phase_command") as exec_mock:
+                run_phase_b(
+                    paths,
+                    pass1_language="French",
+                    model="dummy",
+                    phase_timeout_seconds=0,
+                    should_abort=lambda: None,
+                    subset_paragraph_ids=set(),
+                )
+            exec_mock.assert_not_called()
+            self.assertFalse((paths["pass1_pre"] / "paragraphs.jsonl").exists())
+            self.assertEqual(read_jsonl(state_path)[0]["status"], "ingested")
+
     def test_phase_c5_marks_candidate_assembled(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -865,6 +966,15 @@ class TranslationToolchainQueueTests(unittest.TestCase):
         self.assertEqual(len(out), 1)
         self.assertEqual(out[0]["attempt"], 2)
 
+
+
+    def test_resolve_subset_from_queue_empty_returns_empty_subset(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = {"rework_queue": root / "state" / "rework_queue.jsonl"}
+            atomic_write_jsonl(paths["rework_queue"], [])
+            subset_ids = _resolve_subset_paragraph_ids(paths, subset_from_queue=True, subset_paragraph_ids_raw=None)
+            self.assertEqual(subset_ids, set())
 
     def test_run_rework_only_executes_phase_r_d_e(self) -> None:
         phase_calls: list[str] = []
