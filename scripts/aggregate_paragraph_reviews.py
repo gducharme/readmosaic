@@ -15,6 +15,7 @@ from lib.paragraph_state_machine import (
     ParagraphPolicyConfig,
     ParagraphReviewAggregate,
     assert_pipeline_state_allowed,
+    evaluate_score_threshold_issues,
     resolve_review_transition,
 )
 from scripts.translation_toolchain import (
@@ -38,6 +39,39 @@ def parse_args() -> argparse.Namespace:
         help="Optional run-level blocker artifact path (e.g., runs/<run_id>/gate/review_blockers.json)",
     )
     return parser.parse_args()
+
+
+def _resolve_score_thresholds(policy: ParagraphPolicyConfig, review_rows: list[dict[str, Any]]) -> dict[str, float]:
+    thresholds = dict(policy.score_thresholds)
+    for row in review_rows:
+        candidate = row.get("score_thresholds")
+        if not isinstance(candidate, dict):
+            continue
+        for metric, threshold in candidate.items():
+            try:
+                thresholds[str(metric)] = float(threshold)
+            except (TypeError, ValueError):
+                continue
+    return thresholds
+
+
+def _apply_threshold_failures(
+    merged_reviews: dict[str, dict[str, Any]],
+    score_thresholds: dict[str, float],
+) -> None:
+    for aggregate in merged_reviews.values():
+        threshold_issues = evaluate_score_threshold_issues(
+            dict(aggregate.get("scores", {})),
+            score_thresholds,
+        )
+        if not threshold_issues:
+            continue
+        aggregate["hard_fail"] = True
+        blocking_issues = list(aggregate.get("blocking_issues", []))
+        for issue in threshold_issues:
+            if issue not in blocking_issues:
+                blocking_issues.append(issue)
+        aggregate["blocking_issues"] = blocking_issues
 
 
 def _collect_run_level_blockers(review_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -103,6 +137,8 @@ def main() -> None:
     state_rows = read_jsonl(args.state)
     review_rows = read_jsonl(args.review_rows)
     merged_reviews = _merge_reviews(review_rows)
+    score_thresholds = _resolve_score_thresholds(policy, review_rows)
+    _apply_threshold_failures(merged_reviews, score_thresholds)
     run_level_blockers = _collect_run_level_blockers(review_rows)
 
     score_rows: list[dict[str, Any]] = []

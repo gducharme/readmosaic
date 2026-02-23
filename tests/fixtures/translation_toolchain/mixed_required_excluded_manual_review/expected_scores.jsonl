@@ -1,3 +1,3 @@
-{"paragraph_id": "p_0501", "status": "ready_to_merge", "attempt": 1, "scores": {"semantic_fidelity": 0.93}, "blocking_issues": [], "updated_at": "2026-02-01T10:00:00Z"}
+{"paragraph_id": "p_0501", "status": "ready_to_merge", "attempt": 1, "scores": {"grammar": 0.9, "vocabulary": 0.9, "style": 0.9, "voice": 0.9, "semantic_fidelity": 0.93}, "blocking_issues": [], "updated_at": "2026-02-01T10:00:00Z"}
 {"paragraph_id": "p_0502", "status": "ingested", "attempt": 0, "scores": {}, "blocking_issues": [], "updated_at": null}
-{"paragraph_id": "p_0503", "status": "manual_review_required", "attempt": 2, "scores": {"semantic_fidelity": 0.3}, "blocking_issues": ["mapping_error"], "updated_at": "2026-02-01T10:00:00Z"}
+{"paragraph_id": "p_0503", "status": "manual_review_required", "attempt": 2, "scores": {"semantic_fidelity": 0.3}, "blocking_issues": ["mapping_error", "score_below_threshold:grammar", "score_below_threshold:vocabulary", "score_below_threshold:style", "score_below_threshold:voice", "score_below_threshold:semantic_fidelity"], "updated_at": "2026-02-01T10:00:00Z"}

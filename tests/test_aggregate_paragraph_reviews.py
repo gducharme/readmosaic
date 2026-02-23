@@ -6,7 +6,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.aggregate_paragraph_reviews import _collect_run_level_blockers
+from scripts.aggregate_paragraph_reviews import (
+    _apply_threshold_failures,
+    _collect_run_level_blockers,
+    _merge_reviews,
+    _resolve_score_thresholds,
+)
+from lib.paragraph_state_machine import ParagraphPolicyConfig
 
 
 class AggregateParagraphReviewsTests(unittest.TestCase):
@@ -92,6 +98,40 @@ class AggregateParagraphReviewsTests(unittest.TestCase):
             )
             self.assertIn("paragraph_id='p_missing'", proc.stderr)
             self.assertNotIn("paragraph_id='__unmapped__'", proc.stderr)
+
+
+    def test_threshold_failures_append_deterministic_blocking_issue_codes(self) -> None:
+        review_rows = [
+            {
+                "paragraph_id": "p_0001",
+                "hard_fail": False,
+                "blocking_issues": [],
+                "scores": {
+                    "grammar": 0.92,
+                    "vocabulary": 0.87,
+                    "style": 0.88,
+                    "voice": 0.86,
+                    "semantic_fidelity": 0.9,
+                },
+            },
+            {
+                "paragraph_id": "p_0002",
+                "hard_fail": False,
+                "blocking_issues": ["critical_grammar"],
+                "scores": {"grammar": 0.75},
+            },
+        ]
+        merged = _merge_reviews(review_rows)
+        thresholds = _resolve_score_thresholds(ParagraphPolicyConfig(), review_rows)
+        _apply_threshold_failures(merged, thresholds)
+
+        self.assertFalse(merged["p_0001"]["hard_fail"])
+        self.assertEqual(merged["p_0001"]["blocking_issues"], [])
+
+        self.assertTrue(merged["p_0002"]["hard_fail"])
+        self.assertIn("critical_grammar", merged["p_0002"]["blocking_issues"])
+        self.assertIn("score_below_threshold:grammar", merged["p_0002"]["blocking_issues"])
+        self.assertIn("score_below_threshold:vocabulary", merged["p_0002"]["blocking_issues"])
 
 
 if __name__ == "__main__":

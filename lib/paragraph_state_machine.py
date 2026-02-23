@@ -2,7 +2,7 @@
 """Canonical paragraph review state transitions."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
@@ -18,6 +18,22 @@ KNOWN_STATES = {
     "ready_to_merge",
     "manual_review_required",
     "merged",
+}
+
+REQUIRED_SCORE_METRICS: tuple[str, ...] = (
+    "grammar",
+    "vocabulary",
+    "style",
+    "voice",
+    "semantic_fidelity",
+)
+
+DEFAULT_REVIEW_SCORE_THRESHOLDS: dict[str, float] = {
+    "grammar": 0.8,
+    "vocabulary": 0.8,
+    "style": 0.8,
+    "voice": 0.8,
+    "semantic_fidelity": 0.85,
 }
 
 EXCLUSION_DISALLOWED_STATES = {
@@ -54,6 +70,7 @@ ALLOWED_STATUS_EVOLUTION: dict[str, set[str]] = {
 @dataclass(frozen=True)
 class ParagraphPolicyConfig:
     max_attempts: int = 4
+    score_thresholds: dict[str, float] = field(default_factory=lambda: dict(DEFAULT_REVIEW_SCORE_THRESHOLDS))
     immediate_manual_review_reasons: frozenset[str] = frozenset(
         {
             "mapping_error",
@@ -62,6 +79,28 @@ class ParagraphPolicyConfig:
             "artifact_corrupt",
         }
     )
+
+
+def evaluate_score_threshold_issues(
+    scores: dict[str, Any],
+    thresholds: dict[str, float],
+    *,
+    required_metrics: tuple[str, ...] = REQUIRED_SCORE_METRICS,
+) -> list[str]:
+    """Return deterministic issue codes for missing/below-threshold required score metrics."""
+    issues: list[str] = []
+    for metric in required_metrics:
+        threshold = thresholds.get(metric)
+        if threshold is None:
+            continue
+        raw_value = scores.get(metric)
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError):
+            value = None
+        if value is None or value < float(threshold):
+            issues.append(f"score_below_threshold:{metric}")
+    return issues
 
 
 @dataclass(frozen=True)

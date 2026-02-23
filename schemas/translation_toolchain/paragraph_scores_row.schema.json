@@ -29,8 +29,30 @@
       "$ref": "defs.schema.json#/$defs/string_list"
     },
     "updated_at": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "format": "date-time"
+    },
+    "review_state": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "routing_state": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "transition_trace": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
     }
   },
   "additionalProperties": false
