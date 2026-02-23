@@ -457,6 +457,26 @@ class TranslationToolchainQueueTests(unittest.TestCase):
                 run_phase_c5(paths)
             self.assertEqual(read_jsonl(state_path)[0]["status"], "candidate_assembled")
 
+
+    def test_phase_c5_raises_for_missing_status_in_paragraph_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state_path = root / "state" / "paragraph_state.jsonl"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_jsonl(
+                state_path,
+                [{"paragraph_id": "p_1", "attempt": 0, "excluded_by_policy": False, "failure_history": [], "content_hash": "sha256:" + "d" * 64}],
+            )
+            paths = {
+                "pass2_pre": root / "pass2_pre",
+                "final_candidate": root / "final" / "candidate.md",
+                "candidate_map": root / "final" / "candidate_map.jsonl",
+                "paragraph_state": state_path,
+            }
+            with patch("scripts.translation_toolchain.assemble_candidate", return_value=None):
+                with self.assertRaises(ValueError):
+                    run_phase_c5(paths)
+
     def test_phase_d_marks_review_in_progress_before_aggregation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

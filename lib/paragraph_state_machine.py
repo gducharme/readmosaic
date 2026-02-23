@@ -40,12 +40,14 @@ ALLOWED_STATUS_EVOLUTION: dict[str, set[str]] = {
     "translated_pass2": {"candidate_assembled"},
     "candidate_assembled": {"review_in_progress"},
     "review_in_progress": {"ready_to_merge", "rework_queued", "manual_review_required"},
+    # review_failed is emitted as the immediate review outcome by resolve_review_transition
+    # before routing to rework_queued/manual_review_required in persisted status.
     "review_failed": {"rework_queued", "manual_review_required"},
     "rework_queued": {"reworked", "manual_review_required"},
     "reworked": {"translated_pass1", "review_in_progress"},
     "ready_to_merge": {"merged"},
     "manual_review_required": set(),
-    "merged": {"merged"},
+    "merged": set(),
 }
 
 

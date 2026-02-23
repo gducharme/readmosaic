@@ -235,7 +235,9 @@ def _mutate_paragraph_statuses(
     for row in rows:
         paragraph_id = str(row.get("paragraph_id", ""))
         excluded = row.get("excluded_by_policy", False) is True
-        current_status = str(row.get("status", "ingested"))
+        if "status" not in row:
+            raise ValueError(f"Invalid paragraph_state row for '{paragraph_id}': missing required status")
+        current_status = str(row["status"])
         assert_pipeline_state_allowed(current_status, excluded)
 
         should_update = (
