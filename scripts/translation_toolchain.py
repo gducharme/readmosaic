@@ -528,9 +528,17 @@ def resolve_paragraph_review_state(
     aggregate_paragraph_reviews.py.
     """
 
+    raw_blocking_issues = review_aggregate.get("blocking_issues", [])
+    if raw_blocking_issues is None:
+        raw_blocking_issues = []
+    if not isinstance(raw_blocking_issues, list):
+        raise ValueError("review_aggregate.blocking_issues must be a list of strings when provided")
+    if any(not isinstance(issue, str) for issue in raw_blocking_issues):
+        raise ValueError("review_aggregate.blocking_issues must contain only strings")
+
     review = ParagraphReviewAggregate(
         hard_fail=bool(review_aggregate.get("hard_fail", False)),
-        blocking_issues=tuple(review_aggregate.get("blocking_issues", [])),
+        blocking_issues=tuple(raw_blocking_issues),
         scores=dict(review_aggregate.get("scores", {})),
     )
     policy = ParagraphPolicyConfig(max_attempts=max_attempts)
@@ -1176,7 +1184,15 @@ def _run_rework_only(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Translation toolchain mode orchestrator.")
-    parser.add_argument("--mode", required=True, choices=("full", "rework-only", "status"))
+    parser.add_argument(
+        "--mode",
+        required=True,
+        choices=("full", "rework-only", "status"),
+        help=(
+            "Execution mode. rework-only does not re-aggregate reviews; "
+            "it only updates attempts for currently rework_queued rows and rebuilds queue projection."
+        ),
+    )
     parser.add_argument("--run-id", required=True, help="Run identifier under runs/<run_id>.")
     parser.add_argument(
         "--pipeline-profile",
@@ -1405,14 +1421,18 @@ def main() -> None:
                 return RuntimeError("Heartbeat stalled near stale-lock threshold; aborting to preserve lock authority")
             return None
 
+        phase_succeeded = False
         try:
             _safe_maybe_heartbeat()
             if fatal_heartbeat_error is not None:
                 raise fatal_heartbeat_error
             current_phase_abort_checker = _phase_abort_error
+            # IMPORTANT: phase implementations must either call _exec_phase_command(... should_abort=...)
+            # or periodically invoke should_abort() so heartbeat degradation can interrupt long-running work.
             runner()
             if fatal_heartbeat_error is not None:
                 raise fatal_heartbeat_error
+            phase_succeeded = True
         except Exception:  # noqa: BLE001
             _write_progress(
                 paths,
@@ -1442,6 +1462,9 @@ def main() -> None:
                     )
                 else:
                     print(f"Warning: heartbeat failed during phase {phase_name}: {warning_heartbeat_error}", file=sys.stderr)
+        if not phase_succeeded:
+            return
+
         _write_progress(
             paths,
             run_id=args.run_id,

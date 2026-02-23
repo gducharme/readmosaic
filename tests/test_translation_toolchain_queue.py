@@ -17,6 +17,7 @@ from scripts.translation_toolchain import (
     run_phase_c,
     _ensure_manifest,
     _language_output_dir_name,
+    resolve_paragraph_review_state,
 )
 
 
@@ -269,6 +270,23 @@ class TranslationToolchainQueueTests(unittest.TestCase):
             self.assertTrue((paths["pass2_pre"] / "paragraphs.jsonl").exists())
             self.assertTrue((paths["pass2_pre"] / "sentences.jsonl").exists())
 
+
+
+    def test_resolve_paragraph_review_state_rejects_non_list_blocking_issues(self) -> None:
+        with self.assertRaises(ValueError):
+            resolve_paragraph_review_state(
+                {"paragraph_id": "p_1", "status": "ingested", "attempt": 0, "excluded_by_policy": False},
+                {"blocking_issues": "not-a-list", "scores": {}, "hard_fail": False},
+                max_attempts=4,
+            )
+
+    def test_resolve_paragraph_review_state_rejects_non_string_blocking_issue_item(self) -> None:
+        with self.assertRaises(ValueError):
+            resolve_paragraph_review_state(
+                {"paragraph_id": "p_1", "status": "ingested", "attempt": 0, "excluded_by_policy": False},
+                {"blocking_issues": ["ok", 123], "scores": {}, "hard_fail": False},
+                max_attempts=4,
+            )
 
     def test_language_output_dir_slug_is_safe_for_arbitrary_input(self) -> None:
         self.assertEqual(_language_output_dir_name("French"), "french")
