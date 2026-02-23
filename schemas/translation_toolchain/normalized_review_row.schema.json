@@ -4,99 +4,59 @@
   "title": "review/normalized/*.jsonl row",
   "type": "object",
   "required": [
-    "schema_version",
-    "run_id",
-    "document_id",
-    "paragraph_index",
-    "reviewer",
-    "review_outcome",
-    "reviewed_candidate_hash",
-    "state_after_review",
-    "findings",
-    "reviewed_at"
+    "paragraph_id",
+    "scores",
+    "issues",
+    "blocking_issues",
+    "hard_fail",
+    "issue_count",
+    "critical_count",
+    "blocker_count"
   ],
   "properties": {
-    "schema_version": {
-      "$ref": "defs.schema.json#/$defs/schema_version"
-    },
-    "run_id": {
+    "paragraph_id": {
       "type": "string",
       "minLength": 1
     },
-    "document_id": {
-      "type": "string",
-      "minLength": 1
-    },
-    "paragraph_index": {
-      "$ref": "defs.schema.json#/$defs/paragraph_index"
-    },
-    "reviewer": {
-      "type": "string",
-      "minLength": 1
-    },
-    "review_outcome": {
-      "type": "string",
-      "enum": [
-        "accept",
-        "accept_with_notes",
-        "rework",
-        "reject"
-      ]
-    },
-    "reviewed_candidate_hash": {
+    "content_hash": {
       "$ref": "defs.schema.json#/$defs/content_hash"
     },
-    "state_after_review": {
-      "$ref": "defs.schema.json#/$defs/paragraph_state"
+    "scores": {
+      "$ref": "defs.schema.json#/$defs/score_payload"
     },
-    "findings": {
+    "issues": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": [
-          "code",
-          "severity"
-        ],
         "properties": {
-          "code": {
-            "type": "string",
-            "minLength": 1
-          },
-          "severity": {
-            "$ref": "defs.schema.json#/$defs/severity"
-          },
-          "message": {
-            "type": "string"
-          },
-          "span": {
-            "type": "object",
-            "description": "Offsets over candidate text in Unicode code points, encoded as [start, start + length).",
-            "required": [
-              "start",
-              "length"
-            ],
-            "properties": {
-              "start": {
-                "type": "integer",
-                "minimum": 0
-              },
-              "length": {
-                "type": "integer",
-                "minimum": 0
-              }
-            },
-            "additionalProperties": false
-          }
+          "issue_id": {"type": "string"},
+          "code": {"type": "string"},
+          "category": {"type": "string"},
+          "severity": {"type": "string"},
+          "reviewer": {"type": "string"},
+          "mapping_status": {"type": "string"},
+          "reason": {"type": "string"}
         },
-        "additionalProperties": false
+        "additionalProperties": true
       }
     },
-    "review_notes": {
-      "type": "string"
+    "blocking_issues": {
+      "$ref": "defs.schema.json#/$defs/string_list"
     },
-    "reviewed_at": {
-      "type": "string",
-      "format": "date-time"
+    "hard_fail": {
+      "type": "boolean"
+    },
+    "issue_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "critical_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "blocker_count": {
+      "type": "integer",
+      "minimum": 0
     }
   },
   "additionalProperties": false

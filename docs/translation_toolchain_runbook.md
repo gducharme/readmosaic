@@ -1,214 +1,232 @@
 # Translation Toolchain Runbook
 
-## Schema package location
+## Canonical artifact contract
 
 All translation toolchain contracts live under `schemas/translation_toolchain/`.
 
-- `paragraph_state_row.schema.json` validates `state/paragraph_state.jsonl` rows.
-- `paragraph_scores_row.schema.json` validates `state/paragraph_scores.jsonl` rows.
-- `rework_queue_row.schema.json` validates `state/rework_queue.jsonl` rows.
-- `candidate_map_row.schema.json` validates `final/candidate_map.jsonl` rows.
-- `normalized_review_row.schema.json` validates `review/normalized/*.jsonl` rows.
-- `manifest.schema.json` validates `manifest.json`.
-- `defs.schema.json` contains shared enums and constraints.
+- `paragraph_state_row.schema.json` → `state/paragraph_state.jsonl`
+- `paragraph_scores_row.schema.json` → `state/paragraph_scores.jsonl`
+- `rework_queue_row.schema.json` → `state/rework_queue.jsonl`
+- `candidate_map_row.schema.json` → `final/candidate_map.jsonl`
+- `normalized_review_row.schema.json` → `review/normalized/*.jsonl`
+- `manifest.schema.json` → `manifest.json`
+- `defs.schema.json` → shared enums/primitive contracts
 
-## Required constraints
+The runtime state machine in `lib/paragraph_state_machine.py` is the source of truth for paragraph lifecycle values.
 
-Shared constraints are defined once in `defs.schema.json` and reused across row schemas:
+For normative lifecycle/attempt rules and machine-checkable guarantees, see:
 
-- `paragraph_index` is 1-based (`minimum: 1`).
-- `content_hash` must use the `sha256:` prefix with a 64-character lowercase hex digest.
-- `*_content_hash` fields always reference the content object relevant to that row type (source paragraph, candidate text, or reviewed candidate).
-- `language_code` is **loosely validated** as BCP47-like tags (examples: `en`, `en-US`, `en-us`, `zh-Hans`).
-- `paragraph_state` is an explicit enum:
-  - `ingested`
-  - `translated_pass1`
-  - `reviewed_pass1`
-  - `rework_required`
-  - `translated_pass2`
-  - `reviewed_pass2`
-  - `approved`
-  - `rejected`
-- `candidate_map` uses `selection_outcome` (`approved|rejected`) to avoid overloading paragraph lifecycle `state`.
+- **Canonical paragraph lifecycle statuses**
+- **Identifier, attempt, and lineage semantics**
+- **Enforced invariants (single source of truth)**
 
-Additional row invariants:
+## Canonical paragraph lifecycle statuses
 
-- `rework_queue_row.state` is required and fixed as `rework_required`.
-- `rework_queue_row.priority` uses a dedicated `priority_level` enum (`low|medium|high|critical`).
-- `paragraph_state_row.attempt` is disallowed for `ingested` rows and required for all other states.
-- All `scores` and `thresholds` values in `paragraph_scores_row` are bounded to `[0,1]`.
-- `normalized_review_row.state_after_review` is required.
-- `manifest` pins normalized review artifacts to the glob `review/normalized/*.jsonl` for file-level verification.
-- `manifest.counts` (when present): `paragraphs_total` is the total paragraph count for the run, while `paragraphs_approved` and `paragraphs_rework` are status buckets and are expected to be computed from final paragraph outcomes.
-- `normalized_review_row.findings[].span` uses `{start, length}` in Unicode code points over candidate text, representing `[start, start + length)`.
+`status` must be one of:
 
-## `schema_version` strategy (forward compatibility)
+- `ingested`
+- `translated_pass1`
+- `translated_pass2`
+- `candidate_assembled`
+- `review_in_progress`
+- `review_failed`
+- `rework_queued`
+- `reworked`
+- `ready_to_merge`
+- `manual_review_required`
+- `merged`
 
-All schema-bound JSON objects require a `schema_version` field.
+## Identifier, attempt, and lineage semantics
 
-Current strategy:
+- `paragraph_id` is the canonical paragraph key across state/review/queue/map artifacts.
+- `paragraph_index` is 1-based canonical run ordering (and is used for `final/candidate.md` line-range mapping).
+- `attempt` on paragraph state rows is runtime attempt progress and is 0-based.
+- `attempt` is always present in `state/paragraph_state.jsonl` rows (including `ingested`, where it is `0`).
+- In reviewed examples below, `attempt` values of `1`/`2` reflect first/second completed review transitions from an initial ingested `attempt: 0` baseline.
+- `failure_history[].attempt` reflects a recorded review failure attempt and is emitted 1-based by runtime transition logic.
+- `failure_history[].attempt` is a failure-event counter and is semantically distinct from `paragraph_state_row.attempt` (which is 0-based runtime progress); values may coincide numerically on failed transitions but should not be treated as interchangeable fields.
+- `content_hash` is the canonical lineage key for paragraph-level artifacts; optional `source_content_hash` and `candidate_content_hash` preserve source/candidate lineage when present.
 
-- Format is semantic versioning (`MAJOR.MINOR.PATCH`).
-- Current major version is `1` and enforced by pattern `^1\.\d+\.\d+$`.
-- Producers should increment:
-  - `PATCH` for clarifications and non-structural schema text updates.
-  - `MINOR` for backward-compatible changes that do **not** add unrecognized top-level fields to strict rows.
-  - `MAJOR` for breaking changes.
+## Row-level schema expectations
 
-Consumer behavior:
+### `state/paragraph_state.jsonl`
 
-1. Reject payloads where `schema_version` is missing.
-2. Reject payloads whose major version is unsupported.
-3. Map all `1.x.y` payloads to the v1 schema files currently in this repository (`schemas/translation_toolchain/*.schema.json`) and validate against those contracts.
-4. Because these schemas use `additionalProperties: false`, unknown fields are invalid. New fields therefore require a coordinated schema update.
+Required fields:
 
-## Upgrade behavior
+- `paragraph_id`
+- `status`
+- `attempt` (0-based in runtime)
+- `failure_history`
+- `excluded_by_policy`
+- `content_hash`
 
-When introducing a breaking schema change:
+Important constraints:
 
-1. Create `v2` schema files (or update IDs with v2 pathing) under `schemas/translation_toolchain/`.
-2. Update all writers to emit `schema_version` with major `2`.
-3. Keep readers dual-stack (v1 + v2) during migration.
-4. Backfill historical artifacts only when required for downstream consumers; otherwise, keep immutable v1 artifacts and validate them with v1 schemas.
-5. After migration cutover, remove v1 write paths first, then remove v1 read paths after data retention/SLA windows are met.
+- `excluded_by_policy: true` requires `exclude_reason` (**schema-enforced** via `if/then`).
+- `blocking_issues` is deduplicated when present (**schema-enforced** for `string_list` fields via `uniqueItems: true`).
+- `scores` is an object of `{string -> number}`; metric names are stage-local and dynamic.
+- Additional runtime timestamps may be present (for example: `reviewed_at`, `updated_at`, `last_failed_at`, `last_success_at`).
 
-## Run lock semantics (`RUNNING.lock`)
+### `review/normalized/*.jsonl`
 
-`scripts/translation_toolchain.py` owns run-exclusivity via `runs/<run_id>/RUNNING.lock`.
+Required fields:
 
-### Constants
+- `paragraph_id`
+- `scores`
+- `issues`
+- `blocking_issues`
+- `hard_fail`
+- `issue_count`
+- `critical_count`
+- `blocker_count`
 
-- `LOCK_HEARTBEAT_WRITE_INTERVAL_SECONDS = 10`.
-- `LOCK_STALE_TTL_SECONDS = 120`.
-- `LOCK_STALE_RETRY_BASE_SLEEP_SECONDS = 0.05` (with jitter) to avoid tight spin loops in stale-lock races.
-- `LOCK_FILE_NAME = RUNNING.lock`.
-- `LOCK_STALE_TTL_SECONDS` must remain greater than `2 * LOCK_HEARTBEAT_WRITE_INTERVAL_SECONDS`.
+Behavioral notes:
 
-### Lock file shape
+- Mapping failures are normalized as blocking issues with `code/category = mapping_error`.
+- `scores` is stage-local and may include keys such as `semantic_fidelity` and `grammar`.
 
-Lock payload is JSON and must contain exactly the required operational fields:
+### `final/candidate_map.jsonl`
 
-- `pid` (integer): process ID that acquired the lock.
-- `host` (string): hostname where the process is running.
-- `started_at` (string, ISO-8601 UTC): run start timestamp.
-- `last_heartbeat_at` (string, ISO-8601 UTC): last heartbeat write timestamp.
-- `run_id` (string): run identifier tied to the lock.
+Required fields:
 
-Invalid JSON, missing fields, empty strings, or malformed timestamps are treated as an invalid lock condition.
+- `paragraph_id`
+- `paragraph_index` (1-based)
+- `start_line`
+- `end_line`
 
-### Startup behavior when `RUNNING.lock` already exists
+Optional traceability fields:
 
-1. The tool tries an atomic create (`O_CREAT|O_EXCL`) for `RUNNING.lock`.
-2. If creation fails because the file exists:
-   - Parse and validate existing lock content.
-   - If `last_heartbeat_at` is within `LOCK_STALE_TTL_SECONDS`, startup aborts with an "active run" error.
-   - If `last_heartbeat_at` is older than `LOCK_STALE_TTL_SECONDS`, treat as stale and archive it before retrying acquisition.
-   - Stale retry includes a short randomized backoff to reduce lock-thrashing under concurrent startup.
+- `run_id`
+- `document_id`
+- `content_hash`
 
-### Stale-lock archival behavior
+Behavioral notes:
 
-Stale locks are **never silently deleted**.
+- Ranges are inclusive over `final/candidate.md` line numbers.
+- `end_line >= start_line` is enforced by runtime and by contract tests.
+- Operational rule: `final/candidate_map.jsonl` must be distributed with `manifest.json` so run-level linkage is preserved when optional `run_id`/`document_id` are omitted.
 
-- Existing `RUNNING.lock` is atomically renamed to:
-  - `RUNNING.stale.<timestamp>.lock` where `<timestamp>` is the stale lock heartbeat epoch seconds.
-- Stale archival rename is followed by a best-effort directory fsync for durability.
-- If that filename already exists, a numeric suffix is added:
-  - `RUNNING.stale.<timestamp>.<n>.lock`.
-- Archival rename handles concurrent name-claim races by retrying with incremented suffixes until replace succeeds.
-- After archival, acquisition retries until a fresh lock is created or a fresh competing lock wins.
+### `state/rework_queue.jsonl`
 
-### Race-safe acquisition/release flow
+Required fields:
 
-Acquisition:
+- `paragraph_id`
+- `content_hash`
+- `attempt`
+- `failure_reasons`
+- `failure_history`
+- `required_fixes`
 
-1. Attempt `O_EXCL` lock create.
-2. On `FileExistsError`, inspect existing lock.
-3. Fresh lock => exit without mutating lock file.
-4. Stale lock => rename to `RUNNING.stale.*.lock` and loop back to step 1.
-5. Successful create writes lock JSON with all required fields.
-6. Lock creation is flushed and fsynced for crash durability.
+Behavioral notes:
 
-Heartbeat:
+- Queue rows are a projection of current `status == rework_queued` state rows.
+- Projection lineage invariant: `paragraph_id + content_hash + attempt` in each queue row must match its source paragraph-state row.
+- `failure_history` is carried forward to preserve retry lineage.
 
-- While running, update `last_heartbeat_at` every `LOCK_HEARTBEAT_WRITE_INTERVAL_SECONDS`.
-- Before each heartbeat rewrite, verify `RUNNING.lock` still exists, still belongs to the same `run_id`, and still matches expected file identity.
-- Heartbeat rewrites are atomic (`write temp + fsync + replace`) to avoid partial/corrupt lock JSON on interruption.
-- If ownership/identity checks fail, heartbeat aborts with invalid-lock behavior instead of recreating/replacing a lock no longer owned by this process.
+### `state/paragraph_scores.jsonl`
 
-Release:
+Required fields:
 
-1. Read and validate current `RUNNING.lock`.
-2. Verify on-disk `run_id` matches caller `run_id`.
-3. Only then unlink `RUNNING.lock`.
-4. If IDs mismatch, refuse removal to avoid deleting another process's lock.
-5. Release verifies lock file identity (device/inode) before unlink to reduce TOCTOU replacement risk.
+- `paragraph_id`
+- `status`
+- `attempt`
+- `scores`
+- `blocking_issues`
+- `updated_at`
 
-### Failure modes and recovery
+### `manifest.json`
 
-- **Interrupted process (SIGKILL/crash/host reboot)**:
-  - Lock may remain on disk.
-  - Recovery path is automatic: next startup detects stale heartbeat, archives stale lock, and reacquires.
-- **Corrupt lock file**:
-  - Startup exits with invalid-lock error and requires operator inspection/fix.
-  - Recommended operator action: inspect content, rename `RUNNING.lock` to `RUNNING.invalid.<timestamp>.lock` for audit, then restart acquisition.
-- **Interrupted during atomic heartbeat rewrite**:
-  - `RUNNING.lock` remains valid (old-or-new), but `.{RUNNING.lock}.tmp.<pid>` temp files may remain.
-  - Startup performs best-effort cleanup for old temp files; operators may safely remove leftover temp files if needed.
-- **Concurrent startup races**:
-  - Atomic create ensures only one process acquires active lock.
-  - Losers observe fresh lock and exit as active-run conflict.
-  - If stale lock archival races occur, jittered backoff reduces retry contention.
-- **Release mismatch**:
-  - If lock `run_id` changed before release, process exits with invalid-lock error and does not unlink.
+Required fields:
 
-### Clock and filesystem assumptions
+- `run_id`
+- `pipeline_profile`
+- `source`
+- `model`
+- `pass1_language`
+- `pass2_language` (nullable)
+- `created_at`
 
-- Staleness is computed from wall-clock timestamps (`time.time()` vs `last_heartbeat_at`); large backward/forward clock jumps can delay or accelerate stale detection.
-- This lock design assumes a POSIX-like local/shared filesystem with atomic rename semantics; avoid eventually consistent/object-store backends.
-- Lock behavior is intended for shared-disk coordination, not distributed consensus across independent storage replicas.
+Optional lineage field:
 
-### Expected CLI exit codes and messages (`scripts/translation_toolchain.py`)
+- `source_content_hash`
 
-- `0` (`EXIT_OK`): lock acquired and released successfully.
-- `2` (`EXIT_ACTIVE_LOCK`): active fresh lock exists. Message includes `Run already active: fresh RUNNING.lock exists ...`.
-- `3` (`EXIT_INVALID_LOCK`): lock invalid/corrupt or safe-release check failed. Message starts with `Invalid lock encountered:` or `Failed to release lock safely:`.
-- `4` (`EXIT_LOCK_RACE`): OS-level lock acquisition/write failure. Message starts with `Failed to acquire RUNNING.lock:`.
-
-Operationally, stale-lock archival emits an audit message to stderr of the form:
-
-- `Archived stale lock to <path>/RUNNING.stale.<timestamp>.lock (...)`.
+`manifest.json` is the canonical run-level linkage for row files that omit explicit `run_id`.
 
 
-## Resume semantics (`--mode full` vs `--mode rework-only`)
+## Enforced invariants (single source of truth)
 
-Use modes based on paragraph state, not on whether a previous process crashed.
+- **Schema-enforced:** `paragraph_state_row` always requires `paragraph_id`, `status`, `attempt` (0-based integer), `failure_history`, `excluded_by_policy`, and `content_hash`.
+- **Schema-enforced:** when `excluded_by_policy` is `true`, `exclude_reason` is required (`if/then` in `paragraph_state_row.schema.json`).
+- **Schema-enforced:** `failure_history_entry` must be either modern (`attempt >= 1` and ISO-8601 `timestamp`) or legacy sentinel (`attempt: null` and `timestamp: null`) via `oneOf`.
+- **Schema-enforced:** `candidate_map_row` requires mapping fields only (`paragraph_id`, `paragraph_index`, `start_line`, `end_line`); `run_id`/`document_id` are optional trace fields.
+- **Test-enforced:** `candidate_map_row.end_line >= start_line` is asserted in `tests/test_translation_toolchain_schema_contracts.py`.
+- **Test-enforced:** contract tests assert attempt semantics (`state.attempt >= 0`; `failure_history[].attempt >= 1` when non-null).
 
-### `--mode full`
-- Initializes run artifacts when they do not exist and then executes all phases.
-- On rerun for an existing run, successful paragraphs (`ready_to_merge` / `merged`) remain out of the rework queue because queue generation only emits `rework_queued` rows.
-- `state/paragraph_state.jsonl` updates are persisted atomically, so interruptions yield either the pre-update snapshot or fully written next snapshot.
+## Representative examples
 
-Example:
-```bash
-python scripts/translation_toolchain.py \
-  --mode full \
-  --run-id tx_001 \
-  --pipeline-profile tamazight_two_pass \
-  --source manuscript/source.md \
-  --model <MODEL_ID> \
-  --max-paragraph-attempts 4
+### Happy path
+
+```json
+{
+  "paragraph_id": "p_0001",
+  "status": "ready_to_merge",
+  "attempt": 1,
+  "failure_history": [],
+  "excluded_by_policy": false,
+  "content_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "scores": {"semantic_fidelity": 0.94, "grammar": 0.91},
+  "blocking_issues": [],
+  "reviewed_at": "2026-01-15T10:00:00Z",
+  "updated_at": "2026-01-15T10:00:00Z",
+  "last_failed_at": null,
+  "last_success_at": "2026-01-15T10:00:00Z"
+}
 ```
 
-### `--mode rework-only`
-- Processes only paragraphs currently marked `rework_queued` in `state/paragraph_state.jsonl`.
-- Skips successful paragraphs by construction; they are not re-enqueued unless state transitions back to `rework_queued` with changed failure metadata.
-- Re-running `rework-only` without paragraph state changes is idempotent for `state/rework_queue.jsonl` (no duplicate rows for unchanged packets).
-- `state/rework_queue.jsonl` is regenerated as a projection of current `state/paragraph_state.jsonl` (`rework_queued` rows only), not as an append-only work log.
+### Rework path
 
-Example resume loop:
-```bash
-python scripts/translation_toolchain.py \
-  --mode rework-only \
-  --run-id tx_001 \
-  --max-paragraph-attempts 4
+```json
+{
+  "paragraph_id": "p_0200",
+  "status": "rework_queued",
+  "attempt": 2,
+  "failure_history": [
+    {
+      "attempt": 2,
+      "issues": ["critical_grammar"],
+      "timestamp": "2026-01-18T08:10:00Z"
+    }
+  ],
+  "excluded_by_policy": false,
+  "content_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "scores": {"semantic_fidelity": 0.87, "grammar": 0.61},
+  "blocking_issues": ["critical_grammar"],
+  "reviewed_at": "2026-01-18T08:10:00Z",
+  "updated_at": "2026-01-18T08:10:00Z"
+}
+```
+
+### Mapping-error path
+
+```json
+{
+  "paragraph_id": "p_0101",
+  "status": "manual_review_required",
+  "attempt": 2,
+  "failure_history": [
+    {
+      "attempt": 2,
+      "issues": ["mapping_error"],
+      "timestamp": "2026-02-01T10:00:00Z"
+    }
+  ],
+  "excluded_by_policy": false,
+  "content_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "scores": {"semantic_fidelity": 0.88},
+  "blocking_issues": ["mapping_error"],
+  "reviewed_at": "2026-02-01T10:00:00Z",
+  "updated_at": "2026-02-01T10:00:00Z",
+  "last_failed_at": "2026-02-01T10:00:00Z",
+  "last_success_at": null
+}
 ```

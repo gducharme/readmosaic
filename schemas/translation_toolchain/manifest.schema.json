@@ -4,89 +4,44 @@
   "title": "translation toolchain manifest.json",
   "type": "object",
   "required": [
-    "schema_version",
     "run_id",
-    "document_id",
-    "source_language",
-    "target_language",
-    "created_at",
-    "artifacts"
+    "pipeline_profile",
+    "source",
+    "model",
+    "pass1_language",
+    "pass2_language",
+    "created_at"
   ],
   "properties": {
-    "schema_version": {
-      "$ref": "defs.schema.json#/$defs/schema_version"
-    },
     "run_id": {
       "type": "string",
       "minLength": 1
     },
-    "document_id": {
+    "pipeline_profile": {
       "type": "string",
       "minLength": 1
     },
-    "source_language": {
-      "$ref": "defs.schema.json#/$defs/language_code"
+    "source": {
+      "type": "string",
+      "minLength": 1
     },
-    "target_language": {
-      "$ref": "defs.schema.json#/$defs/language_code"
+    "model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "pass1_language": {
+      "type": "string",
+      "minLength": 1
+    },
+    "pass2_language": {
+      "type": ["string", "null"]
     },
     "created_at": {
       "type": "string",
       "format": "date-time"
     },
-    "pipeline_version": {
-      "type": "string"
-    },
-    "artifacts": {
-      "type": "object",
-      "required": [
-        "paragraph_state",
-        "paragraph_scores",
-        "rework_queue",
-        "candidate_map",
-        "normalized_review"
-      ],
-      "properties": {
-        "paragraph_state": {
-          "type": "string",
-          "const": "state/paragraph_state.jsonl"
-        },
-        "paragraph_scores": {
-          "type": "string",
-          "const": "state/paragraph_scores.jsonl"
-        },
-        "rework_queue": {
-          "type": "string",
-          "const": "state/rework_queue.jsonl"
-        },
-        "candidate_map": {
-          "type": "string",
-          "const": "final/candidate_map.jsonl"
-        },
-        "normalized_review": {
-          "type": "string",
-          "const": "review/normalized/*.jsonl"
-        }
-      },
-      "additionalProperties": false
-    },
-    "counts": {
-      "type": "object",
-      "properties": {
-        "paragraphs_total": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "paragraphs_approved": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "paragraphs_rework": {
-          "type": "integer",
-          "minimum": 0
-        }
-      },
-      "additionalProperties": false
+    "source_content_hash": {
+      "$ref": "defs.schema.json#/$defs/content_hash"
     }
   },
   "additionalProperties": false
