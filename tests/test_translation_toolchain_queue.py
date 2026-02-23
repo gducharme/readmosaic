@@ -15,10 +15,30 @@ from scripts.translation_toolchain import (
     _compute_status_report,
     _materialize_preprocessed_from_translation,
     run_phase_c,
+    _ensure_manifest,
 )
 
 
 class TranslationToolchainQueueTests(unittest.TestCase):
+
+    def test_ensure_manifest_raises_clear_error_for_corrupt_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = {
+                "manifest": root / "manifest.json",
+                "run_root": root,
+            }
+            paths["manifest"].write_text("{not-json", encoding="utf-8")
+
+            with self.assertRaises(ValueError):
+                _ensure_manifest(
+                    paths,
+                    run_id="run_1",
+                    pipeline_profile="standard_single_pass",
+                    source="book.md",
+                    model="gpt-4o",
+                )
+
     def test_packet_contains_full_rework_fields(self) -> None:
         row = {
             "paragraph_id": "p_0002",

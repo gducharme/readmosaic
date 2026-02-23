@@ -584,7 +584,12 @@ def _ensure_manifest(paths: dict[str, Path], *, run_id: str, pipeline_profile: s
         "model": model,
     }
     if paths["manifest"].exists():
-        existing = json.loads(paths["manifest"].read_text(encoding="utf-8"))
+        try:
+            existing = json.loads(paths["manifest"].read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"manifest is not valid JSON for run '{run_id}': {paths['manifest']}") from exc
+        if not isinstance(existing, dict):
+            raise ValueError(f"manifest must be a JSON object for run '{run_id}': {paths['manifest']}")
         drift_fields = [field for field, expected in desired.items() if existing.get(field) != expected]
         if drift_fields:
             mismatches = ", ".join(
@@ -599,7 +604,7 @@ def _ensure_manifest(paths: dict[str, Path], *, run_id: str, pipeline_profile: s
 
 def _exec_phase_command(command: list[str], *, timeout_seconds: int | None = None) -> None:
     try:
-        subprocess.run(command, check=True, timeout=timeout_seconds, stdout=sys.stdout, stderr=sys.stderr)
+        subprocess.run(command, check=True, timeout=timeout_seconds)
     except subprocess.TimeoutExpired as exc:
         raise TimeoutError(f"Phase command timed out after {timeout_seconds}s: {' '.join(command)}") from exc
 
@@ -849,9 +854,16 @@ def run_phase_a(
                 raise ValueError("Invalid paragraph_state row: missing non-empty paragraph_id")
             if not isinstance(content_hash, str) or not content_hash.strip():
                 raise ValueError(f"Invalid paragraph_state row for '{paragraph_id}': missing non-empty content_hash")
+            if paragraph_id in existing_signature:
+                raise ValueError(f"Invalid paragraph_state.jsonl: duplicate paragraph_id '{paragraph_id}'")
             existing_signature[paragraph_id] = content_hash
 
-        new_signature = {row["paragraph_id"]: row["content_hash"] for row in state_rows}
+        new_signature: dict[str, str] = {}
+        for row in state_rows:
+            paragraph_id = row["paragraph_id"]
+            if paragraph_id in new_signature:
+                raise ValueError(f"Invalid source_pre/paragraphs.jsonl: duplicate paragraph_id '{paragraph_id}'")
+            new_signature[paragraph_id] = row["content_hash"]
         if existing_signature != new_signature:
             raise ValueError(
                 "paragraph_state.jsonl drift detected against source_pre/paragraphs.jsonl for immutable run_id; "
@@ -1185,16 +1197,23 @@ def main() -> None:
         heartbeat_stop = threading.Event()
         fatal_heartbeat_error: InvalidRunLockError | None = None
         warning_heartbeat_error: Exception | None = None
+        warning_heartbeat_consecutive_failures = 0
+        heartbeat_degraded = False
 
         def _safe_maybe_heartbeat() -> None:
-            nonlocal fatal_heartbeat_error, warning_heartbeat_error
+            nonlocal fatal_heartbeat_error, warning_heartbeat_error, warning_heartbeat_consecutive_failures, heartbeat_degraded
             try:
                 maybe_heartbeat()
+                warning_heartbeat_consecutive_failures = 0
             except InvalidRunLockError as exc:
                 fatal_heartbeat_error = exc
                 raise
             except Exception as exc:  # noqa: BLE001
                 warning_heartbeat_error = exc
+                warning_heartbeat_consecutive_failures += 1
+                if warning_heartbeat_consecutive_failures >= 3:
+                    heartbeat_degraded = True
+                    heartbeat_stop.set()
 
         def _heartbeat_loop() -> None:
             nonlocal fatal_heartbeat_error
@@ -1230,7 +1249,13 @@ def main() -> None:
             heartbeat_stop.set()
             heartbeat_thread.join(timeout=2)
             if warning_heartbeat_error is not None:
-                print(f"Warning: heartbeat failed during phase {phase_name}: {warning_heartbeat_error}", file=sys.stderr)
+                if heartbeat_degraded:
+                    print(
+                        f"Warning: heartbeat degraded during phase {phase_name} after repeated failures: {warning_heartbeat_error}",
+                        file=sys.stderr,
+                    )
+                else:
+                    print(f"Warning: heartbeat failed during phase {phase_name}: {warning_heartbeat_error}", file=sys.stderr)
         _write_progress(
             paths,
             run_id=args.run_id,
