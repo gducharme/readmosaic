@@ -547,6 +547,32 @@ class TranslationToolchainQueueTests(unittest.TestCase):
             self.assertEqual(rows["p_2"]["status"], "candidate_assembled")
 
 
+    def test_phase_d_rejects_missing_paragraph_id_for_targeted_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state_path = root / "state" / "paragraph_state.jsonl"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_jsonl(
+                state_path,
+                [{"status": "candidate_assembled", "attempt": 0, "excluded_by_policy": False, "failure_history": [], "content_hash": "sha256:" + "1" * 64}],
+            )
+            candidate_map = root / "final" / "candidate_map.jsonl"
+            candidate_map.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_jsonl(candidate_map, [{"paragraph_id": "p_1", "paragraph_index": 1, "start_line": 1, "end_line": 1}])
+            final_candidate = root / "final" / "candidate.md"
+            final_candidate.write_text("text", encoding="utf-8")
+            paths = {
+                "paragraph_state": state_path,
+                "final_candidate": final_candidate,
+                "candidate_map": candidate_map,
+                "review_normalized": root / "review_normalized",
+                "paragraph_scores": root / "state" / "paragraph_scores.jsonl",
+                "rework_queue": root / "state" / "rework_queue.jsonl",
+            }
+
+            with self.assertRaises(ValueError):
+                run_phase_d(paths, max_paragraph_attempts=4, phase_timeout_seconds=0, should_abort=lambda: None)
+
     def test_phase_d_rejects_candidate_map_ids_missing_in_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -591,6 +617,27 @@ class TranslationToolchainQueueTests(unittest.TestCase):
             with patch("scripts.translation_toolchain.assemble_candidate", return_value=None):
                 run_phase_c5(paths)
             self.assertEqual(read_jsonl(state_path)[0]["status"], "review_in_progress")
+
+    def test_phase_e_applies_single_batch_timestamp(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state_path = root / "state" / "paragraph_state.jsonl"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_jsonl(
+                state_path,
+                [
+                    {"paragraph_id": "p_1", "status": "rework_queued", "attempt": 0, "excluded_by_policy": False, "failure_history": [], "content_hash": "sha256:" + "f" * 64},
+                    {"paragraph_id": "p_2", "status": "rework_queued", "attempt": 1, "excluded_by_policy": False, "failure_history": [], "content_hash": "sha256:" + "e" * 64},
+                ],
+            )
+            paths = {
+                "paragraph_state": state_path,
+                "rework_queue": root / "state" / "rework_queue.jsonl",
+            }
+
+            run_phase_e(paths, max_paragraph_attempts=4, bump_attempts=True, should_abort=lambda: None)
+            rows = read_jsonl(state_path)
+            self.assertEqual(rows[0]["updated_at"], rows[1]["updated_at"])
 
     def test_phase_e_marks_reworked_for_rows_leaving_queue(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

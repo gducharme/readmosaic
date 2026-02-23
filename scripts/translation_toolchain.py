@@ -234,6 +234,8 @@ def _mutate_paragraph_statuses(
 
     for row in rows:
         paragraph_id = str(row.get("paragraph_id", ""))
+        if paragraph_ids is not None and not paragraph_id.strip():
+            raise ValueError("Invalid paragraph_state row: missing non-empty paragraph_id for targeted mutation")
         excluded = row.get("excluded_by_policy", False) is True
         if "status" not in row:
             raise ValueError(f"Invalid paragraph_state row for '{paragraph_id}': missing required status")
@@ -1281,6 +1283,8 @@ def run_phase_e(
     # Attempts are incremented only in phase E. Phase D computes review-state
     # transitions without mutating attempts so policy ownership stays centralized.
     rows = read_jsonl(paths["paragraph_state"], strict=True)
+    now_iso = _utc_now_iso()
+    did_change = False
     for row in rows:
         paragraph_id = str(row.get("paragraph_id", "<unknown>"))
         content_hash = row.get("content_hash")
@@ -1295,24 +1299,34 @@ def run_phase_e(
                 raise abort_error
         paragraph_id = str(row.get("paragraph_id", "<unknown>"))
         current_attempt = _coerce_attempt(row.get("attempt", 0), paragraph_id=paragraph_id)
-        row["attempt"] = current_attempt + 1 if bump_attempts else current_attempt
-        row["updated_at"] = _utc_now_iso()
+        next_attempt = current_attempt + 1 if bump_attempts else current_attempt
+        if row.get("attempt") != next_attempt:
+            did_change = True
+        row["attempt"] = next_attempt
+        row["updated_at"] = now_iso
+        did_change = True
         if row["attempt"] >= max_paragraph_attempts:
+            prior_status = row.get("status")
             row["status"] = "manual_review_required"
+            if prior_status != row["status"]:
+                did_change = True
             blockers = list(row.get("blocking_issues", [])) if isinstance(row.get("blocking_issues"), list) else []
             if "max_attempts_reached" not in blockers:
                 blockers.append("max_attempts_reached")
-            row["blocking_issues"] = blockers
+                row["blocking_issues"] = blockers
+                did_change = True
         assert_pipeline_state_allowed(row["status"], row.get("excluded_by_policy", False) is True)
 
         if row["status"] == "rework_queued":
             excluded = row.get("excluded_by_policy", False) is True
             assert_pipeline_transition_allowed("rework_queued", "reworked", excluded)
             row["status"] = "reworked"
-            row["updated_at"] = _utc_now_iso()
+            row["updated_at"] = now_iso
+            did_change = True
             assert_pipeline_state_allowed(row["status"], excluded)
 
-    atomic_write_jsonl(paths["paragraph_state"], rows)
+    if did_change:
+        atomic_write_jsonl(paths["paragraph_state"], rows)
     existing_queue = read_jsonl(paths["rework_queue"], strict=False) if paths["rework_queue"].exists() else []
     queue_rows = build_rework_queue_rows(rows, existing_queue_rows=existing_queue)
     atomic_write_jsonl(paths["rework_queue"], queue_rows)
