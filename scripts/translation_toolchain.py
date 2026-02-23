@@ -55,6 +55,7 @@ EXIT_INVALID_LOCK = 3
 EXIT_LOCK_RACE = 4
 EXIT_USAGE_ERROR = 5
 EXIT_CORRUPT_STATE = 6
+EXIT_PHASE_FAILURE = 7
 
 LockIdentity = tuple[int, int]
 RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -1556,12 +1557,16 @@ def main() -> None:
     print(f"Acquired lock: {lock_path}")
     progress_state["last_heartbeat_at"] = payload["last_heartbeat_at"]
     try:
-        if args.mode == "full":
-            _run_full_pipeline(paths, args, run_phase_with_progress, current_abort_error)
-        elif args.mode == "rework-only":
-            _run_rework_only(paths, args, run_phase_with_progress, current_abort_error)
-        else:
-            raise SystemExit(EXIT_USAGE_ERROR)
+        try:
+            if args.mode == "full":
+                _run_full_pipeline(paths, args, run_phase_with_progress, current_abort_error)
+            elif args.mode == "rework-only":
+                _run_rework_only(paths, args, run_phase_with_progress, current_abort_error)
+            else:
+                raise SystemExit(EXIT_USAGE_ERROR)
+        except (subprocess.CalledProcessError, TimeoutError, ValueError, FileNotFoundError) as exc:
+            print(f"status=phase_failed error={exc}", file=sys.stderr)
+            raise SystemExit(EXIT_PHASE_FAILURE) from exc
     finally:
         try:
             if lock_path is not None and release_run_lock(lock_path, args.run_id):
