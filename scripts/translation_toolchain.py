@@ -683,6 +683,7 @@ def _run_paths(run_id: str) -> dict[str, Path]:
         "review_normalized": run_root / "review" / "normalized",
         "gate_dir": run_root / "gate",
         "gate_report": run_root / "gate" / "gate_report.json",
+        "review_blockers": run_root / "gate" / "review_blockers.json",
     }
 
 
@@ -1800,6 +1801,8 @@ def run_phase_d(
             str(paths["paragraph_scores"]),
             "--queue-out",
             str(paths["rework_queue"]),
+            "--review-blockers-out",
+            str(paths["review_blockers"]),
             "--max-attempts",
             str(max_paragraph_attempts),
         ],
@@ -1955,6 +1958,24 @@ def run_phase_f(
             continue
         merged_output_rows.append(merge_row)
 
+    run_level_blockers: list[dict[str, Any]] = []
+    review_blockers_path = paths.get("review_blockers")
+    if isinstance(review_blockers_path, Path) and review_blockers_path.exists():
+        payload = json.loads(review_blockers_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError(f"Invalid review blocker artifact in {review_blockers_path}: expected object")
+        blockers_payload = payload.get("run_level_blockers", [])
+        if not isinstance(blockers_payload, list):
+            raise ValueError(
+                f"Invalid review blocker artifact in {review_blockers_path}: 'run_level_blockers' must be a list"
+            )
+        for blocker in blockers_payload:
+            if isinstance(blocker, dict):
+                run_level_blockers.append(dict(blocker))
+
+    if run_level_blockers:
+        blocking_entries.append({"paragraph_id": "__run__", "reason": "mapping_error_unresolved"})
+
     can_merge = len(blocking_entries) == 0
 
     paths["gate_dir"].mkdir(parents=True, exist_ok=True)
@@ -1964,6 +1985,7 @@ def run_phase_f(
         "required_paragraph_ids": required_ids,
         "can_merge": can_merge,
         "blocking_paragraphs": blocking_entries,
+        "run_level_blockers": run_level_blockers,
     }
     _atomic_write_json(paths["gate_report"], gate_report)
 

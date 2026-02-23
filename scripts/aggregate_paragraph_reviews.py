@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -30,8 +31,45 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--scores-out", type=Path, required=True, help="Path to paragraph_scores.jsonl output")
     parser.add_argument("--queue-out", type=Path, required=True, help="Path to rework_queue.jsonl output")
     parser.add_argument("--max-attempts", type=int, default=4, help="Maximum paragraph attempts before manual review")
+    parser.add_argument(
+        "--review-blockers-out",
+        type=Path,
+        default=None,
+        help="Optional run-level blocker artifact path (e.g., runs/<run_id>/gate/review_blockers.json)",
+    )
     return parser.parse_args()
 
+
+def _collect_run_level_blockers(review_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    blockers: list[dict[str, Any]] = []
+    for row in review_rows:
+        if row.get("run_level_blocker") is not True:
+            continue
+
+        blocker: dict[str, Any] = {
+            "reason": str(row.get("run_level_blocker_reason") or "mapping_error_unresolved"),
+            "paragraph_id": str(row.get("paragraph_id") or ""),
+        }
+
+        detail = row.get("run_level_blocker_detail")
+        if isinstance(detail, str) and detail.strip():
+            blocker["detail"] = detail.strip()
+
+        issues = row.get("issues")
+        if isinstance(issues, list):
+            blocker["issues"] = [issue for issue in issues if isinstance(issue, dict)]
+
+        blockers.append(blocker)
+
+    deduped: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for blocker in blockers:
+        key = json.dumps(blocker, sort_keys=True, ensure_ascii=False)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(blocker)
+    return deduped
 
 
 
@@ -65,6 +103,7 @@ def main() -> None:
     state_rows = read_jsonl(args.state)
     review_rows = read_jsonl(args.review_rows)
     merged_reviews = _merge_reviews(review_rows)
+    run_level_blockers = _collect_run_level_blockers(review_rows)
 
     score_rows: list[dict[str, Any]] = []
     updated_state_rows: list[dict[str, Any]] = []
@@ -121,6 +160,8 @@ def main() -> None:
 
     unknown_review_rows = sorted(set(merged_reviews) - seen_paragraph_ids)
     for paragraph_id in unknown_review_rows:
+        if paragraph_id == "__unmapped__":
+            continue
         print(
             f"Warning: review row for unknown paragraph_id='{paragraph_id}' was ignored.",
             file=sys.stderr,
@@ -132,6 +173,11 @@ def main() -> None:
     atomic_write_jsonl(args.state, updated_state_rows)
     atomic_write_jsonl(args.scores_out, score_rows)
     atomic_write_jsonl(args.queue_out, rework_queue_rows)
+
+    if args.review_blockers_out is not None:
+        args.review_blockers_out.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"run_level_blockers": run_level_blockers}
+        args.review_blockers_out.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":

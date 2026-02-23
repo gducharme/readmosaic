@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 
 from scripts.normalize_review_output import (
+    RUN_LEVEL_BLOCKER_REASON,
     UNMAPPED_PARAGRAPH_ID,
     _normalize_grammar_rows,
     _normalize_mapped_rows,
@@ -90,6 +91,9 @@ class NormalizeReviewOutputTests(unittest.TestCase):
         self.assertEqual(result[0]["paragraph_id"], UNMAPPED_PARAGRAPH_ID)
         self.assertTrue(result[0]["hard_fail"])
         self.assertIn("mapping_error", result[0]["blocking_issues"])
+        self.assertTrue(result[0]["run_level_blocker"])
+        self.assertEqual(result[0]["run_level_blocker_reason"], RUN_LEVEL_BLOCKER_REASON)
+        self.assertEqual(result[0]["run_level_blocker_detail"], "quote_not_found")
 
 
     def test_mapping_error_sets_code_and_category_without_reason(self) -> None:

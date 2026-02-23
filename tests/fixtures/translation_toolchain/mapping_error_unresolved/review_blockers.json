@@ -1,0 +1,18 @@
+{
+  "run_level_blockers": [
+    {
+      "reason": "mapping_error_unresolved",
+      "paragraph_id": "__unmapped__",
+      "detail": "quote_not_found",
+      "issues": [
+        {
+          "code": "mapping_error",
+          "category": "mapping_error",
+          "reason": "quote_not_found",
+          "mapping_status": "mapping_error",
+          "reviewer": "critics"
+        }
+      ]
+    }
+  ]
+}

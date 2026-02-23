@@ -54,6 +54,51 @@ class TranslationToolchainPhaseFTests(unittest.TestCase):
             self.assertEqual(gate_report["blocking_paragraphs"], [{"paragraph_id": "p_2", "reason": "status:manual_review_required"}])
             self.assertFalse(paths["final_output"].exists())
 
+
+
+    def test_phase_f_blocks_merge_when_run_level_mapping_blocker_exists(self) -> None:
+        fixture_dir = Path(__file__).parent / "fixtures" / "translation_toolchain" / "mapping_error_unresolved"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_root = Path(tmpdir) / "runs" / "tx_001"
+            paths = {
+                "run_root": run_root,
+                "source_pre": run_root / "source_pre",
+                "pass1_pre": run_root / "pass1_pre",
+                "pass2_pre": run_root / "pass2_pre",
+                "paragraph_state": run_root / "state" / "paragraph_state.jsonl",
+                "final_dir": run_root / "final",
+                "final_output": run_root / "final" / "final.md",
+                "final_pre": run_root / "final" / "final_pre",
+                "gate_dir": run_root / "gate",
+                "gate_report": run_root / "gate" / "gate_report.json",
+                "review_blockers": run_root / "gate" / "review_blockers.json",
+            }
+
+            atomic_write_jsonl(
+                paths["source_pre"] / "paragraphs.jsonl",
+                [{"paragraph_id": "p_1", "paragraph_index": 1, "text": "s1", "content_hash": "sha256:" + "a" * 64}],
+            )
+            atomic_write_jsonl(
+                paths["pass2_pre"] / "paragraphs.jsonl",
+                [{"paragraph_id": "p_1", "paragraph_index": 1, "text": "t1", "content_hash": "sha256:" + "a" * 64}],
+            )
+            atomic_write_jsonl(
+                paths["paragraph_state"],
+                [{"paragraph_id": "p_1", "status": "ready_to_merge", "excluded_by_policy": False, "content_hash": "sha256:" + "a" * 64}],
+            )
+
+            paths["review_blockers"].parent.mkdir(parents=True, exist_ok=True)
+            paths["review_blockers"].write_text((fixture_dir / "review_blockers.json").read_text(encoding="utf-8"), encoding="utf-8")
+
+            run_phase_f(paths, run_id="tx_001")
+
+            gate_report = json.loads(paths["gate_report"].read_text(encoding="utf-8"))
+            expected = json.loads((fixture_dir / "expected_phase_f_gate_report.json").read_text(encoding="utf-8"))
+            self.assertFalse(gate_report["can_merge"])
+            self.assertEqual(gate_report["blocking_paragraphs"], expected["blocking_paragraphs"])
+            self.assertEqual(gate_report["run_level_blockers"], expected["run_level_blockers"])
+            self.assertFalse(paths["final_output"].exists())
+
     def test_phase_f_merges_ready_rows_preserving_source_order(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             run_root = Path(tmpdir) / "runs" / "tx_001"

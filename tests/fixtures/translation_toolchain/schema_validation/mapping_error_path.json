@@ -41,7 +41,10 @@
     "hard_fail": true,
     "issue_count": 1,
     "critical_count": 0,
-    "blocker_count": 1
+    "blocker_count": 1,
+    "run_level_blocker": true,
+    "run_level_blocker_reason": "mapping_error_unresolved",
+    "run_level_blocker_detail": "line_not_found"
   },
   "candidate_map_row": {
     "paragraph_id": "p_0101",

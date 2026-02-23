@@ -21,6 +21,7 @@ BLOCKING_CATEGORIES = {
 }
 
 UNMAPPED_PARAGRAPH_ID = "__unmapped__"
+RUN_LEVEL_BLOCKER_REASON = "mapping_error_unresolved"
 
 
 def _read_json(path: Path) -> Any:
@@ -178,6 +179,11 @@ def _normalize_mapped_rows(rows: list[dict[str, Any]], reviewer_name: str) -> li
                     _add_issue(candidate_id, issue_out, hard_fail=True)
             else:
                 _add_issue(UNMAPPED_PARAGRAPH_ID, issue_out, hard_fail=True)
+                bucket = grouped[UNMAPPED_PARAGRAPH_ID]
+                bucket["run_level_blocker"] = True
+                bucket["run_level_blocker_reason"] = RUN_LEVEL_BLOCKER_REASON
+                if isinstance(reason, str) and reason.strip():
+                    bucket["run_level_blocker_detail"] = reason.strip()
             continue
 
     return list(grouped.values())
