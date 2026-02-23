@@ -695,6 +695,7 @@ def _ensure_manifest(
     model: str,
     pass1_language: str,
     pass2_language: str | None,
+    exclusion_policy: dict[str, Any] | None,
 ) -> None:
     desired = {
         "run_id": run_id,
@@ -703,6 +704,7 @@ def _ensure_manifest(
         "model": model,
         "pass1_language": pass1_language,
         "pass2_language": pass2_language,
+        "exclusion_policy": exclusion_policy,
     }
     if paths["manifest"].exists():
         try:
@@ -721,6 +723,50 @@ def _ensure_manifest(
     paths["run_root"].mkdir(parents=True, exist_ok=True)
     payload = {**desired, "created_at": _utc_now_iso()}
     _atomic_write_json(paths["manifest"], payload)
+
+
+def _match_exclusion_policy(
+    paragraph_row: dict[str, Any], exclusion_policy: dict[str, Any] | None
+) -> tuple[bool, str | None]:
+    if not exclusion_policy:
+        return False, None
+
+    paragraph_id = str(paragraph_row.get("paragraph_id") or paragraph_row.get("id") or "").strip()
+    paragraph_text = str(paragraph_row.get("text", ""))
+
+    templates = exclusion_policy.get("templates", [])
+    if isinstance(templates, list):
+        for template in templates:
+            if not isinstance(template, dict):
+                continue
+            pattern = template.get("pattern")
+            if not isinstance(pattern, str) or not pattern:
+                continue
+            flags = 0
+            if template.get("ignore_case") is True:
+                flags |= re.IGNORECASE
+            if re.search(pattern, paragraph_text, flags=flags):
+                reason = template.get("reason")
+                if isinstance(reason, str) and reason.strip():
+                    return True, reason.strip()
+                return True, f"template:{pattern}"
+
+    rules = exclusion_policy.get("rules", [])
+    if isinstance(rules, list):
+        for rule in rules:
+            if not isinstance(rule, dict):
+                continue
+            rule_paragraph_id = rule.get("paragraph_id")
+            if not isinstance(rule_paragraph_id, str) or not rule_paragraph_id.strip():
+                continue
+            if paragraph_id != rule_paragraph_id.strip():
+                continue
+            reason = rule.get("reason")
+            if isinstance(reason, str) and reason.strip():
+                return True, reason.strip()
+            return True, f"rule:{rule_paragraph_id.strip()}"
+
+    return False, None
 
 
 def _exec_phase_command(
@@ -798,7 +844,9 @@ def _language_output_dir_name(language: str) -> str:
     return slug or "language"
 
 
-def _build_seed_state_rows(paragraph_rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+def _build_seed_state_rows(
+    paragraph_rows: list[dict[str, Any]], *, exclusion_policy: dict[str, Any] | None
+) -> tuple[list[dict[str, Any]], int]:
     state_rows: list[dict[str, Any]] = []
     skipped_rows = 0
     for row in paragraph_rows:
@@ -807,13 +855,20 @@ def _build_seed_state_rows(paragraph_rows: list[dict[str, Any]]) -> tuple[list[d
         if not isinstance(paragraph_id, str) or not paragraph_id.strip():
             skipped_rows += 1
             continue
+        excluded_by_policy, exclude_reason = _match_exclusion_policy(row, exclusion_policy)
+        state_row: dict[str, Any] = {
+            "paragraph_id": paragraph_id,
+            "status": "ingested",
+            "attempt": 0,
+            "content_hash": _hash_content(text),
+            "excluded_by_policy": excluded_by_policy,
+        }
+        if exclude_reason is not None:
+            state_row["exclude_reason"] = exclude_reason
+
         state_rows.append(
             {
-                "paragraph_id": paragraph_id,
-                "status": "ingested",
-                "attempt": 0,
-                "content_hash": _hash_content(text),
-                "excluded_by_policy": False,
+                **state_row,
             }
         )
     return state_rows, skipped_rows
@@ -965,6 +1020,21 @@ def _read_manifest(paths: dict[str, Path], *, run_id: str) -> dict[str, Any]:
         raise ValueError(f"manifest is not valid JSON for run '{run_id}': {manifest_path}") from exc
     if not isinstance(payload, dict):
         raise ValueError(f"manifest must be a JSON object for run '{run_id}': {manifest_path}")
+    return payload
+
+
+def _load_exclusion_policy(path: str | None) -> dict[str, Any] | None:
+    if path is None:
+        return None
+    policy_path = Path(path)
+    if not policy_path.exists():
+        raise ValueError(f"exclusion policy file not found: {policy_path}")
+    try:
+        payload = json.loads(policy_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"exclusion policy file is not valid JSON: {policy_path}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"exclusion policy must be a JSON object: {policy_path}")
     return payload
 
 
@@ -1421,6 +1491,8 @@ def run_phase_a(
     pass2_language: str | None,
     source: str,
     model: str,
+    exclusion_policy: dict[str, Any] | None,
+    allow_exclusion_policy_reauthorization: bool,
     phase_timeout_seconds: int,
     should_abort: Callable[[], Exception | None],
 ) -> None:
@@ -1434,6 +1506,7 @@ def run_phase_a(
         model=model,
         pass1_language=pass1_language,
         pass2_language=pass2_language,
+        exclusion_policy=exclusion_policy,
     )
 
     _exec_phase_command(
@@ -1443,7 +1516,7 @@ def run_phase_a(
     )
 
     paragraph_rows = read_jsonl(paths["source_pre"] / "paragraphs.jsonl", strict=True)
-    state_rows, skipped_rows = _build_seed_state_rows(paragraph_rows)
+    state_rows, skipped_rows = _build_seed_state_rows(paragraph_rows, exclusion_policy=exclusion_policy)
     if not paths["paragraph_state"].exists():
         if skipped_rows:
             print(
@@ -1478,6 +1551,50 @@ def run_phase_a(
                 "paragraph_state.jsonl drift detected against source_pre/paragraphs.jsonl for immutable run_id; "
                 "use a new --run-id for changed inputs"
             )
+
+        existing_policy_signature: dict[str, tuple[bool, str | None]] = {}
+        for row in existing_rows:
+            paragraph_id = str(row.get("paragraph_id", "")).strip()
+            existing_policy_signature[paragraph_id] = (
+                row.get("excluded_by_policy", False) is True,
+                row.get("exclude_reason") if isinstance(row.get("exclude_reason"), str) else None,
+            )
+
+        new_policy_signature: dict[str, tuple[bool, str | None]] = {
+            row["paragraph_id"]: (
+                row.get("excluded_by_policy", False) is True,
+                row.get("exclude_reason") if isinstance(row.get("exclude_reason"), str) else None,
+            )
+            for row in state_rows
+        }
+
+        if existing_policy_signature != new_policy_signature:
+            if not allow_exclusion_policy_reauthorization:
+                raise ValueError(
+                    "exclusion policy drift detected for immutable run_id; "
+                    "rerun with --allow-exclusion-policy-reauthorization to apply updated exclusions"
+                )
+
+            now_iso = _utc_now_iso()
+            rewired_rows: list[dict[str, Any]] = []
+            for row in existing_rows:
+                paragraph_id = str(row.get("paragraph_id", "")).strip()
+                next_policy = new_policy_signature.get(paragraph_id)
+                if next_policy is None:
+                    rewired_rows.append(row)
+                    continue
+
+                next_excluded, next_reason = next_policy
+                updated = dict(row)
+                updated["excluded_by_policy"] = next_excluded
+                if next_reason is None:
+                    updated.pop("exclude_reason", None)
+                else:
+                    updated["exclude_reason"] = next_reason
+                updated["updated_at"] = now_iso
+                rewired_rows.append(updated)
+
+            atomic_write_jsonl(paths["paragraph_state"], rewired_rows)
 
 
 def run_phase_b(
@@ -1883,6 +2000,7 @@ def _run_full_pipeline(
     run_phase: Callable[[str, Callable[[], None]], None],
     should_abort: Callable[[], Exception | None],
 ) -> None:
+    exclusion_policy = _load_exclusion_policy(args.exclusion_policy_file)
     subset_paragraph_ids = _resolve_subset_paragraph_ids(
         paths,
         subset_from_queue=args.subset_from_queue,
@@ -1898,6 +2016,8 @@ def _run_full_pipeline(
             pass2_language=args.pass2_language,
             source=args.source,
             model=args.model,
+            exclusion_policy=exclusion_policy,
+            allow_exclusion_policy_reauthorization=args.allow_exclusion_policy_reauthorization,
             phase_timeout_seconds=args.phase_timeout_seconds,
             should_abort=should_abort,
         ),
@@ -2013,6 +2133,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--source", help="Source manuscript path for --mode full.")
     parser.add_argument("--model", help="Model identifier for active execution modes.")
+    parser.add_argument(
+        "--exclusion-policy-file",
+        help="Optional JSON file describing exclusion policy rules/templates for phase-A seeding.",
+    )
+    parser.add_argument(
+        "--allow-exclusion-policy-reauthorization",
+        action="store_true",
+        help="Allow exclusion flag mutation for existing runs when policy drift is detected.",
+    )
     parser.add_argument(
         "--max-paragraph-attempts",
         type=int,
