@@ -42,7 +42,41 @@ class AggregateParagraphReviewsTests(unittest.TestCase):
                     "reason": "mapping_error_unresolved",
                     "paragraph_id": "__unmapped__",
                     "detail": "quote_not_found",
+                    "paragraph_ids": ["__unmapped__"],
                     "issues": [{"code": "mapping_error"}],
+                }
+            ],
+        )
+
+
+    def test_collect_run_level_blockers_deduplicates_same_reason_across_paragraphs(self) -> None:
+        rows = [
+            {
+                "paragraph_id": "p_0002",
+                "run_level_blocker": True,
+                "run_level_blocker_reason": "mapping_error_unresolved",
+                "run_level_blocker_detail": "ambiguous_line_membership",
+                "issues": [{"code": "mapping_error", "line": 11}],
+            },
+            {
+                "paragraph_id": "p_0003",
+                "run_level_blocker": True,
+                "run_level_blocker_reason": "mapping_error_unresolved",
+                "run_level_blocker_detail": "ambiguous_line_membership",
+                "issues": [{"line": 11, "code": "mapping_error"}],
+            },
+        ]
+
+        blockers = _collect_run_level_blockers(rows)
+        self.assertEqual(
+            blockers,
+            [
+                {
+                    "reason": "mapping_error_unresolved",
+                    "paragraph_id": "p_0002",
+                    "detail": "ambiguous_line_membership",
+                    "paragraph_ids": ["p_0002", "p_0003"],
+                    "issues": [{"code": "mapping_error", "line": 11}],
                 }
             ],
         )

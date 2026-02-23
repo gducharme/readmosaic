@@ -9,6 +9,7 @@ from pathlib import Path
 from scripts.normalize_review_output import (
     RUN_LEVEL_BLOCKER_REASON,
     UNMAPPED_PARAGRAPH_ID,
+    _mapping_error_requires_run_blocker,
     _normalize_grammar_rows,
     _normalize_mapped_rows,
 )
@@ -51,6 +52,13 @@ class NormalizeReviewOutputTests(unittest.TestCase):
         self.assertEqual(result[0]["blocking_issues"], ["upstream_blocker"])
         self.assertTrue(result[0]["hard_fail"])
 
+    def test_mapping_error_blocker_reason_classifier(self) -> None:
+        self.assertTrue(_mapping_error_requires_run_blocker("ambiguous_line_membership"))
+        self.assertTrue(_mapping_error_requires_run_blocker("quote_not_found"))
+        self.assertTrue(_mapping_error_requires_run_blocker("invalid_line_anchor"))
+        self.assertTrue(_mapping_error_requires_run_blocker("missing_anchor"))
+        self.assertFalse(_mapping_error_requires_run_blocker("incomplete_range_anchor"))
+
     def test_mapping_error_candidates_force_hard_fail(self) -> None:
         mapped_rows = [
             {
@@ -74,6 +82,9 @@ class NormalizeReviewOutputTests(unittest.TestCase):
             self.assertTrue(row["hard_fail"])
             self.assertIn("mapping_error", row["blocking_issues"])
             self.assertEqual(row["issues"][0]["mapping_status"], "mapping_error")
+            self.assertTrue(row["run_level_blocker"])
+            self.assertEqual(row["run_level_blocker_reason"], RUN_LEVEL_BLOCKER_REASON)
+            self.assertEqual(row["run_level_blocker_detail"], "ambiguous_line_membership")
 
     def test_mapping_error_without_candidates_is_preserved(self) -> None:
         mapped_rows = [
