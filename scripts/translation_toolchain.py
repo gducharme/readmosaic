@@ -53,6 +53,7 @@ EXIT_ACTIVE_LOCK = 2
 EXIT_INVALID_LOCK = 3
 EXIT_LOCK_RACE = 4
 EXIT_USAGE_ERROR = 5
+EXIT_CORRUPT_STATE = 6
 
 LockIdentity = tuple[int, int]
 RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -422,8 +423,6 @@ def acquire_run_lock(run_dir: Path, run_id: str) -> tuple[Path, dict[str, Any], 
     run_dir.mkdir(parents=True, exist_ok=True)
     _cleanup_stale_temp_lock_files(run_dir)
     lock_path = run_dir / LOCK_FILE_NAME
-    payload = _build_lock_payload(run_id)
-    lock_blob = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
 
     while True:
         try:
@@ -448,6 +447,8 @@ def acquire_run_lock(run_dir: Path, run_id: str) -> tuple[Path, dict[str, Any], 
             time.sleep(LOCK_STALE_RETRY_BASE_SLEEP_SECONDS + random.uniform(0, 0.05))
             continue
 
+        payload = _build_lock_payload(run_id)
+        lock_blob = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(lock_blob)
             handle.flush()
@@ -1197,7 +1198,7 @@ def main() -> None:
                 rows = read_jsonl(state_path, strict=True)
             except ValueError as exc:
                 print(f"status=corrupt_state error={exc}", file=sys.stderr)
-                raise SystemExit(EXIT_INVALID_LOCK) from exc
+                raise SystemExit(EXIT_CORRUPT_STATE) from exc
         progress = _read_progress(paths)
         if progress:
             phase = progress.get("current_phase", "unknown")
@@ -1347,6 +1348,11 @@ def main() -> None:
             heartbeat_stop.set()
             current_phase_abort_checker = None
             heartbeat_thread.join(timeout=2)
+            if heartbeat_thread.is_alive():
+                print(
+                    f"Warning: heartbeat thread did not shut down cleanly for phase {phase_name}; it may still be blocked in I/O",
+                    file=sys.stderr,
+                )
             if warning_heartbeat_error is not None:
                 if heartbeat_degraded:
                     print(
