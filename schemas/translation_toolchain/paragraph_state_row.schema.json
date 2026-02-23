@@ -7,7 +7,6 @@
     "paragraph_id",
     "status",
     "attempt",
-    "failure_history",
     "excluded_by_policy",
     "content_hash"
   ],

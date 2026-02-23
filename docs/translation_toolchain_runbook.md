@@ -58,7 +58,7 @@ Required fields:
 - `paragraph_id`
 - `status`
 - `attempt` (0-based in runtime)
-- `failure_history`
+- `failure_history` (required once failure lineage exists; optional on initial ingested seed rows)
 - `excluded_by_policy`
 - `content_hash`
 
@@ -157,7 +157,7 @@ Optional lineage field:
 
 ## Enforced invariants (single source of truth)
 
-- **Schema-enforced:** `paragraph_state_row` always requires `paragraph_id`, `status`, `attempt` (0-based integer), `failure_history`, `excluded_by_policy`, and `content_hash`.
+- **Schema-enforced:** `paragraph_state_row` requires `paragraph_id`, `status`, `attempt` (0-based integer), `excluded_by_policy`, and `content_hash`; `failure_history` becomes required operationally once failures are recorded.
 - **Schema-enforced:** when `excluded_by_policy` is `true`, `exclude_reason` is required (`if/then` in `paragraph_state_row.schema.json`).
 - **Schema-enforced:** `failure_history_entry` must be either modern (`attempt >= 1` and ISO-8601 `timestamp`) or legacy sentinel (`attempt: null` and `timestamp: null`) via `oneOf`.
 - **Schema-enforced:** `candidate_map_row` requires mapping fields only (`paragraph_id`, `paragraph_index`, `start_line`, `end_line`); `run_id`/`document_id` are optional trace fields.
