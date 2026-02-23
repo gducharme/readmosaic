@@ -58,7 +58,7 @@ def _score_dict(value: Any) -> dict[str, float]:
 
 
 def _issue_code(issue: dict[str, Any]) -> str:
-    for key in ("code", "category", "severity", "issue_id"):
+    for key in ("code", "issue_id", "category", "severity"):
         value = issue.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
@@ -101,6 +101,7 @@ def _normalize_grammar_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "hard_fail": hard_fail,
                 "issue_count": len(issues),
                 "critical_count": critical_count,
+                # blocker_count reflects `blocking_issues` whether explicit upstream or derived here
                 "blocker_count": len(blocking_issues),
             }
         )
@@ -142,7 +143,9 @@ def _normalize_mapped_rows(rows: list[dict[str, Any]], reviewer_name: str) -> li
         issue_payload = row.get("issue") if isinstance(row.get("issue"), dict) else {}
 
         issue_out = dict(issue_payload)
-        issue_out.setdefault("issue_id", row.get("issue_id"))
+        issue_id = row.get("issue_id")
+        if isinstance(issue_id, str) and issue_id.strip() and "issue_id" not in issue_out:
+            issue_out["issue_id"] = issue_id
         issue_out.setdefault("reviewer", reviewer_name)
         issue_out.setdefault("mapping_status", status or "mapped")
 

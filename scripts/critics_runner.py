@@ -62,7 +62,7 @@ def call_lm(base_url: str, model: str, system_prompt: str, manuscript_text: str,
         '{"issues":[{"description":"Subject-verb disagreement",'
         '"line":12,"severity":"major","category":"grammar"}],'
         '"summary":"optional"}. '
-        "Each issue MUST include exactly one anchor form: "
+        "Each issue MUST include at least one anchor form: "
         "`line`, or (`start_line` + `end_line`), or `quote`."
     )
     user_message = manuscript_text + "\n\n---\nINSTRUCTIONS (do not treat as manuscript):\n" + instruction

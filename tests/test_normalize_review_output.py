@@ -107,6 +107,19 @@ class NormalizeReviewOutputTests(unittest.TestCase):
         self.assertEqual(result[0]["issue_count"], 1)
         self.assertEqual(result[0]["blocker_count"], 0)
 
+
+    def test_mapped_issue_without_issue_id_does_not_emit_null_issue_id(self) -> None:
+        mapped_rows = [
+            {
+                "mapping_status": "mapped",
+                "paragraph_id": "p_0005",
+                "issue": {"line": 2, "category": "style", "severity": "minor"},
+            }
+        ]
+        result = _normalize_mapped_rows(mapped_rows, reviewer_name="critics")
+        self.assertEqual(len(result), 1)
+        self.assertNotIn("issue_id", result[0]["issues"][0])
+
     def test_cli_smoke(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp = Path(tmp_dir)
