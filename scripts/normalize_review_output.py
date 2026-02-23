@@ -7,6 +7,17 @@ import json
 from pathlib import Path
 from typing import Any
 
+BLOCKING_CATEGORIES = {
+    "meaning_change",
+    "negation",
+    "numbers_units",
+    "named_entity",
+    "timeline",
+    "who_did_what",
+}
+
+UNMAPPED_PARAGRAPH_ID = "__unmapped__"
+
 
 def _read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
@@ -50,6 +61,12 @@ def _issue_code(issue: dict[str, Any]) -> str:
     return "issue"
 
 
+def _is_blocker(issue: dict[str, Any]) -> bool:
+    severity = str(issue.get("severity", "")).strip().lower()
+    category = str(issue.get("category", "")).strip()
+    return severity == "critical" or category in BLOCKING_CATEGORIES
+
+
 def _normalize_grammar_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     normalized: list[dict[str, Any]] = []
     for row in rows:
@@ -63,15 +80,13 @@ def _normalize_grammar_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
         issues: list[dict[str, Any]] = [issue for issue in issues_value if isinstance(issue, dict)]
 
-        blocking = row.get("blocking_issues")
-        if isinstance(blocking, list):
-            blocking_issues = [str(item) for item in blocking if isinstance(item, str) and item.strip()]
+        explicit_blocking = row.get("blocking_issues")
+        if isinstance(explicit_blocking, list):
+            blocking_issues = [str(item) for item in explicit_blocking if isinstance(item, str) and item.strip()]
         else:
-            blocking_issues = []
+            blocking_issues = list(dict.fromkeys(_issue_code(issue) for issue in issues if _is_blocker(issue)))
 
-        if not blocking_issues:
-            blocking_issues = list(dict.fromkeys(_issue_code(issue) for issue in issues))
-
+        critical_count = sum(1 for issue in issues if str(issue.get("severity", "")).strip().lower() == "critical")
         hard_fail = bool(row.get("hard_fail", False) or bool(blocking_issues))
         normalized.append(
             {
@@ -80,6 +95,9 @@ def _normalize_grammar_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "issues": issues,
                 "blocking_issues": blocking_issues,
                 "hard_fail": hard_fail,
+                "issue_count": len(issues),
+                "critical_count": critical_count,
+                "blocker_count": len(blocking_issues),
             }
         )
     return normalized
@@ -91,12 +109,26 @@ def _normalize_mapped_rows(rows: list[dict[str, Any]], reviewer_name: str) -> li
     def _add_issue(paragraph_id: str, issue: dict[str, Any], hard_fail: bool) -> None:
         bucket = grouped.setdefault(
             paragraph_id,
-            {"paragraph_id": paragraph_id, "scores": {}, "issues": [], "blocking_issues": [], "hard_fail": False},
+            {
+                "paragraph_id": paragraph_id,
+                "scores": {},
+                "issues": [],
+                "blocking_issues": [],
+                "hard_fail": False,
+                "issue_count": 0,
+                "critical_count": 0,
+                "blocker_count": 0,
+            },
         )
         bucket["issues"].append(issue)
+        bucket["issue_count"] += 1
+        if str(issue.get("severity", "")).strip().lower() == "critical":
+            bucket["critical_count"] += 1
+
         code = _issue_code(issue)
         if code not in bucket["blocking_issues"]:
             bucket["blocking_issues"].append(code)
+            bucket["blocker_count"] = len(bucket["blocking_issues"])
         bucket["hard_fail"] = bool(bucket["hard_fail"] or hard_fail)
 
     for row in rows:
@@ -122,9 +154,11 @@ def _normalize_mapped_rows(rows: list[dict[str, Any]], reviewer_name: str) -> li
 
             candidates = row.get("candidates") if isinstance(row.get("candidates"), list) else []
             candidate_ids = [
-                c.get("paragraph_id")
-                for c in candidates
-                if isinstance(c, dict) and isinstance(c.get("paragraph_id"), str) and c.get("paragraph_id").strip()
+                candidate.get("paragraph_id")
+                for candidate in candidates
+                if isinstance(candidate, dict)
+                and isinstance(candidate.get("paragraph_id"), str)
+                and candidate.get("paragraph_id").strip()
             ]
             candidate_ids = list(dict.fromkeys(candidate_ids))
 
@@ -133,6 +167,8 @@ def _normalize_mapped_rows(rows: list[dict[str, Any]], reviewer_name: str) -> li
             elif candidate_ids:
                 for candidate_id in candidate_ids:
                     _add_issue(candidate_id, issue_out, hard_fail=True)
+            else:
+                _add_issue(UNMAPPED_PARAGRAPH_ID, issue_out, hard_fail=True)
             continue
 
     return list(grouped.values())

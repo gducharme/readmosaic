@@ -58,12 +58,12 @@ def parse_args() -> argparse.Namespace:
 
 def call_lm(base_url: str, model: str, system_prompt: str, manuscript_text: str, timeout: int) -> str:
     instruction = (
-        "Return strict JSON with this shape: "
-        '{"issues":[{"description":"...",'
-        '"line":12|"start_line":12,"end_line":14|"quote":"exact text",'
-        '"severity":"critical|major|minor", "category":"..."}], '
+        "Return strict JSON only. Example: "
+        '{"issues":[{"description":"Subject-verb disagreement",'
+        '"line":12,"severity":"major","category":"grammar"}],'
         '"summary":"optional"}. '
-        "Each issue must include at least one anchor: line OR start_line/end_line OR quote."
+        "Each issue MUST include exactly one anchor form: "
+        "`line`, or (`start_line` + `end_line`), or `quote`."
     )
     user_message = manuscript_text + "\n\n---\n" + instruction
     return request_chat_completion_content(
