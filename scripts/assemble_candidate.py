@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+PARAGRAPH_SEPARATOR = "\n\n"
+
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
@@ -31,7 +33,13 @@ def assemble_candidate(paragraphs_path: Path, candidate_md: Path, candidate_map:
     current_line = 1
 
     for index, row in enumerate(rows, start=1):
-        paragraph_id = row.get("paragraph_id") or row.get("id")
+        paragraph_id = row.get("paragraph_id")
+        fallback_id = row.get("id")
+        if paragraph_id and fallback_id and str(paragraph_id) != str(fallback_id):
+            raise ValueError(
+                f"Row {index} has conflicting paragraph identifiers: paragraph_id={paragraph_id!r} id={fallback_id!r}"
+            )
+        paragraph_id = paragraph_id or fallback_id
         if not isinstance(paragraph_id, str) or not paragraph_id.strip():
             raise ValueError(f"Row {index} missing paragraph_id/id in {paragraphs_path}")
 
@@ -52,7 +60,7 @@ def assemble_candidate(paragraphs_path: Path, candidate_md: Path, candidate_map:
 
         current_line = end_line + 2
 
-    candidate_text = "\n\n".join(blocks)
+    candidate_text = PARAGRAPH_SEPARATOR.join(blocks)
     candidate_lines = candidate_text.splitlines()
 
     for i, row in enumerate(map_rows, start=1):

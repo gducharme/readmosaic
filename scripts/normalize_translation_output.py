@@ -10,6 +10,10 @@ from pathlib import Path
 from typing import Any
 
 
+PARAGRAPH_SEPARATOR = "\n\n"
+PARAGRAPH_SEPARATOR_LEN = len(PARAGRAPH_SEPARATOR)
+
+
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         raise FileNotFoundError(f"Required source artifact missing: {path}")
@@ -74,7 +78,7 @@ def _extract_translations(payload: dict[str, Any], expected_len: int, source: Pa
 
 def _sentence_spans(text: str) -> list[tuple[str, int, int]]:
     spans: list[tuple[str, int, int]] = []
-    for match in re.finditer(r"[^.!?\n]+(?:[.!?]+|$)", text, flags=re.MULTILINE):
+    for match in re.finditer(r"[^.!?؟。！？\n]+(?:[.!?؟。！？]+|$)", text, flags=re.MULTILINE):
         raw_sentence = match.group(0)
         if not raw_sentence.strip():
             continue
@@ -126,7 +130,7 @@ def normalize_translation_output(source_pre: Path, translation_json: Path, outpu
     paragraph_start = 0
     sentence_counter = 1
     word_counter = 1
-    token_counter = 0
+    token_counter = 1
 
     for idx, (source_row, translated_text) in enumerate(zip(source_rows, translated), start=1):
         paragraph_text = str(translated_text)
@@ -143,6 +147,7 @@ def normalize_translation_output(source_pre: Path, translation_json: Path, outpu
             sentence_id = f"{manuscript_id}-s{sentence_counter:06d}"
             sentence_record = {
                 "id": sentence_id,
+                # order is 0-based append order within manuscript sequence
                 "order": len(sentence_rows),
                 "prev_id": sentence_rows[-1]["id"] if sentence_rows else None,
                 "next_id": None,
@@ -161,6 +166,7 @@ def normalize_translation_output(source_pre: Path, translation_json: Path, outpu
                 word_id = f"{manuscript_id}-w{word_counter:06d}"
                 word_record = {
                     "id": word_id,
+                    # order is 0-based append order within manuscript sequence
                     "order": len(word_rows),
                     "prev_id": word_rows[-1]["id"] if word_rows else None,
                     "next_id": None,
@@ -200,7 +206,7 @@ def normalize_translation_output(source_pre: Path, translation_json: Path, outpu
                 "tokens": paragraph_tokens,
             }
         )
-        paragraph_start += len(paragraph_text) + 2
+        paragraph_start += len(paragraph_text) + PARAGRAPH_SEPARATOR_LEN
 
     manuscript_tokens = {
         "schema_version": "1.0",

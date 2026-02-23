@@ -56,6 +56,7 @@ class NormalizeTranslationOutputTests(unittest.TestCase):
             p2_token_start = manuscript_tokens["paragraphs"][1]["tokens"][0]["start_char"]
             self.assertEqual(p1_token_start, 0)
             self.assertEqual(p2_token_start, len("Hi.") + 2)
+            self.assertEqual(manuscript_tokens["paragraphs"][0]["tokens"][0]["token_id"], "m1-t000001")
 
     def test_missing_source_paragraphs_fails_fast(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -100,6 +101,51 @@ class NormalizeTranslationOutputTests(unittest.TestCase):
                 end = int(row["end_line"])
                 reconstructed = "\n".join(candidate_lines[start:end])
                 self.assertEqual(reconstructed, expected_text)
+
+    def test_sentence_spans_support_unicode_terminators(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_pre = root / "source_pre"
+            source_pre.mkdir(parents=True, exist_ok=True)
+            (source_pre / "paragraphs.jsonl").write_text(
+                json.dumps(
+                    {
+                        "paragraph_id": "p1",
+                        "content_hash": "sha256:" + "a" * 64,
+                        "text": "orig",
+                        "manuscript_id": "m1",
+                        "source": "src.md",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            translation_json = root / "translation.json"
+            translation_json.write_text(
+                json.dumps({"paragraph_translations": ["你好。مرحبا؟"]}),
+                encoding="utf-8",
+            )
+
+            output_pre = root / "pass1_pre"
+            normalize_translation_output(source_pre, translation_json, output_pre)
+            sentence_rows = [
+                json.loads(line)
+                for line in (output_pre / "sentences.jsonl").read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            self.assertEqual(len(sentence_rows), 2)
+
+    def test_assemble_candidate_rejects_conflicting_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paragraphs = root / "paragraphs.jsonl"
+            paragraphs.write_text(
+                json.dumps({"paragraph_id": "p1", "id": "different", "text": "line1"}) + "\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(ValueError):
+                assemble_candidate(paragraphs, root / "candidate.md", root / "candidate_map.jsonl")
 
 
 if __name__ == "__main__":
