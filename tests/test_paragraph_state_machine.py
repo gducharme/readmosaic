@@ -38,21 +38,28 @@ class ParagraphStateMachineTests(unittest.TestCase):
         self.assertIsNone(result.metadata_updates["last_failed_at"])
         self.assertIsNone(result.metadata_updates["last_success_at"])
         self.assertEqual(result.metadata_updates["updated_at"], "2020-01-02T00:00:00Z")
+        self.assertIsNone(result.metadata_updates["failure_history"][0]["state"])
 
     def test_fail_before_max_goes_to_rework(self) -> None:
         prior = {"status": "review_in_progress", "attempt": 1, "failure_history": [], "excluded_by_policy": False}
         review = ParagraphReviewAggregate(hard_fail=True, blocking_issues=("critical_grammar",), scores={})
         result = resolve_review_transition(prior, review, ParagraphPolicyConfig(max_attempts=4), now_iso="2026-02-23T00:00:00Z")
+        self.assertEqual(result.immediate_state, "review_failed")
+        self.assertEqual(result.follow_up_state, "rework_queued")
         self.assertEqual(result.next_state, "rework_queued")
         self.assertEqual(result.metadata_updates["attempt"], 2)
         self.assertEqual(result.metadata_updates["failure_history"][0]["issues"], ["critical_grammar"])
+        self.assertEqual(result.metadata_updates["failure_history"][0]["state"], "review_failed")
 
     def test_fail_at_max_goes_manual(self) -> None:
         prior = {"status": "review_in_progress", "attempt": 3, "failure_history": [], "excluded_by_policy": False}
         review = ParagraphReviewAggregate(hard_fail=True, blocking_issues=("critical_grammar",), scores={})
         result = resolve_review_transition(prior, review, ParagraphPolicyConfig(max_attempts=4), now_iso="2026-02-23T00:00:00Z")
+        self.assertEqual(result.immediate_state, "review_failed")
+        self.assertEqual(result.follow_up_state, "manual_review_required")
         self.assertEqual(result.next_state, "manual_review_required")
         self.assertEqual(result.metadata_updates["attempt"], 4)
+        self.assertEqual(result.metadata_updates["failure_history"][0]["state"], "review_failed")
 
     def test_immediate_reason_goes_manual(self) -> None:
         prior = {"status": "review_in_progress", "attempt": 1, "failure_history": [], "excluded_by_policy": False}

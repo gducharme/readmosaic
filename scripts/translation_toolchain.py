@@ -23,7 +23,12 @@ from typing import Any, Callable
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from lib.paragraph_state_machine import assert_pipeline_state_allowed
+from lib.paragraph_state_machine import (
+    ParagraphPolicyConfig,
+    ParagraphReviewAggregate,
+    assert_pipeline_state_allowed,
+    resolve_review_transition,
+)
 from scripts.assemble_candidate import assemble_candidate
 from scripts.normalize_translation_output import PARAGRAPH_SEPARATOR_LEN, normalize_translation_output
 
@@ -46,7 +51,7 @@ LOCK_FILE_FIELDS = (
 
 # Convenience presets only (non-exhaustive): callers may provide explicit --pass1-language/--pass2-language
 # for arbitrary language flows without using presets.
-PIPELINE_PRESET_CONFIG: dict[str, dict[str, str | None]] = {
+PIPELINE_PRESETS: dict[str, dict[str, str | None]] = {
     "tamazight_two_pass": {"pass1_language": "Tamazight", "pass2_language": "Tifinagh"},
     "standard_single_pass": {"pass1_language": "Tamazight", "pass2_language": None},
 }
@@ -230,6 +235,51 @@ def _coerce_optional_list_field(
         )
     return list(value)
 
+
+
+
+def resolve_paragraph_review_state(
+    prior_state: dict[str, Any],
+    review_result: dict[str, Any],
+    *,
+    max_attempts: int,
+) -> dict[str, Any]:
+    blocking_issues = review_result.get("blocking_issues", [])
+    if not isinstance(blocking_issues, list):
+        raise ValueError("review_result.blocking_issues must be a list")
+    if any(not isinstance(issue, str) for issue in blocking_issues):
+        raise ValueError("review_result.blocking_issues items must be strings")
+
+    scores = review_result.get("scores", {})
+    if not isinstance(scores, dict):
+        raise ValueError("review_result.scores must be a dict")
+    for key, value in scores.items():
+        if not isinstance(key, str):
+            raise ValueError("review_result.scores keys must be strings")
+        if isinstance(value, bool):
+            raise ValueError("review_result.scores values must be numeric (bool is not allowed)")
+        if not isinstance(value, (int, float)):
+            raise ValueError("review_result.scores values must be numeric")
+
+    review = ParagraphReviewAggregate(
+        hard_fail=bool(review_result.get("hard_fail", False)),
+        blocking_issues=tuple(blocking_issues),
+        scores={k: float(v) for k, v in scores.items()},
+    )
+    transition = resolve_review_transition(prior_state, review, ParagraphPolicyConfig(max_attempts=max_attempts))
+    next_row = dict(prior_state)
+    next_row.update(transition.metadata_updates)
+
+    transition_trace: list[str] = [transition.immediate_state]
+    next_row["status"] = transition.immediate_state
+    if transition.follow_up_state is not None:
+        transition_trace.append(transition.follow_up_state)
+        next_row["status"] = transition.follow_up_state
+
+    next_row["review_state"] = transition.immediate_state
+    next_row["routing_state"] = transition.follow_up_state
+    next_row["review_transition_trace"] = transition_trace
+    return next_row
 
 def build_rework_queue_packet(paragraph_state_row: dict[str, Any]) -> dict[str, Any] | None:
     if paragraph_state_row.get("status") != "rework_queued":
@@ -1462,9 +1512,9 @@ def _raise_usage_error(message: str) -> None:
 def _resolve_pipeline_languages(args: argparse.Namespace) -> tuple[str, str | None]:
     preset_defaults: dict[str, str | None] = {}
     if args.pipeline_profile:
-        if args.pipeline_profile not in PIPELINE_PRESET_CONFIG:
+        if args.pipeline_profile not in PIPELINE_PRESETS:
             _raise_usage_error(f"Unknown pipeline preset: {args.pipeline_profile}")
-        preset_defaults = PIPELINE_PRESET_CONFIG[args.pipeline_profile]
+        preset_defaults = PIPELINE_PRESETS[args.pipeline_profile]
 
     resolved_pass1_language = _normalize_optional_language(args.pass1_language)
     if resolved_pass1_language is None:

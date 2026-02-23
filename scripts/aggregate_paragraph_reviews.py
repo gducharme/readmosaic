@@ -87,20 +87,34 @@ def main() -> None:
         )
         transition = resolve_review_transition(row, review, policy)
         next_row = dict(row)
-        next_row["status"] = transition.next_state
         next_row.update(transition.metadata_updates)
 
+        # Record deterministic review lineage moment, then apply routing (single persisted row; status is final).
+        transition_trace: list[str] = [transition.immediate_state]
+        next_row["status"] = transition.immediate_state
         assert_pipeline_state_allowed(next_row["status"], bool(next_row.get("excluded_by_policy", False)))
+
+        if transition.follow_up_state is not None:
+            transition_trace.append(transition.follow_up_state)
+            next_row["status"] = transition.follow_up_state
+            assert_pipeline_state_allowed(next_row["status"], bool(next_row.get("excluded_by_policy", False)))
+
+        next_row["review_state"] = transition.immediate_state
+        next_row["routing_state"] = transition.follow_up_state
+        next_row["review_transition_trace"] = transition_trace
 
         updated_state_rows.append(next_row)
         score_rows.append(
             {
                 "paragraph_id": paragraph_id,
                 "status": next_row["status"],
+                "review_state": transition.immediate_state,
+                "routing_state": transition.follow_up_state,
                 "attempt": next_row.get("attempt", 0),
                 "scores": next_row.get("scores", {}),
                 "blocking_issues": next_row.get("blocking_issues", []),
                 "updated_at": next_row.get("updated_at"),
+                "transition_trace": transition_trace,
             }
         )
 
