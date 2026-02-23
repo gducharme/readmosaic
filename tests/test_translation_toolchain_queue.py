@@ -28,10 +28,19 @@ from scripts.translation_toolchain import (
     _run_rework_only,
     _is_stale,
     _resolve_pipeline_languages,
+    run_rework_translation_stage,
 )
 
 
 class TranslationToolchainQueueTests(unittest.TestCase):
+
+    _REWORK_FIXTURE_ROOT = (
+        Path(__file__).parent / "fixtures" / "translation_toolchain" / "rework_only_targeted_loop"
+    )
+
+    def _write_fixture_file(self, src_name: str, dest_path: Path) -> None:
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        dest_path.write_text((self._REWORK_FIXTURE_ROOT / src_name).read_text(encoding="utf-8"), encoding="utf-8")
 
     def test_ensure_manifest_raises_clear_error_for_corrupt_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -857,7 +866,7 @@ class TranslationToolchainQueueTests(unittest.TestCase):
         self.assertEqual(out[0]["attempt"], 2)
 
 
-    def test_run_rework_only_executes_phase_d_then_e(self) -> None:
+    def test_run_rework_only_executes_phase_r_d_e(self) -> None:
         phase_calls: list[str] = []
 
         def run_phase(name: str, runner):
@@ -866,12 +875,400 @@ class TranslationToolchainQueueTests(unittest.TestCase):
         from argparse import Namespace
 
         args = Namespace(
+            run_id="run_1",
             max_paragraph_attempts=4,
             phase_timeout_seconds=0,
             no_bump_attempts=False,
+            pass1_language="Tamazight",
+            pass2_language="Tifinagh",
+            model="gpt-4o-mini",
+            rework_run_phase_f=False,
         )
-        _run_rework_only(paths={}, args=args, run_phase=run_phase, should_abort=lambda: None)
-        self.assertEqual(phase_calls, ["D", "E"])
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = Path(tmp) / "manifest.json"
+            manifest.write_text(json.dumps({"pass1_language": "Tamazight", "pass2_language": "Tifinagh", "model": "gpt-4o-mini"}), encoding="utf-8")
+            with patch("scripts.translation_toolchain.run_rework_translation_stage", return_value=set()):
+                _run_rework_only(paths={"manifest": manifest}, args=args, run_phase=run_phase, should_abort=lambda: None)
+        self.assertEqual(phase_calls, ["R", "D", "E"])
+
+    def test_run_rework_only_optionally_runs_phase_f(self) -> None:
+        phase_calls: list[str] = []
+
+        def run_phase(name: str, runner):
+            phase_calls.append(name)
+
+        from argparse import Namespace
+
+        args = Namespace(
+            run_id="run_1",
+            max_paragraph_attempts=4,
+            phase_timeout_seconds=0,
+            no_bump_attempts=False,
+            pass1_language="Tamazight",
+            pass2_language="Tifinagh",
+            model="gpt-4o-mini",
+            rework_run_phase_f=True,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = Path(tmp) / "manifest.json"
+            manifest.write_text(json.dumps({"pass1_language": "Tamazight", "pass2_language": "Tifinagh", "model": "gpt-4o-mini"}), encoding="utf-8")
+            with patch("scripts.translation_toolchain.run_rework_translation_stage", return_value=set()):
+                _run_rework_only(paths={"manifest": manifest}, args=args, run_phase=run_phase, should_abort=lambda: None)
+        self.assertEqual(phase_calls, ["R", "D", "E", "F"])
+
+    def test_rework_translation_stage_rewrites_only_queued_paragraphs_from_fixture(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = {
+                "run_root": root,
+                "source_pre": root / "source_pre",
+                "pass1_pre": root / "pass1_pre",
+                "pass2_pre": root / "pass2_pre",
+                "final_candidate": root / "final" / "candidate.md",
+                "candidate_map": root / "final" / "candidate_map.jsonl",
+                "paragraph_state": root / "state" / "paragraph_state.jsonl",
+                "rework_queue": root / "state" / "rework_queue.jsonl",
+            }
+            self._write_fixture_file("source_pre_paragraphs.jsonl", paths["source_pre"] / "paragraphs.jsonl")
+            self._write_fixture_file("pass1_pre_before.jsonl", paths["pass1_pre"] / "paragraphs.jsonl")
+            self._write_fixture_file("pass2_pre_before.jsonl", paths["pass2_pre"] / "paragraphs.jsonl")
+            self._write_fixture_file("paragraph_state_before.jsonl", paths["paragraph_state"])
+            self._write_fixture_file("rework_queue.jsonl", paths["rework_queue"])
+
+            def _stub_exec(command, **kwargs):
+                preprocessed = Path(command[command.index("--preprocessed") + 1])
+                output_root = Path(command[command.index("--output-root") + 1])
+                language = command[command.index("--language") + 1]
+                paragraphs = read_jsonl(preprocessed / "paragraphs.jsonl")
+                if language == "Tamazight":
+                    out_rows = [f"RW1:{row['text']}" for row in paragraphs]
+                else:
+                    out_rows = [f"RW2:{row['text']}" for row in paragraphs]
+                output_path = output_root / _language_output_dir_name(language)
+                output_path.mkdir(parents=True, exist_ok=True)
+                (output_path / "translation.json").write_text(
+                    json.dumps({"paragraph_translations": out_rows}),
+                    encoding="utf-8",
+                )
+
+            with patch("scripts.translation_toolchain._exec_phase_command", side_effect=_stub_exec):
+                queued_ids = run_rework_translation_stage(
+                    paths,
+                    pass1_language="Tamazight",
+                    pass2_language="Tifinagh",
+                    model="gpt-4o-mini",
+                    phase_timeout_seconds=0,
+                    should_abort=lambda: None,
+                )
+
+            self.assertEqual(queued_ids, {"p_0002"})
+            self.assertEqual(read_jsonl(paths["pass1_pre"] / "paragraphs.jsonl"), read_jsonl(self._REWORK_FIXTURE_ROOT / "expected_pass1_after.jsonl"))
+            self.assertEqual(read_jsonl(paths["pass2_pre"] / "paragraphs.jsonl"), read_jsonl(self._REWORK_FIXTURE_ROOT / "expected_pass2_after.jsonl"))
+            self.assertEqual(read_jsonl(paths["candidate_map"]), read_jsonl(self._REWORK_FIXTURE_ROOT / "expected_candidate_map.jsonl"))
+            self.assertEqual(paths["final_candidate"].read_text(encoding="utf-8"), (self._REWORK_FIXTURE_ROOT / "expected_candidate.md").read_text(encoding="utf-8"))
+
+            actual_state = read_jsonl(paths["paragraph_state"])
+            expected_state = read_jsonl(self._REWORK_FIXTURE_ROOT / "expected_state_after_stage.jsonl")
+            self.assertEqual(len(actual_state), len(expected_state))
+            self.assertEqual(actual_state[0]["paragraph_id"], expected_state[0]["paragraph_id"])
+            self.assertEqual(actual_state[0]["status"], expected_state[0]["status"])
+            self.assertEqual(actual_state[0]["attempt"], expected_state[0]["attempt"])
+            self.assertEqual(actual_state[1]["paragraph_id"], "p_0002")
+            self.assertEqual(actual_state[1]["status"], "reworked")
+            self.assertIsInstance(actual_state[1].get("updated_at"), str)
+
+    def test_rework_translation_stage_single_pass_uses_pass1_for_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = {
+                "run_root": root,
+                "source_pre": root / "source_pre",
+                "pass1_pre": root / "pass1_pre",
+                "pass2_pre": root / "pass2_pre",
+                "final_candidate": root / "final" / "candidate.md",
+                "candidate_map": root / "final" / "candidate_map.jsonl",
+                "paragraph_state": root / "state" / "paragraph_state.jsonl",
+                "rework_queue": root / "state" / "rework_queue.jsonl",
+            }
+            self._write_fixture_file("source_pre_paragraphs.jsonl", paths["source_pre"] / "paragraphs.jsonl")
+            self._write_fixture_file("pass1_pre_before.jsonl", paths["pass1_pre"] / "paragraphs.jsonl")
+            self._write_fixture_file("paragraph_state_before.jsonl", paths["paragraph_state"])
+            self._write_fixture_file("rework_queue.jsonl", paths["rework_queue"])
+
+            def _stub_exec(command, **kwargs):
+                preprocessed = Path(command[command.index("--preprocessed") + 1])
+                output_root = Path(command[command.index("--output-root") + 1])
+                language = command[command.index("--language") + 1]
+                paragraphs = read_jsonl(preprocessed / "paragraphs.jsonl")
+                out_rows = [f"RW1:{row['text']}" for row in paragraphs]
+                output_path = output_root / _language_output_dir_name(language)
+                output_path.mkdir(parents=True, exist_ok=True)
+                (output_path / "translation.json").write_text(
+                    json.dumps({"paragraph_translations": out_rows}),
+                    encoding="utf-8",
+                )
+
+            with patch("scripts.translation_toolchain._exec_phase_command", side_effect=_stub_exec):
+                run_rework_translation_stage(
+                    paths,
+                    pass1_language="Tamazight",
+                    pass2_language=None,
+                    model="gpt-4o-mini",
+                    phase_timeout_seconds=0,
+                    should_abort=lambda: None,
+                )
+
+            self.assertIn("RW1:beta source", paths["final_candidate"].read_text(encoding="utf-8"))
+            self.assertFalse((paths["pass2_pre"] / "paragraphs.jsonl").exists())
+
+    def test_rework_translation_stage_single_pass_does_not_mutate_existing_pass2(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = {
+                "run_root": root,
+                "source_pre": root / "source_pre",
+                "pass1_pre": root / "pass1_pre",
+                "pass2_pre": root / "pass2_pre",
+                "final_candidate": root / "final" / "candidate.md",
+                "candidate_map": root / "final" / "candidate_map.jsonl",
+                "paragraph_state": root / "state" / "paragraph_state.jsonl",
+                "rework_queue": root / "state" / "rework_queue.jsonl",
+            }
+            self._write_fixture_file("source_pre_paragraphs.jsonl", paths["source_pre"] / "paragraphs.jsonl")
+            self._write_fixture_file("pass1_pre_before.jsonl", paths["pass1_pre"] / "paragraphs.jsonl")
+            self._write_fixture_file("pass2_pre_before.jsonl", paths["pass2_pre"] / "paragraphs.jsonl")
+            self._write_fixture_file("paragraph_state_before.jsonl", paths["paragraph_state"])
+            self._write_fixture_file("rework_queue.jsonl", paths["rework_queue"])
+
+            before_pass2 = read_jsonl(paths["pass2_pre"] / "paragraphs.jsonl")
+
+            def _stub_exec(command, **kwargs):
+                preprocessed = Path(command[command.index("--preprocessed") + 1])
+                output_root = Path(command[command.index("--output-root") + 1])
+                language = command[command.index("--language") + 1]
+                paragraphs = read_jsonl(preprocessed / "paragraphs.jsonl")
+                out_rows = [f"RW1:{row['text']}" for row in paragraphs]
+                output_path = output_root / _language_output_dir_name(language)
+                output_path.mkdir(parents=True, exist_ok=True)
+                (output_path / "translation.json").write_text(
+                    json.dumps({"paragraph_translations": out_rows}),
+                    encoding="utf-8",
+                )
+
+            with patch("scripts.translation_toolchain._exec_phase_command", side_effect=_stub_exec):
+                run_rework_translation_stage(
+                    paths,
+                    pass1_language="Tamazight",
+                    pass2_language=None,
+                    model="gpt-4o-mini",
+                    phase_timeout_seconds=0,
+                    should_abort=lambda: None,
+                )
+
+            self.assertEqual(read_jsonl(paths["pass2_pre"] / "paragraphs.jsonl"), before_pass2)
+
+    def test_build_merged_rows_rejects_invalid_paragraph_id(self) -> None:
+        from scripts.translation_toolchain import _build_merged_paragraph_rows
+
+        with self.assertRaises(ValueError):
+            _build_merged_paragraph_rows(
+                [{"paragraph_id": None, "text": "bad"}],
+                {"p_1": {"paragraph_id": "p_1", "text": "ok"}},
+            )
+
+    def test_rework_translation_stage_fails_for_content_hash_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = {
+                "run_root": root,
+                "source_pre": root / "source_pre",
+                "pass1_pre": root / "pass1_pre",
+                "pass2_pre": root / "pass2_pre",
+                "final_candidate": root / "final" / "candidate.md",
+                "candidate_map": root / "final" / "candidate_map.jsonl",
+                "paragraph_state": root / "state" / "paragraph_state.jsonl",
+                "rework_queue": root / "state" / "rework_queue.jsonl",
+            }
+            self._write_fixture_file("source_pre_paragraphs.jsonl", paths["source_pre"] / "paragraphs.jsonl")
+            self._write_fixture_file("pass1_pre_before.jsonl", paths["pass1_pre"] / "paragraphs.jsonl")
+            self._write_fixture_file("paragraph_state_before.jsonl", paths["paragraph_state"])
+            atomic_write_jsonl(
+                paths["rework_queue"],
+                [{"paragraph_id": "p_0002", "content_hash": "sha256:" + "9" * 64, "attempt": 1, "failure_reasons": [], "failure_history": [], "required_fixes": []}],
+            )
+
+            with self.assertRaises(ValueError):
+                run_rework_translation_stage(
+                    paths,
+                    pass1_language="Tamazight",
+                    pass2_language=None,
+                    model="gpt-4o-mini",
+                    phase_timeout_seconds=0,
+                    should_abort=lambda: None,
+                )
+
+    def test_rework_translation_stage_pass2_failure_keeps_canonical_unmodified(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = {
+                "run_root": root,
+                "source_pre": root / "source_pre",
+                "pass1_pre": root / "pass1_pre",
+                "pass2_pre": root / "pass2_pre",
+                "final_candidate": root / "final" / "candidate.md",
+                "candidate_map": root / "final" / "candidate_map.jsonl",
+                "paragraph_state": root / "state" / "paragraph_state.jsonl",
+                "rework_queue": root / "state" / "rework_queue.jsonl",
+            }
+            self._write_fixture_file("source_pre_paragraphs.jsonl", paths["source_pre"] / "paragraphs.jsonl")
+            self._write_fixture_file("pass1_pre_before.jsonl", paths["pass1_pre"] / "paragraphs.jsonl")
+            self._write_fixture_file("pass2_pre_before.jsonl", paths["pass2_pre"] / "paragraphs.jsonl")
+            self._write_fixture_file("paragraph_state_before.jsonl", paths["paragraph_state"])
+            self._write_fixture_file("rework_queue.jsonl", paths["rework_queue"])
+
+            before_pass1 = read_jsonl(paths["pass1_pre"] / "paragraphs.jsonl")
+            before_pass2 = read_jsonl(paths["pass2_pre"] / "paragraphs.jsonl")
+
+            def _stub_exec(command, **kwargs):
+                output_root = Path(command[command.index("--output-root") + 1])
+                language = command[command.index("--language") + 1]
+                if language == "Tifinagh":
+                    raise RuntimeError("pass2 failed")
+                output_path = output_root / _language_output_dir_name(language)
+                output_path.mkdir(parents=True, exist_ok=True)
+                (output_path / "translation.json").write_text(
+                    json.dumps({"paragraph_translations": ["RW1:beta source"]}),
+                    encoding="utf-8",
+                )
+
+            with patch("scripts.translation_toolchain._exec_phase_command", side_effect=_stub_exec):
+                with self.assertRaises(RuntimeError):
+                    run_rework_translation_stage(
+                        paths,
+                        pass1_language="Tamazight",
+                        pass2_language="Tifinagh",
+                        model="gpt-4o-mini",
+                        phase_timeout_seconds=0,
+                        should_abort=lambda: None,
+                    )
+
+            self.assertEqual(read_jsonl(paths["pass1_pre"] / "paragraphs.jsonl"), before_pass1)
+            self.assertEqual(read_jsonl(paths["pass2_pre"] / "paragraphs.jsonl"), before_pass2)
+
+    def test_rework_translation_stage_rejects_duplicate_queue_paragraphs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = {
+                "run_root": root,
+                "source_pre": root / "source_pre",
+                "pass1_pre": root / "pass1_pre",
+                "pass2_pre": root / "pass2_pre",
+                "final_candidate": root / "final" / "candidate.md",
+                "candidate_map": root / "final" / "candidate_map.jsonl",
+                "paragraph_state": root / "state" / "paragraph_state.jsonl",
+                "rework_queue": root / "state" / "rework_queue.jsonl",
+            }
+            self._write_fixture_file("source_pre_paragraphs.jsonl", paths["source_pre"] / "paragraphs.jsonl")
+            self._write_fixture_file("pass1_pre_before.jsonl", paths["pass1_pre"] / "paragraphs.jsonl")
+            self._write_fixture_file("paragraph_state_before.jsonl", paths["paragraph_state"])
+            atomic_write_jsonl(
+                paths["rework_queue"],
+                [
+                    {"paragraph_id": "p_0002", "content_hash": "sha256:" + "2" * 64, "attempt": 1, "failure_reasons": [], "failure_history": [], "required_fixes": []},
+                    {"paragraph_id": "p_0002", "content_hash": "sha256:" + "2" * 64, "attempt": 1, "failure_reasons": [], "failure_history": [], "required_fixes": []},
+                ],
+            )
+
+            with self.assertRaises(ValueError):
+                run_rework_translation_stage(
+                    paths,
+                    pass1_language="Tamazight",
+                    pass2_language=None,
+                    model="gpt-4o-mini",
+                    phase_timeout_seconds=0,
+                    should_abort=lambda: None,
+                )
+
+    def test_rework_translation_stage_rejects_active_pipeline_states(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = {
+                "run_root": root,
+                "source_pre": root / "source_pre",
+                "pass1_pre": root / "pass1_pre",
+                "pass2_pre": root / "pass2_pre",
+                "final_candidate": root / "final" / "candidate.md",
+                "candidate_map": root / "final" / "candidate_map.jsonl",
+                "paragraph_state": root / "state" / "paragraph_state.jsonl",
+                "rework_queue": root / "state" / "rework_queue.jsonl",
+            }
+            self._write_fixture_file("source_pre_paragraphs.jsonl", paths["source_pre"] / "paragraphs.jsonl")
+            self._write_fixture_file("pass1_pre_before.jsonl", paths["pass1_pre"] / "paragraphs.jsonl")
+            atomic_write_jsonl(
+                paths["paragraph_state"],
+                [
+                    {"paragraph_id": "p_0001", "status": "translated_pass1", "attempt": 0, "excluded_by_policy": False, "content_hash": "sha256:" + "1" * 64},
+                    {"paragraph_id": "p_0002", "status": "rework_queued", "attempt": 1, "excluded_by_policy": False, "content_hash": "sha256:" + "2" * 64},
+                ],
+            )
+            self._write_fixture_file("rework_queue.jsonl", paths["rework_queue"])
+
+            with self.assertRaises(ValueError):
+                run_rework_translation_stage(
+                    paths,
+                    pass1_language="Tamazight",
+                    pass2_language=None,
+                    model="gpt-4o-mini",
+                    phase_timeout_seconds=0,
+                    should_abort=lambda: None,
+                )
+
+    def test_rework_translation_stage_rejects_duplicate_candidate_indices(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = {
+                "run_root": root,
+                "source_pre": root / "source_pre",
+                "pass1_pre": root / "pass1_pre",
+                "pass2_pre": root / "pass2_pre",
+                "final_candidate": root / "final" / "candidate.md",
+                "candidate_map": root / "final" / "candidate_map.jsonl",
+                "paragraph_state": root / "state" / "paragraph_state.jsonl",
+                "rework_queue": root / "state" / "rework_queue.jsonl",
+            }
+            self._write_fixture_file("source_pre_paragraphs.jsonl", paths["source_pre"] / "paragraphs.jsonl")
+            atomic_write_jsonl(
+                paths["pass1_pre"] / "paragraphs.jsonl",
+                [
+                    {"paragraph_id": "p_0001", "paragraph_index": 2, "text": "alpha", "content_hash": "sha256:" + "1" * 64},
+                    {"paragraph_id": "p_0002", "paragraph_index": 1, "text": "beta", "content_hash": "sha256:" + "2" * 64},
+                ],
+            )
+            self._write_fixture_file("paragraph_state_before.jsonl", paths["paragraph_state"])
+            self._write_fixture_file("rework_queue.jsonl", paths["rework_queue"])
+
+            def _stub_exec(command, **kwargs):
+                preprocessed = Path(command[command.index("--preprocessed") + 1])
+                output_root = Path(command[command.index("--output-root") + 1])
+                language = command[command.index("--language") + 1]
+                paragraphs = read_jsonl(preprocessed / "paragraphs.jsonl")
+                output_path = output_root / _language_output_dir_name(language)
+                output_path.mkdir(parents=True, exist_ok=True)
+                (output_path / "translation.json").write_text(
+                    json.dumps({"paragraph_translations": [f"RW1:{row['text']}" for row in paragraphs]}),
+                    encoding="utf-8",
+                )
+
+            with patch("scripts.translation_toolchain._exec_phase_command", side_effect=_stub_exec):
+                with self.assertRaises(ValueError):
+                    run_rework_translation_stage(
+                        paths,
+                        pass1_language="Tamazight",
+                        pass2_language=None,
+                        model="gpt-4o-mini",
+                        phase_timeout_seconds=0,
+                        should_abort=lambda: None,
+                    )
 
     def test_phase_e_raises_for_missing_content_hash(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

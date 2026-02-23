@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import shutil
+import tempfile
 import random
 import socket
 import subprocess
@@ -954,6 +955,343 @@ def _resolve_merge_paragraphs_path(paths: dict[str, Path]) -> Path:
     )
 
 
+def _read_manifest(paths: dict[str, Path], *, run_id: str) -> dict[str, Any]:
+    manifest_path = paths["manifest"]
+    if not manifest_path.exists():
+        raise FileNotFoundError(f"Missing manifest for run '{run_id}': {manifest_path}")
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"manifest is not valid JSON for run '{run_id}': {manifest_path}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"manifest must be a JSON object for run '{run_id}': {manifest_path}")
+    return payload
+
+
+def _resolve_rework_runtime_config(paths: dict[str, Path], args: argparse.Namespace) -> tuple[str, str | None, str]:
+    manifest = _read_manifest(paths, run_id=args.run_id)
+
+    pass1_language = _normalize_optional_language(getattr(args, "pass1_language", None))
+    if pass1_language is None:
+        pass1_language = _normalize_optional_language(manifest.get("pass1_language"))
+    if pass1_language is None:
+        raise ValueError("Missing pass1 language for rework-only mode; provide --pass1-language or a manifest value")
+
+    pass2_language = _normalize_optional_language(getattr(args, "pass2_language", None))
+    if getattr(args, "pass2_language", None) is None:
+        pass2_language = _normalize_optional_language(manifest.get("pass2_language"))
+
+    model = getattr(args, "model", None)
+    if model is None:
+        manifest_model = manifest.get("model")
+        if isinstance(manifest_model, str) and manifest_model.strip():
+            model = manifest_model.strip()
+    if model is None:
+        raise ValueError("Missing model for rework-only mode; provide --model or a manifest value")
+
+    return pass1_language, pass2_language, model
+
+
+def _build_rework_subset_rows(source_rows: list[dict[str, Any]], paragraph_ids: set[str]) -> list[dict[str, Any]]:
+    by_id: dict[str, dict[str, Any]] = {}
+    for row in source_rows:
+        paragraph_id = row.get("paragraph_id")
+        if isinstance(paragraph_id, str) and paragraph_id.strip():
+            by_id[paragraph_id] = row
+
+    missing = sorted(paragraph_ids - set(by_id))
+    if missing:
+        raise ValueError(f"Rework queue references unknown paragraph_id values: {', '.join(missing)}")
+    return [by_id[paragraph_id] for paragraph_id in sorted(paragraph_ids)]
+
+
+def _build_merged_paragraph_rows(
+    rows: list[dict[str, Any]], replacements: dict[str, dict[str, Any]]
+) -> list[dict[str, Any]]:
+    out_rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        paragraph_id_raw = row.get("paragraph_id")
+        if not isinstance(paragraph_id_raw, str) or not paragraph_id_raw.strip():
+            raise ValueError("Canonical paragraph row is missing non-empty string paragraph_id")
+        paragraph_id = paragraph_id_raw.strip()
+        replacement = replacements.get(paragraph_id)
+        if replacement is None:
+            out_rows.append(row)
+            continue
+        out_rows.append(replacement)
+        seen.add(paragraph_id)
+    missing = sorted(set(replacements) - seen)
+    if missing:
+        raise ValueError(f"Canonical paragraphs missing queued paragraph_id values: {', '.join(missing)}")
+    return out_rows
+
+
+def _validate_rework_queue_lineage(paths: dict[str, Path], queue_rows: list[dict[str, Any]], queued_ids: set[str]) -> None:
+    queue_counts: dict[str, int] = {}
+    for queue_row in queue_rows:
+        paragraph_id = queue_row.get("paragraph_id")
+        if isinstance(paragraph_id, str) and paragraph_id.strip():
+            queue_counts[paragraph_id] = queue_counts.get(paragraph_id, 0) + 1
+    duplicates = sorted(paragraph_id for paragraph_id, count in queue_counts.items() if count > 1)
+    if duplicates:
+        raise ValueError("Duplicate paragraph_id entries in rework_queue: " + ", ".join(duplicates))
+
+    source_rows = read_jsonl(paths["source_pre"] / "paragraphs.jsonl", strict=True)
+    source_hash_by_id: dict[str, str] = {}
+    for row in source_rows:
+        paragraph_id = row.get("paragraph_id")
+        content_hash = row.get("content_hash")
+        if isinstance(paragraph_id, str) and paragraph_id.strip() and isinstance(content_hash, str) and content_hash.strip():
+            source_hash_by_id[paragraph_id] = content_hash
+
+    for queue_row in queue_rows:
+        paragraph_id = queue_row.get("paragraph_id")
+        if not isinstance(paragraph_id, str) or not paragraph_id.strip():
+            continue
+        if paragraph_id not in queued_ids:
+            continue
+        queue_hash = queue_row.get("content_hash")
+        source_hash = source_hash_by_id.get(paragraph_id)
+        if not isinstance(queue_hash, str) or not queue_hash.strip():
+            raise ValueError(f"rework queue row for '{paragraph_id}' is missing non-empty content_hash")
+        if source_hash is None:
+            raise ValueError(f"Rework queue references unknown paragraph_id '{paragraph_id}' in source_pre")
+        if queue_hash != source_hash:
+            raise ValueError(
+                f"Rework queue content_hash mismatch for '{paragraph_id}': queue={queue_hash!r} source_pre={source_hash!r}"
+            )
+
+    state_rows = [_normalize_paragraph_state_row(row) for row in read_jsonl(paths["paragraph_state"], strict=True)]
+    state_by_id = {
+        str(row.get("paragraph_id")): row
+        for row in state_rows
+        if isinstance(row.get("paragraph_id"), str) and str(row.get("paragraph_id")).strip()
+    }
+    missing_state = sorted(paragraph_id for paragraph_id in queued_ids if paragraph_id not in state_by_id)
+    if missing_state:
+        raise ValueError(f"Rework queue paragraph_id values missing from paragraph_state: {', '.join(missing_state)}")
+
+    for paragraph_id in sorted(queued_ids):
+        state_row = state_by_id[paragraph_id]
+        if state_row.get("status") != "rework_queued":
+            raise ValueError(
+                f"Rework queue paragraph '{paragraph_id}' must be in status 'rework_queued' "
+                f"before rework stage; got {state_row.get('status')!r}"
+            )
+
+
+def _normalize_paragraph_state_row(row: dict[str, Any]) -> dict[str, Any]:
+    paragraph_id = row.get("paragraph_id")
+    if not isinstance(paragraph_id, str) or not paragraph_id.strip():
+        raise ValueError("Invalid paragraph_state row: missing non-empty paragraph_id")
+
+    content_hash = row.get("content_hash")
+    if not isinstance(content_hash, str) or not content_hash.strip():
+        raise ValueError(f"Invalid paragraph_state row for '{paragraph_id}': missing non-empty content_hash")
+
+    status = row.get("status")
+    if not isinstance(status, str) or not status.strip():
+        raise ValueError(f"Invalid paragraph_state row for '{paragraph_id}': missing non-empty status")
+
+    normalized = dict(row)
+    normalized["attempt"] = _coerce_attempt(row.get("attempt", 0), paragraph_id=paragraph_id)
+
+    blocking_issues = row.get("blocking_issues", [])
+    if blocking_issues is None:
+        blocking_issues = []
+    if not isinstance(blocking_issues, list):
+        raise ValueError(f"Invalid paragraph_state row for '{paragraph_id}': blocking_issues must be a list")
+    normalized["blocking_issues"] = list(blocking_issues)
+
+    failure_history = row.get("failure_history", [])
+    if failure_history is None:
+        failure_history = []
+    if not isinstance(failure_history, list):
+        raise ValueError(f"Invalid paragraph_state row for '{paragraph_id}': failure_history must be a list")
+    normalized["failure_history"] = list(failure_history)
+
+    excluded = row.get("excluded_by_policy", False) is True
+    normalized["excluded_by_policy"] = excluded
+    assert_pipeline_state_allowed(status, excluded)
+    return normalized
+
+
+def _assert_rework_stage_pipeline_state(paths: dict[str, Path]) -> None:
+    rows = [_normalize_paragraph_state_row(row) for row in read_jsonl(paths["paragraph_state"], strict=True)]
+    disallowed_states = {
+        "translated_pass1",
+        "translated_pass2",
+        "candidate_assembled",
+        "review_in_progress",
+    }
+    blocking_ids = [
+        str(row["paragraph_id"])
+        for row in rows
+        if not bool(row.get("excluded_by_policy", False)) and str(row.get("status")) in disallowed_states
+    ]
+    if blocking_ids:
+        raise ValueError(
+            "Rework stage cannot run while paragraphs are still in active translation/review states: "
+            + ", ".join(sorted(blocking_ids))
+        )
+
+
+def _validate_candidate_paragraph_indices(rows: list[dict[str, Any]], *, paragraphs_path: Path) -> None:
+    seen_indices: set[int] = set()
+    for row in rows:
+        paragraph_id = str(row.get("paragraph_id", "<unknown>"))
+        index = _coerce_paragraph_index(row.get("paragraph_index"), paragraph_id=paragraph_id)
+        if index in seen_indices:
+            raise ValueError(
+                f"Duplicate paragraph_index={index} while rebuilding candidate from {paragraphs_path}"
+            )
+        seen_indices.add(index)
+
+    if seen_indices:
+        expected = set(range(1, len(rows) + 1))
+        if seen_indices != expected:
+            raise ValueError(
+                f"paragraph_index values must be contiguous 1..N in {paragraphs_path}; "
+                f"got {sorted(seen_indices)}"
+            )
+
+
+def _mark_reworked_ready_for_review(paths: dict[str, Path], paragraph_ids: set[str]) -> None:
+    rows = [_normalize_paragraph_state_row(row) for row in read_jsonl(paths["paragraph_state"], strict=True)]
+    updated_rows: list[dict[str, Any]] = []
+    now_iso = _utc_now_iso()
+    transitioned_ids: set[str] = set()
+    for row in rows:
+        paragraph_id = str(row.get("paragraph_id", ""))
+        if paragraph_id in paragraph_ids and row.get("status") == "rework_queued":
+            excluded = row.get("excluded_by_policy", False) is True
+            assert_pipeline_transition_allowed("rework_queued", "reworked", excluded)
+            next_row = dict(row)
+            next_row["status"] = "reworked"
+            next_row["updated_at"] = now_iso
+            updated_rows.append(next_row)
+            transitioned_ids.add(paragraph_id)
+        else:
+            updated_rows.append(row)
+    missing = sorted(paragraph_ids - transitioned_ids)
+    if missing:
+        raise ValueError(
+            "Expected to transition queued paragraph(s) to reworked but did not: " + ", ".join(missing)
+        )
+    atomic_write_jsonl(paths["paragraph_state"], updated_rows)
+
+
+def run_rework_translation_stage(
+    paths: dict[str, Path],
+    *,
+    pass1_language: str,
+    pass2_language: str | None,
+    model: str,
+    phase_timeout_seconds: int,
+    should_abort: Callable[[], Exception | None],
+) -> set[str]:
+    _assert_rework_stage_pipeline_state(paths)
+
+    if not paths["rework_queue"].exists():
+        return set()
+
+    queue_rows = read_jsonl(paths["rework_queue"], strict=True)
+    queued_ids = {
+        str(row.get("paragraph_id"))
+        for row in queue_rows
+        if isinstance(row.get("paragraph_id"), str) and str(row.get("paragraph_id")).strip()
+    }
+    if not queued_ids:
+        return set()
+
+    _validate_rework_queue_lineage(paths, queue_rows, queued_ids)
+
+    source_rows = read_jsonl(paths["source_pre"] / "paragraphs.jsonl", strict=True)
+    subset_rows = _build_rework_subset_rows(source_rows, queued_ids)
+
+    canonical_pass1_rows = read_jsonl(paths["pass1_pre"] / "paragraphs.jsonl", strict=True)
+    canonical_pass2_path = paths["pass2_pre"] / "paragraphs.jsonl"
+    canonical_pass2_rows = read_jsonl(canonical_pass2_path, strict=True) if canonical_pass2_path.exists() else []
+
+    with tempfile.TemporaryDirectory(prefix="rework_loop_", dir=paths["run_root"]) as tmp_dir_raw:
+        tmp_dir = Path(tmp_dir_raw)
+        subset_source_pre = tmp_dir / "source_pre_subset"
+        subset_source_pre.mkdir(parents=True, exist_ok=True)
+        atomic_write_jsonl(subset_source_pre / "paragraphs.jsonl", subset_rows)
+
+        pass1_translate_output = tmp_dir / "translate_pass1"
+        _exec_phase_command(
+            [
+                sys.executable,
+                "scripts/translate.py",
+                "--language",
+                pass1_language,
+                "--model",
+                model,
+                "--preprocessed",
+                str(subset_source_pre),
+                "--output-root",
+                str(pass1_translate_output),
+            ],
+            timeout_seconds=phase_timeout_seconds or None,
+            should_abort=should_abort,
+        )
+        pass1_translation_json = pass1_translate_output / _language_output_dir_name(pass1_language) / "translation.json"
+        pass1_pre_subset = tmp_dir / "pass1_pre_subset"
+        _materialize_preprocessed_from_translation(subset_source_pre, pass1_translation_json, pass1_pre_subset)
+
+        pass1_replacements = {
+            str(row.get("paragraph_id")): row
+            for row in read_jsonl(pass1_pre_subset / "paragraphs.jsonl", strict=True)
+            if isinstance(row.get("paragraph_id"), str) and str(row.get("paragraph_id")).strip()
+        }
+        merged_pass1_rows = _build_merged_paragraph_rows(canonical_pass1_rows, pass1_replacements)
+
+        final_replacements = pass1_replacements
+        merged_pass2_rows: list[dict[str, Any]] | None = None
+        if pass2_language:
+            pass2_translate_output = tmp_dir / "translate_pass2"
+            _exec_phase_command(
+                [
+                    sys.executable,
+                    "scripts/translate.py",
+                    "--language",
+                    pass2_language,
+                    "--model",
+                    model,
+                    "--preprocessed",
+                    str(pass1_pre_subset),
+                    "--output-root",
+                    str(pass2_translate_output),
+                ],
+                timeout_seconds=phase_timeout_seconds or None,
+                should_abort=should_abort,
+            )
+            pass2_translation_json = pass2_translate_output / _language_output_dir_name(pass2_language) / "translation.json"
+            pass2_pre_subset = tmp_dir / "pass2_pre_subset"
+            _materialize_preprocessed_from_translation(pass1_pre_subset, pass2_translation_json, pass2_pre_subset)
+            final_replacements = {
+                str(row.get("paragraph_id")): row
+                for row in read_jsonl(pass2_pre_subset / "paragraphs.jsonl", strict=True)
+                if isinstance(row.get("paragraph_id"), str) and str(row.get("paragraph_id")).strip()
+            }
+            merged_pass2_rows = _build_merged_paragraph_rows(canonical_pass2_rows, final_replacements)
+
+    atomic_write_jsonl(paths["pass1_pre"] / "paragraphs.jsonl", merged_pass1_rows)
+    if merged_pass2_rows is not None:
+        atomic_write_jsonl(paths["pass2_pre"] / "paragraphs.jsonl", merged_pass2_rows)
+
+    if pass2_language:
+        merge_input_path = paths["pass2_pre"] / "paragraphs.jsonl"
+    else:
+        merge_input_path = paths["pass1_pre"] / "paragraphs.jsonl"
+    _validate_candidate_paragraph_indices(read_jsonl(merge_input_path, strict=True), paragraphs_path=merge_input_path)
+    assemble_candidate(merge_input_path, paths["final_candidate"], paths["candidate_map"])
+    _mark_reworked_ready_for_review(paths, queued_ids)
+    return queued_ids
+
+
 def _build_final_pre_bundle(output_dir: Path, paragraph_rows: list[dict[str, Any]]) -> None:
     sentence_rows: list[dict[str, Any]] = []
     word_rows: list[dict[str, Any]] = []
@@ -1524,6 +1862,18 @@ def _run_rework_only(
     run_phase: Callable[[str, Callable[[], None]], None],
     should_abort: Callable[[], Exception | None],
 ) -> None:
+    pass1_language, pass2_language, model = _resolve_rework_runtime_config(paths, args)
+    run_phase(
+        "R",
+        lambda: run_rework_translation_stage(
+            paths,
+            pass1_language=pass1_language,
+            pass2_language=pass2_language,
+            model=model,
+            phase_timeout_seconds=args.phase_timeout_seconds,
+            should_abort=should_abort,
+        ),
+    )
     run_phase(
         "D",
         lambda: run_phase_d(
@@ -1542,6 +1892,8 @@ def _run_rework_only(
             should_abort=should_abort,
         ),
     )
+    if args.rework_run_phase_f:
+        run_phase("F", lambda: run_phase_f(paths, run_id=args.run_id, should_abort=should_abort))
 
 
 def parse_args() -> argparse.Namespace:
@@ -1551,8 +1903,8 @@ def parse_args() -> argparse.Namespace:
         required=True,
         choices=("full", "rework-only", "status"),
         help=(
-            "Execution mode. rework-only re-aggregates reviews (phase D), then "
-            "updates attempts for currently rework_queued rows and rebuilds queue projection (phase E)."
+            "Execution mode. rework-only runs targeted queued-paragraph translation rework (phase R), "
+            "then review aggregation (phase D) and queue/state projection (phase E)."
         ),
     )
     parser.add_argument("--run-id", required=True, help="Run identifier under runs/<run_id>.")
@@ -1582,6 +1934,11 @@ def parse_args() -> argparse.Namespace:
         "--no-bump-attempts",
         action="store_true",
         help="For --mode rework-only, rebuild queue/state projection without incrementing attempts.",
+    )
+    parser.add_argument(
+        "--rework-run-phase-f",
+        action="store_true",
+        help="For --mode rework-only, run Phase F after rework loop and review/queue updates.",
     )
     parser.add_argument(
         "--phase-timeout-seconds",
