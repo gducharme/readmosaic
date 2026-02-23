@@ -429,7 +429,7 @@ def acquire_run_lock(run_dir: Path, run_id: str) -> tuple[Path, dict[str, Any], 
         except FileExistsError:
             try:
                 existing = _read_lock(lock_path)
-            except (FileNotFoundError, InvalidRunLockError):
+            except InvalidRunLockError:
                 time.sleep(LOCK_STALE_RETRY_BASE_SLEEP_SECONDS + random.uniform(0, 0.05))
                 continue
             if not _is_stale(existing):
@@ -964,6 +964,7 @@ def run_phase_e(paths: dict[str, Path], *, max_paragraph_attempts: int, bump_att
             if "max_attempts_reached" not in blockers:
                 blockers.append("max_attempts_reached")
             row["blocking_issues"] = blockers
+        assert_pipeline_state_allowed(row["status"], row.get("excluded_by_policy", False) is True)
 
     atomic_write_jsonl(paths["paragraph_state"], rows)
     existing_queue = read_jsonl(paths["rework_queue"], strict=False) if paths["rework_queue"].exists() else []
@@ -1188,14 +1189,10 @@ def main() -> None:
 
         heartbeat_thread = threading.Thread(target=_heartbeat_loop, daemon=True)
         heartbeat_thread.start()
-        original_error: Exception | None = None
         try:
             maybe_heartbeat()
             runner()
-            if heartbeat_error is not None:
-                raise heartbeat_error
         except Exception as exc:  # noqa: BLE001
-            original_error = exc
             _write_progress(
                 paths,
                 run_id=args.run_id,
@@ -1210,9 +1207,7 @@ def main() -> None:
         finally:
             heartbeat_stop.set()
             heartbeat_thread.join(timeout=2)
-            if heartbeat_error is not None and original_error is None:
-                raise heartbeat_error
-            if heartbeat_error is not None and original_error is not None:
+            if heartbeat_error is not None:
                 print(f"Warning: heartbeat failed during phase {phase_name}: {heartbeat_error}", file=sys.stderr)
         _write_progress(
             paths,
