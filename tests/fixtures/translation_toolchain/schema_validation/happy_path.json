@@ -6,7 +6,10 @@
     "failure_history": [],
     "excluded_by_policy": false,
     "content_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "scores": {"semantic_fidelity": 0.94, "grammar": 0.91},
+    "scores": {
+      "semantic_fidelity": 0.94,
+      "grammar": 0.91
+    },
     "blocking_issues": [],
     "reviewed_at": "2026-01-15T10:00:00Z",
     "updated_at": "2026-01-15T10:00:00Z",
@@ -15,7 +18,10 @@
   },
   "normalized_review_row": {
     "paragraph_id": "p_0001",
-    "scores": {"semantic_fidelity": 0.94, "grammar": 0.91},
+    "scores": {
+      "semantic_fidelity": 0.94,
+      "grammar": 0.91
+    },
     "issues": [],
     "blocking_issues": [],
     "hard_fail": false,
@@ -38,5 +44,16 @@
     "pass1_language": "Tamazight",
     "pass2_language": "Tifinagh",
     "created_at": "2026-01-15T09:55:00Z"
+  },
+  "paragraph_scores_row": {
+    "paragraph_id": "p_0001",
+    "status": "ready_to_merge",
+    "attempt": 1,
+    "scores": {
+      "semantic_fidelity": 0.94,
+      "grammar": 0.91
+    },
+    "blocking_issues": [],
+    "updated_at": "2026-01-15T10:00:00Z"
   }
 }
