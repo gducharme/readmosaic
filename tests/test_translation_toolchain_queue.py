@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import tempfile
 import unittest
 from contextlib import redirect_stderr
@@ -12,6 +13,8 @@ from scripts.translation_toolchain import (
     build_rework_queue_rows,
     read_jsonl,
     _compute_status_report,
+    _materialize_preprocessed_from_translation,
+    run_phase_c,
 )
 
 
@@ -150,6 +153,49 @@ class TranslationToolchainQueueTests(unittest.TestCase):
         self.assertEqual(report["required_total"], 2)
         self.assertEqual(report["done"], 1)
         self.assertEqual(report["required_merge_blockers"], 1)
+
+
+    def test_packet_raises_for_null_list_field(self) -> None:
+        with self.assertRaises(ValueError):
+            build_rework_queue_packet(
+                {
+                    "paragraph_id": "p_777",
+                    "status": "rework_queued",
+                    "content_hash": "sha256:" + "8" * 64,
+                    "failure_reasons": None,
+                }
+            )
+
+    def test_materialize_raises_when_records_empty_and_no_paragraph_translations(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_pre = root / "source_pre"
+            source_pre.mkdir(parents=True, exist_ok=True)
+            (source_pre / "paragraphs.jsonl").write_text('{"paragraph_id":"p_1","text":"a"}\n', encoding="utf-8")
+
+            translation_json = root / "translation.json"
+            translation_json.write_text(json.dumps({"records": []}), encoding="utf-8")
+
+            with self.assertRaises(ValueError):
+                _materialize_preprocessed_from_translation(source_pre, translation_json, root / "out")
+
+    def test_phase_c_copies_pass1_when_no_pass2_language(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pass1_pre = root / "pass1_pre"
+            pass1_pre.mkdir(parents=True, exist_ok=True)
+            (pass1_pre / "paragraphs.jsonl").write_text('{"paragraph_id":"p_1","text":"a"}\n', encoding="utf-8")
+            (pass1_pre / "sentences.jsonl").write_text('{"sentence_id":"s_1"}\n', encoding="utf-8")
+
+            paths = {
+                "run_root": root,
+                "pass1_pre": pass1_pre,
+                "pass2_pre": root / "pass2_pre",
+            }
+            run_phase_c(paths, pipeline_profile="standard_single_pass", model="dummy", phase_timeout_seconds=0)
+
+            self.assertTrue((paths["pass2_pre"] / "paragraphs.jsonl").exists())
+            self.assertTrue((paths["pass2_pre"] / "sentences.jsonl").exists())
 
     def test_queue_rows_are_sorted_by_paragraph_id(self) -> None:
         out = build_rework_queue_rows(
