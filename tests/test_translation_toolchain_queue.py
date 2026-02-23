@@ -730,20 +730,92 @@ class TranslationToolchainQueueTests(unittest.TestCase):
                 "review_normalized": root / "review_normalized",
                 "paragraph_scores": root / "state" / "paragraph_scores.jsonl",
                 "rework_queue": root / "state" / "rework_queue.jsonl",
+                "review_blockers": root / "gate" / "review_blockers.json",
             }
             paths["manifest"].write_text('{"pipeline_profile":"tamazight_two_pass","model":"stub-model"}', encoding="utf-8")
             paths["pass2_pre"] = root / "pass2_pre"
             paths["pass2_pre"].mkdir(parents=True, exist_ok=True)
             (paths["pass2_pre"] / "paragraphs.jsonl").write_text('{"paragraph_id":"p_1"}\n', encoding="utf-8")
 
-            def _stub_exec(*args, **kwargs):
+            def _stub_exec(command, **kwargs):
+                del kwargs
                 self.assertEqual(read_jsonl(state_path)[0]["status"], "review_in_progress")
-                atomic_write_jsonl(paths["paragraph_scores"], [])
-                atomic_write_jsonl(paths["rework_queue"], [])
+                if any("grammar_auditor.py" in part for part in command):
+                    out_dir = root / "review" / "grammar"
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    (out_dir / "grammar_audit_issues_20260101T000000Z.json").write_text('[{"paragraph_id":"p_1","scores":{},"issues":[],"blocking_issues":[],"hard_fail":false}]', encoding="utf-8")
+                if any("aggregate_paragraph_reviews.py" in part for part in command):
+                    atomic_write_jsonl(paths["paragraph_scores"], [])
+                    atomic_write_jsonl(paths["rework_queue"], [])
 
             with patch("scripts.translation_toolchain._exec_phase_command", side_effect=_stub_exec):
                 run_phase_d(paths, run_id="tx_001", max_paragraph_attempts=4, phase_timeout_seconds=0, should_abort=lambda: None)
 
+
+    def test_phase_d_transitions_rows_out_of_review_in_progress_when_reviews_exist(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state_path = root / "state" / "paragraph_state.jsonl"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_jsonl(
+                state_path,
+                [{"paragraph_id": "p_1", "status": "candidate_assembled", "attempt": 0, "excluded_by_policy": False, "failure_history": [], "content_hash": "sha256:" + "e" * 64}],
+            )
+            candidate_map = root / "final" / "candidate_map.jsonl"
+            candidate_map.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_jsonl(candidate_map, [{"paragraph_id": "p_1", "paragraph_index": 1, "start_line": 1, "end_line": 1}])
+            final_candidate = root / "final" / "candidate.md"
+            final_candidate.write_text("text", encoding="utf-8")
+            paths = {
+                "paragraph_state": state_path,
+                "final_candidate": final_candidate,
+                "candidate_map": candidate_map,
+                "run_root": root,
+                "manifest": root / "manifest.json",
+                "review_normalized": root / "review_normalized",
+                "paragraph_scores": root / "state" / "paragraph_scores.jsonl",
+                "rework_queue": root / "state" / "rework_queue.jsonl",
+                "review_blockers": root / "gate" / "review_blockers.json",
+            }
+            paths["manifest"].write_text('{"pipeline_profile":"tamazight_two_pass","model":"stub-model"}', encoding="utf-8")
+            paths["pass2_pre"] = root / "pass2_pre"
+            paths["pass2_pre"].mkdir(parents=True, exist_ok=True)
+            (paths["pass2_pre"] / "paragraphs.jsonl").write_text('{"paragraph_id":"p_1"}\n', encoding="utf-8")
+            (paths["pass2_pre"] / "sentences.jsonl").write_text('{"id":"s_1","order":0,"text":"Sentence one."}\n', encoding="utf-8")
+
+            def _stub_exec(command: list[str], **_: object) -> None:
+                if "scripts/grammar_auditor.py" in command:
+                    out_dir = Path(command[command.index("--output-dir") + 1])
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    (out_dir / "grammar_audit_issues_20260101T000000Z.json").write_text(
+                        json.dumps(
+                            [
+                                {
+                                    "paragraph_id": "p_1",
+                                    "scores": {"grammar": 0.99},
+                                    "issues": [],
+                                    "blocking_issues": [],
+                                    "hard_fail": False,
+                                }
+                            ]
+                        ),
+                        encoding="utf-8",
+                    )
+                    return
+                if any("normalize_review_output.py" in part for part in command) or any("aggregate_paragraph_reviews.py" in part for part in command):
+                    subprocess.run(command, check=True)
+                    return
+                raise AssertionError(f"Unexpected command: {command}")
+
+            with patch("scripts.translation_toolchain._exec_phase_command", side_effect=_stub_exec):
+                run_phase_d(paths, run_id="tx_001", max_paragraph_attempts=4, phase_timeout_seconds=0, should_abort=lambda: None)
+
+            rows = read_jsonl(state_path)
+            self.assertEqual(rows[0]["status"], "ready_to_merge")
+            self.assertNotEqual(rows[0]["status"], "review_in_progress")
+            review_rows = read_jsonl(paths["review_normalized"] / "all_reviews.jsonl")
+            self.assertEqual(len(review_rows), 1)
+            self.assertEqual(review_rows[0]["paragraph_id"], "p_1")
 
     def test_phase_d_only_marks_candidate_map_rows_review_in_progress(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -771,15 +843,22 @@ class TranslationToolchainQueueTests(unittest.TestCase):
                 "review_normalized": root / "review_normalized",
                 "paragraph_scores": root / "state" / "paragraph_scores.jsonl",
                 "rework_queue": root / "state" / "rework_queue.jsonl",
+                "review_blockers": root / "gate" / "review_blockers.json",
             }
             paths["manifest"].write_text('{"pipeline_profile":"tamazight_two_pass","model":"stub-model"}', encoding="utf-8")
             paths["pass2_pre"] = root / "pass2_pre"
             paths["pass2_pre"].mkdir(parents=True, exist_ok=True)
             (paths["pass2_pre"] / "paragraphs.jsonl").write_text('{"paragraph_id":"p_1"}\n', encoding="utf-8")
 
-            def _stub_exec(*args, **kwargs):
-                atomic_write_jsonl(paths["paragraph_scores"], [])
-                atomic_write_jsonl(paths["rework_queue"], [])
+            def _stub_exec(command, **kwargs):
+                del kwargs
+                if any("grammar_auditor.py" in part for part in command):
+                    out_dir = root / "review" / "grammar"
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    (out_dir / "grammar_audit_issues_20260101T000000Z.json").write_text('[{"paragraph_id":"p_1","scores":{},"issues":[],"blocking_issues":[],"hard_fail":false}]', encoding="utf-8")
+                if any("aggregate_paragraph_reviews.py" in part for part in command):
+                    atomic_write_jsonl(paths["paragraph_scores"], [])
+                    atomic_write_jsonl(paths["rework_queue"], [])
 
             with patch("scripts.translation_toolchain._exec_phase_command", side_effect=_stub_exec):
                 run_phase_d(paths, run_id="tx_001", max_paragraph_attempts=4, phase_timeout_seconds=0, should_abort=lambda: None)
@@ -812,6 +891,7 @@ class TranslationToolchainQueueTests(unittest.TestCase):
                 "review_normalized": root / "review_normalized",
                 "paragraph_scores": root / "state" / "paragraph_scores.jsonl",
                 "rework_queue": root / "state" / "rework_queue.jsonl",
+                "review_blockers": root / "gate" / "review_blockers.json",
             }
             paths["manifest"].write_text('{"pipeline_profile":"tamazight_two_pass","model":"stub-model"}', encoding="utf-8")
             paths["pass2_pre"] = root / "pass2_pre"
@@ -844,6 +924,7 @@ class TranslationToolchainQueueTests(unittest.TestCase):
                 "review_normalized": root / "review_normalized",
                 "paragraph_scores": root / "state" / "paragraph_scores.jsonl",
                 "rework_queue": root / "state" / "rework_queue.jsonl",
+                "review_blockers": root / "gate" / "review_blockers.json",
             }
             paths["manifest"].write_text('{"pipeline_profile":"tamazight_two_pass","model":"stub-model"}', encoding="utf-8")
             paths["pass2_pre"] = root / "pass2_pre"

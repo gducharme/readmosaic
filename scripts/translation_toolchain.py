@@ -1794,8 +1794,6 @@ def run_phase_d(
     paths["review_normalized"].mkdir(parents=True, exist_ok=True)
     paths["paragraph_scores"].parent.mkdir(parents=True, exist_ok=True)
     normalized_rows = paths["review_normalized"] / "all_reviews.jsonl"
-    if not normalized_rows.exists():
-        atomic_write_jsonl(normalized_rows, [])
 
     # phase D profile-resolved paragraph review input (used by grammar and other paragraph-scoped reviewers)
 
@@ -1861,6 +1859,50 @@ def run_phase_d(
             "--output-dir",
             str(grammar_output_dir),
         ],
+        timeout_seconds=timeout_seconds,
+        should_abort=should_abort,
+    )
+
+    grammar_artifacts = sorted(grammar_output_dir.glob("grammar_audit_issues_*.json"))
+    if not grammar_artifacts:
+        grammar_artifacts = sorted(grammar_output_dir.glob("*.json"))
+    if not grammar_artifacts:
+        raise FileNotFoundError(
+            "Grammar auditor did not produce an output artifact in "
+            f"{grammar_output_dir}; expected grammar_audit_issues_*.json"
+        )
+    grammar_input = grammar_artifacts[-1]
+
+    mapped_inputs: list[Path] = []
+    normalized_review_dir = paths["run_root"] / "review" / "normalized"
+    mapped_candidates = [
+        paths.get("review_typography_mapped"),
+        paths.get("review_critics_mapped"),
+        normalized_review_dir / "typography_paragraph_rows.jsonl",
+        normalized_review_dir / "critics_paragraph_rows.jsonl",
+    ]
+    seen_inputs: set[Path] = set()
+    for mapped_path in mapped_candidates:
+        if mapped_path is None:
+            continue
+        resolved_path = Path(mapped_path)
+        if resolved_path.exists() and resolved_path not in seen_inputs:
+            mapped_inputs.append(resolved_path)
+            seen_inputs.add(resolved_path)
+
+    normalize_command = [
+        sys.executable,
+        "scripts/normalize_review_output.py",
+        "--grammar-input",
+        str(grammar_input),
+        "--output",
+        str(normalized_rows),
+    ]
+    for mapped_input in mapped_inputs:
+        normalize_command.extend(["--mapped-input", str(mapped_input)])
+
+    _exec_phase_command(
+        normalize_command,
         timeout_seconds=timeout_seconds,
         should_abort=should_abort,
     )
