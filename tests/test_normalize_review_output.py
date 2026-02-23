@@ -103,7 +103,9 @@ class NormalizeReviewOutputTests(unittest.TestCase):
         result = _normalize_mapped_rows(mapped_rows, reviewer_name="critics")
         self.assertEqual(len(result), 1)
         self.assertFalse(result[0]["hard_fail"])
-        self.assertIn("style", result[0]["blocking_issues"])
+        self.assertEqual(result[0]["blocking_issues"], [])
+        self.assertEqual(result[0]["issue_count"], 1)
+        self.assertEqual(result[0]["blocker_count"], 0)
 
     def test_cli_smoke(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

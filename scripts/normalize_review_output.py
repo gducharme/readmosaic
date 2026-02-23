@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Normalize reviewer outputs into aggregator-ready paragraph rows."""
+"""Normalize reviewer outputs into aggregator-ready paragraph rows.
+
+This normalizer may emit multiple rows for the same paragraph_id when multiple
+review sources are provided; downstream aggregation is responsible for merging.
+"""
 from __future__ import annotations
 
 import argparse
@@ -63,7 +67,7 @@ def _issue_code(issue: dict[str, Any]) -> str:
 
 def _is_blocker(issue: dict[str, Any]) -> bool:
     severity = str(issue.get("severity", "")).strip().lower()
-    category = str(issue.get("category", "")).strip()
+    category = str(issue.get("category", "")).strip().lower()
     return severity == "critical" or category in BLOCKING_CATEGORIES
 
 
@@ -125,14 +129,16 @@ def _normalize_mapped_rows(rows: list[dict[str, Any]], reviewer_name: str) -> li
         if str(issue.get("severity", "")).strip().lower() == "critical":
             bucket["critical_count"] += 1
 
-        code = _issue_code(issue)
-        if code not in bucket["blocking_issues"]:
-            bucket["blocking_issues"].append(code)
-            bucket["blocker_count"] = len(bucket["blocking_issues"])
+        is_blocking_issue = bool(hard_fail or _is_blocker(issue))
+        if is_blocking_issue:
+            code = _issue_code(issue)
+            if code not in bucket["blocking_issues"]:
+                bucket["blocking_issues"].append(code)
+                bucket["blocker_count"] = len(bucket["blocking_issues"])
         bucket["hard_fail"] = bool(bucket["hard_fail"] or hard_fail)
 
     for row in rows:
-        status = str(row.get("mapping_status", "")).strip()
+        status = str(row.get("mapping_status", "")).strip().lower()
         issue_payload = row.get("issue") if isinstance(row.get("issue"), dict) else {}
 
         issue_out = dict(issue_payload)
