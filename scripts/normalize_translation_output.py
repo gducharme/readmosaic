@@ -11,9 +11,10 @@ from typing import Any
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
     if not path.exists():
-        return rows
+        raise FileNotFoundError(f"Required source artifact missing: {path}")
+
+    rows: list[dict[str, Any]] = []
     for line_no, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         stripped = raw.strip()
         if not stripped:
@@ -25,6 +26,9 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
         if not isinstance(payload, dict):
             raise ValueError(f"Invalid JSONL object at {path}:{line_no}")
         rows.append(payload)
+
+    if not rows:
+        raise ValueError(f"Required source artifact is empty: {path}")
     return rows
 
 
@@ -71,12 +75,20 @@ def _extract_translations(payload: dict[str, Any], expected_len: int, source: Pa
 def _sentence_spans(text: str) -> list[tuple[str, int, int]]:
     spans: list[tuple[str, int, int]] = []
     for match in re.finditer(r"[^.!?\n]+(?:[.!?]+|$)", text, flags=re.MULTILINE):
-        sentence = match.group(0).strip()
-        if not sentence:
+        raw_sentence = match.group(0)
+        if not raw_sentence.strip():
             continue
-        start = text.find(sentence, match.start())
-        end = start + len(sentence)
+
+        left_trim = len(raw_sentence) - len(raw_sentence.lstrip())
+        right_trim = len(raw_sentence) - len(raw_sentence.rstrip())
+        start = match.start() + left_trim
+        end = match.end() - right_trim
+        if end <= start:
+            continue
+
+        sentence = text[start:end]
         spans.append((sentence, start, end))
+
     if not spans and text.strip():
         clean = text.strip()
         start = text.find(clean)
@@ -172,8 +184,8 @@ def normalize_translation_output(source_pre: Path, translation_json: Path, outpu
                 {
                     "token_id": f"{manuscript_id}-t{token_counter:06d}",
                     "text": token,
-                    "start_char": start_char,
-                    "end_char": end_char,
+                    "start_char": paragraph_start + start_char,
+                    "end_char": paragraph_start + end_char,
                     "global_index": token_counter,
                     "local_index": local_index,
                 }
