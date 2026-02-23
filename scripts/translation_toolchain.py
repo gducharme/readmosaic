@@ -23,13 +23,6 @@ from typing import Any, Callable
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from lib.paragraph_state_machine import (
-    ParagraphPolicyConfig,
-    ParagraphReviewAggregate,
-    assert_pipeline_state_allowed,
-    resolve_review_transition,
-)
-
 LOCK_FILE_NAME = "RUNNING.lock"
 LOCK_HEARTBEAT_WRITE_INTERVAL_SECONDS = 10
 LOCK_STALE_TTL_SECONDS = 120
@@ -51,7 +44,6 @@ PIPELINE_PRESET_CONFIG: dict[str, dict[str, str | None]] = {
     "standard_single_pass": {"pass1_language": "Tamazight", "pass2_language": None},
 }
 
-EXIT_OK = 0
 EXIT_ACTIVE_LOCK = 2
 EXIT_INVALID_LOCK = 3
 EXIT_LOCK_RACE = 4
@@ -520,49 +512,6 @@ def release_run_lock(lock_path: Path, run_id: str) -> bool:
     return True
 
 
-def resolve_paragraph_review_state(
-    prior_state: dict[str, Any],
-    review_aggregate: dict[str, Any],
-    max_attempts: int,
-) -> dict[str, Any]:
-    """Apply canonical paragraph review transition policy.
-
-    This helper keeps toolchain callers on the same state machine used by
-    aggregate_paragraph_reviews.py.
-    """
-
-    raw_blocking_issues = review_aggregate.get("blocking_issues", [])
-    if raw_blocking_issues is None:
-        raw_blocking_issues = []
-    if not isinstance(raw_blocking_issues, list):
-        raise ValueError("review_aggregate.blocking_issues must be a list of strings when provided")
-    if any(not isinstance(issue, str) for issue in raw_blocking_issues):
-        raise ValueError("review_aggregate.blocking_issues must contain only strings")
-
-    raw_scores = review_aggregate.get("scores", {})
-    if raw_scores is None:
-        raw_scores = {}
-    if not isinstance(raw_scores, dict):
-        raise ValueError("review_aggregate.scores must be an object mapping metric names to numeric values")
-    if any(not isinstance(metric, str) for metric in raw_scores.keys()):
-        raise ValueError("review_aggregate.scores keys must be strings")
-    if any((isinstance(value, bool) or not isinstance(value, (int, float))) for value in raw_scores.values()):
-        raise ValueError("review_aggregate.scores values must be numeric")
-
-    review = ParagraphReviewAggregate(
-        hard_fail=bool(review_aggregate.get("hard_fail", False)),
-        blocking_issues=tuple(raw_blocking_issues),
-        scores=dict(raw_scores),
-    )
-    policy = ParagraphPolicyConfig(max_attempts=max_attempts)
-    transition = resolve_review_transition(prior_state, review, policy)
-    next_state = dict(prior_state)
-    next_state["status"] = transition.next_state
-    next_state.update(transition.metadata_updates)
-    assert_pipeline_state_allowed(next_state["status"], bool(next_state.get("excluded_by_policy", False)))
-    return next_state
-
-
 def _coerce_attempt(value: Any, *, paragraph_id: str) -> int:
     if isinstance(value, bool):
         raise ValueError(f"paragraph '{paragraph_id}' has invalid boolean attempt value")
@@ -573,12 +522,8 @@ def _coerce_attempt(value: Any, *, paragraph_id: str) -> int:
     raise ValueError(f"paragraph '{paragraph_id}' has non-integer attempt value: {value!r}")
 
 
-def _run_root(run_id: str) -> Path:
-    return Path("runs") / run_id
-
-
 def _run_paths(run_id: str) -> dict[str, Path]:
-    run_root = _run_root(run_id)
+    run_root = Path("runs") / run_id
     return {
         "run_root": run_root,
         "manifest": run_root / "manifest.json",
@@ -1464,8 +1409,6 @@ def main() -> None:
         def _phase_abort_error() -> Exception | None:
             if fatal_heartbeat_error is not None:
                 return fatal_heartbeat_error
-            if time.monotonic() - last_heartbeat_success_monotonic > LOCK_HEARTBEAT_STALE_ABORT_SECONDS:
-                return RuntimeError("Heartbeat stalled near stale-lock threshold; aborting to preserve lock authority")
             return None
 
         phase_succeeded = False
@@ -1572,8 +1515,6 @@ def main() -> None:
                 _run_full_pipeline(paths, args, run_phase_with_progress, current_abort_error)
             elif args.mode == "rework-only":
                 _run_rework_only(paths, args, run_phase_with_progress, current_abort_error)
-            else:
-                raise SystemExit(EXIT_USAGE_ERROR)
         except (subprocess.CalledProcessError, TimeoutError, ValueError, FileNotFoundError) as exc:
             print(f"status=phase_failed error={exc}", file=sys.stderr)
             raise SystemExit(EXIT_PHASE_FAILURE) from exc
