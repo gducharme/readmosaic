@@ -1003,12 +1003,22 @@ def run_phase_d(
         atomic_write_jsonl(paths["paragraph_scores"], [])
 
 
-def run_phase_e(paths: dict[str, Path], *, max_paragraph_attempts: int, bump_attempts: bool = True) -> None:
+def run_phase_e(
+    paths: dict[str, Path],
+    *,
+    max_paragraph_attempts: int,
+    bump_attempts: bool = True,
+    should_abort: Callable[[], Exception | None] | None = None,
+) -> None:
     # Attempts are incremented only in phase E. Phase D computes review-state
     # transitions without mutating attempts so policy ownership stays centralized.
     rows = read_jsonl(paths["paragraph_state"], strict=True)
     rework_rows = [row for row in rows if row.get("status") == "rework_queued"]
     for row in rework_rows:
+        if should_abort is not None:
+            abort_error = should_abort()
+            if abort_error is not None:
+                raise abort_error
         paragraph_id = str(row.get("paragraph_id", "<unknown>"))
         current_attempt = _coerce_attempt(row.get("attempt", 0), paragraph_id=paragraph_id)
         row["attempt"] = current_attempt + 1 if bump_attempts else current_attempt
@@ -1027,7 +1037,16 @@ def run_phase_e(paths: dict[str, Path], *, max_paragraph_attempts: int, bump_att
     atomic_write_jsonl(paths["rework_queue"], queue_rows)
 
 
-def run_phase_f(paths: dict[str, Path], *, run_id: str) -> None:
+def run_phase_f(
+    paths: dict[str, Path],
+    *,
+    run_id: str,
+    should_abort: Callable[[], Exception | None] | None = None,
+) -> None:
+    if should_abort is not None:
+        abort_error = should_abort()
+        if abort_error is not None:
+            raise abort_error
     paths["final_dir"].mkdir(parents=True, exist_ok=True)
     report = _compute_status_report(read_jsonl(paths["paragraph_state"], strict=True))
     paths["gate_dir"].mkdir(parents=True, exist_ok=True)
@@ -1081,14 +1100,22 @@ def _run_full_pipeline(
             should_abort=should_abort,
         ),
     )
-    run_phase("E", lambda: run_phase_e(paths, max_paragraph_attempts=args.max_paragraph_attempts))
-    run_phase("F", lambda: run_phase_f(paths, run_id=args.run_id))
+    run_phase(
+        "E",
+        lambda: run_phase_e(
+            paths,
+            max_paragraph_attempts=args.max_paragraph_attempts,
+            should_abort=should_abort,
+        ),
+    )
+    run_phase("F", lambda: run_phase_f(paths, run_id=args.run_id, should_abort=should_abort))
 
 
 def _run_rework_only(
     paths: dict[str, Path],
     args: argparse.Namespace,
     run_phase: Callable[[str, Callable[[], None]], None],
+    should_abort: Callable[[], Exception | None],
 ) -> None:
     run_phase(
         "E",
@@ -1096,6 +1123,7 @@ def _run_rework_only(
             paths,
             max_paragraph_attempts=args.max_paragraph_attempts,
             bump_attempts=not args.no_bump_attempts,
+            should_abort=should_abort,
         ),
     )
 
@@ -1372,7 +1400,7 @@ def main() -> None:
         if args.mode == "full":
             _run_full_pipeline(paths, args, run_phase_with_progress, current_abort_error)
         elif args.mode == "rework-only":
-            _run_rework_only(paths, args, run_phase_with_progress)
+            _run_rework_only(paths, args, run_phase_with_progress, current_abort_error)
         else:
             raise SystemExit(EXIT_USAGE_ERROR)
     finally:
