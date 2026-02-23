@@ -134,6 +134,125 @@ def _fsync_directory(directory: Path) -> None:
         pass
 
 
+def read_jsonl(path: Path, *, strict: bool = True) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    if not path.exists():
+        return rows
+
+    with path.open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError as exc:
+                message = f"Invalid JSONL row in {path} at line {line_number}: {exc}"
+                if strict:
+                    raise ValueError(message) from exc
+                print(f"Warning: {message}; row skipped.", file=sys.stderr)
+                continue
+
+            if not isinstance(payload, dict):
+                message = f"JSONL row in {path} at line {line_number} must be an object"
+                if strict:
+                    raise ValueError(message)
+                print(f"Warning: {message}; row skipped.", file=sys.stderr)
+                continue
+
+            rows.append(payload)
+    return rows
+
+
+def atomic_write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.tmp.{os.getpid()}")
+
+    try:
+        with tmp_path.open("w", encoding="utf-8") as handle:
+            for row in rows:
+                handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, path)
+    finally:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+
+    _fsync_directory(path.parent)
+
+
+
+
+def _coerce_optional_list_field(
+    paragraph_state_row: dict[str, Any],
+    field_name: str,
+    *,
+    paragraph_id: str,
+) -> list[Any] | None:
+    if field_name not in paragraph_state_row:
+        return None
+
+    value = paragraph_state_row.get(field_name)
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(
+            f"rework_queued paragraph '{paragraph_id}' field '{field_name}' must be a list when provided"
+        )
+    return list(value)
+
+def build_rework_queue_packet(paragraph_state_row: dict[str, Any]) -> dict[str, Any] | None:
+    if paragraph_state_row.get("status") != "rework_queued":
+        return None
+
+    paragraph_id = paragraph_state_row.get("paragraph_id")
+    if not isinstance(paragraph_id, str) or not paragraph_id.strip():
+        raise ValueError("rework_queued paragraph is missing required 'paragraph_id'")
+
+    content_hash = paragraph_state_row.get("content_hash")
+    if not isinstance(content_hash, str) or not content_hash.strip():
+        raise ValueError(f"rework_queued paragraph '{paragraph_id}' is missing required 'content_hash'")
+
+    failure_reasons = _coerce_optional_list_field(
+        paragraph_state_row,
+        "failure_reasons",
+        paragraph_id=paragraph_id,
+    )
+    if failure_reasons is None:
+        failure_reasons = _coerce_optional_list_field(
+            paragraph_state_row,
+            "blocking_issues",
+            paragraph_id=paragraph_id,
+        ) or []
+
+    required_fixes = _coerce_optional_list_field(
+        paragraph_state_row,
+        "required_fixes",
+        paragraph_id=paragraph_id,
+    )
+    if required_fixes is None:
+        required_fixes = list(failure_reasons)
+
+    failure_history = _coerce_optional_list_field(
+        paragraph_state_row,
+        "failure_history",
+        paragraph_id=paragraph_id,
+    ) or []
+
+    return {
+        "paragraph_id": paragraph_id,
+        "content_hash": content_hash,
+        "attempt": paragraph_state_row.get("attempt", 0),
+        "failure_reasons": failure_reasons,
+        "failure_history": failure_history,
+        "required_fixes": required_fixes,
+    }
+
+
 def _atomic_write_json(path: Path, payload: dict[str, Any], expected_identity: LockIdentity | None = None) -> None:
     tmp_path = path.with_name(f".{path.name}.tmp.{os.getpid()}")
     serialized = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
@@ -163,6 +282,58 @@ def _atomic_write_json(path: Path, payload: dict[str, Any], expected_identity: L
                 pass
 
     _fsync_directory(path.parent)
+
+
+def _canonical_packet_json(packet: dict[str, Any]) -> str:
+    return json.dumps(packet, ensure_ascii=False, sort_keys=True)
+
+
+def build_rework_queue_rows(
+    paragraph_state_rows: list[dict[str, Any]],
+    existing_queue_rows: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Return deduplicated rework queue rows for the current paragraph state snapshot.
+
+    Only paragraphs currently in ``rework_queued`` are emitted (queue is a projection of
+    current paragraph state, not an append-only work log). Existing queue rows are reused
+    only when they are byte-for-byte equivalent after canonical JSON normalization,
+    which guarantees reruns do not create duplicate rows for unchanged paragraph state.
+    """
+
+    existing_by_id: dict[str, list[dict[str, Any]]] = {}
+    if existing_queue_rows:
+        for row in existing_queue_rows:
+            if not isinstance(row, dict):
+                continue
+            paragraph_id = row.get("paragraph_id")
+            content_hash = row.get("content_hash")
+            if not isinstance(paragraph_id, str) or not paragraph_id.strip():
+                continue
+            if not isinstance(content_hash, str) or not content_hash.strip():
+                continue
+            existing_by_id.setdefault(paragraph_id, []).append(row)
+
+    queue_rows: list[dict[str, Any]] = []
+    for state_row in paragraph_state_rows:
+        packet = build_rework_queue_packet(state_row)
+        if packet is None:
+            continue
+
+        paragraph_id = packet["paragraph_id"]
+        existing_candidates = existing_by_id.get(paragraph_id, [])
+        packet_json = _canonical_packet_json(packet)
+
+        matching_existing = next(
+            (candidate for candidate in existing_candidates if _canonical_packet_json(candidate) == packet_json),
+            None,
+        )
+        if matching_existing is not None:
+            queue_rows.append(matching_existing)
+            continue
+
+        queue_rows.append(packet)
+
+    return sorted(queue_rows, key=lambda row: row["paragraph_id"])
 
 
 def _cleanup_stale_temp_lock_files(run_dir: Path) -> None:
