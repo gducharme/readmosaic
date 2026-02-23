@@ -15,6 +15,7 @@ import sys
 import threading
 import time
 import re
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -43,7 +44,9 @@ LOCK_FILE_FIELDS = (
     "run_id",
 )
 
-PIPELINE_PROFILE_CONFIG: dict[str, dict[str, str | None]] = {
+# Convenience presets only (non-exhaustive): callers may provide explicit --pass1-language/--pass2-language
+# for arbitrary language flows without using presets.
+PIPELINE_PRESET_CONFIG: dict[str, dict[str, str | None]] = {
     "tamazight_two_pass": {"pass1_language": "Tamazight", "pass2_language": "Tifinagh"},
     "standard_single_pass": {"pass1_language": "Tamazight", "pass2_language": None},
 }
@@ -54,6 +57,7 @@ EXIT_INVALID_LOCK = 3
 EXIT_LOCK_RACE = 4
 EXIT_USAGE_ERROR = 5
 EXIT_CORRUPT_STATE = 6
+EXIT_PHASE_FAILURE = 7
 
 LockIdentity = tuple[int, int]
 RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -382,7 +386,7 @@ def _cleanup_stale_temp_lock_files(run_dir: Path) -> None:
 
 def _is_stale(payload: dict[str, Any]) -> bool:
     heartbeat_ts = _parse_iso8601(payload["last_heartbeat_at"])
-    age_seconds = time.time() - heartbeat_ts
+    age_seconds = max(0.0, time.time() - heartbeat_ts)
     return age_seconds > LOCK_STALE_TTL_SECONDS
 
 
@@ -527,10 +531,28 @@ def resolve_paragraph_review_state(
     aggregate_paragraph_reviews.py.
     """
 
+    raw_blocking_issues = review_aggregate.get("blocking_issues", [])
+    if raw_blocking_issues is None:
+        raw_blocking_issues = []
+    if not isinstance(raw_blocking_issues, list):
+        raise ValueError("review_aggregate.blocking_issues must be a list of strings when provided")
+    if any(not isinstance(issue, str) for issue in raw_blocking_issues):
+        raise ValueError("review_aggregate.blocking_issues must contain only strings")
+
+    raw_scores = review_aggregate.get("scores", {})
+    if raw_scores is None:
+        raw_scores = {}
+    if not isinstance(raw_scores, dict):
+        raise ValueError("review_aggregate.scores must be an object mapping metric names to numeric values")
+    if any(not isinstance(metric, str) for metric in raw_scores.keys()):
+        raise ValueError("review_aggregate.scores keys must be strings")
+    if any((isinstance(value, bool) or not isinstance(value, (int, float))) for value in raw_scores.values()):
+        raise ValueError("review_aggregate.scores values must be numeric")
+
     review = ParagraphReviewAggregate(
         hard_fail=bool(review_aggregate.get("hard_fail", False)),
-        blocking_issues=tuple(review_aggregate.get("blocking_issues", [])),
-        scores=dict(review_aggregate.get("scores", {})),
+        blocking_issues=tuple(raw_blocking_issues),
+        scores=dict(raw_scores),
     )
     policy = ParagraphPolicyConfig(max_attempts=max_attempts)
     transition = resolve_review_transition(prior_state, review, policy)
@@ -579,12 +601,23 @@ def _run_paths(run_id: str) -> dict[str, Path]:
     }
 
 
-def _ensure_manifest(paths: dict[str, Path], *, run_id: str, pipeline_profile: str, source: str, model: str) -> None:
+def _ensure_manifest(
+    paths: dict[str, Path],
+    *,
+    run_id: str,
+    pipeline_profile: str,
+    source: str,
+    model: str,
+    pass1_language: str,
+    pass2_language: str | None,
+) -> None:
     desired = {
         "run_id": run_id,
         "pipeline_profile": pipeline_profile,
         "source": source,
         "model": model,
+        "pass1_language": pass1_language,
+        "pass2_language": pass2_language,
     }
     if paths["manifest"].exists():
         try:
@@ -726,7 +759,33 @@ def _hash_content(text: str) -> str:
 
 
 def _language_output_dir_name(language: str) -> str:
-    return language.lower().replace(" ", "_")
+    normalized = unicodedata.normalize("NFKC", language).strip().lower()
+    sanitized_chars: list[str] = []
+    previous_was_separator = False
+
+    for char in normalized:
+        category = unicodedata.category(char)
+        if category.startswith("C"):
+            continue
+
+        if char.isspace() or char in {"/", "\\"}:
+            if not previous_was_separator:
+                sanitized_chars.append("_")
+                previous_was_separator = True
+            continue
+
+        if char.isalnum() or char in {"_", "-"}:
+            sanitized_chars.append(char)
+            previous_was_separator = False
+            continue
+
+        if not previous_was_separator:
+            sanitized_chars.append("_")
+            previous_was_separator = True
+
+    slug = "".join(sanitized_chars).strip("._-")
+    slug = re.sub(r"_+", "_", slug)
+    return slug or "language"
 
 
 def _build_seed_state_rows(paragraph_rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
@@ -855,6 +914,8 @@ def run_phase_a(
     *,
     run_id: str,
     pipeline_profile: str,
+    pass1_language: str,
+    pass2_language: str | None,
     source: str,
     model: str,
     phase_timeout_seconds: int,
@@ -862,7 +923,15 @@ def run_phase_a(
 ) -> None:
     paths["source_pre"].mkdir(parents=True, exist_ok=True)
     paths["state_dir"].mkdir(parents=True, exist_ok=True)
-    _ensure_manifest(paths, run_id=run_id, pipeline_profile=pipeline_profile, source=source, model=model)
+    _ensure_manifest(
+        paths,
+        run_id=run_id,
+        pipeline_profile=pipeline_profile,
+        source=source,
+        model=model,
+        pass1_language=pass1_language,
+        pass2_language=pass2_language,
+    )
 
     _exec_phase_command(
         [sys.executable, "scripts/pre_processing.py", source, "--output-dir", str(paths["source_pre"])],
@@ -911,15 +980,11 @@ def run_phase_a(
 def run_phase_b(
     paths: dict[str, Path],
     *,
-    pipeline_profile: str,
+    pass1_language: str,
     model: str,
     phase_timeout_seconds: int,
     should_abort: Callable[[], Exception | None],
 ) -> None:
-    pass1_language = PIPELINE_PROFILE_CONFIG[pipeline_profile]["pass1_language"]
-    if pass1_language is None:
-        raise ValueError(f"pipeline_profile={pipeline_profile} missing pass1 language")
-
     translate_output = paths["run_root"] / "translate_pass1"
     _exec_phase_command(
         [
@@ -942,9 +1007,8 @@ def run_phase_b(
 
 
 def run_phase_c(
-    paths: dict[str, Path], *, pipeline_profile: str, model: str, phase_timeout_seconds: int, should_abort: Callable[[], Exception | None]
+    paths: dict[str, Path], *, pass2_language: str | None, model: str, phase_timeout_seconds: int, should_abort: Callable[[], Exception | None]
 ) -> None:
-    pass2_language = PIPELINE_PROFILE_CONFIG[pipeline_profile]["pass2_language"]
     if pass2_language:
         translate_output = paths["run_root"] / "translate_pass2"
         _exec_phase_command(
@@ -1014,6 +1078,12 @@ def run_phase_e(
     # Attempts are incremented only in phase E. Phase D computes review-state
     # transitions without mutating attempts so policy ownership stays centralized.
     rows = read_jsonl(paths["paragraph_state"], strict=True)
+    for row in rows:
+        paragraph_id = str(row.get("paragraph_id", "<unknown>"))
+        content_hash = row.get("content_hash")
+        if not isinstance(content_hash, str) or not content_hash.strip():
+            raise ValueError(f"Invalid paragraph_state row for '{paragraph_id}': missing non-empty content_hash")
+
     rework_rows = [row for row in rows if row.get("status") == "rework_queued"]
     for row in rework_rows:
         if should_abort is not None:
@@ -1066,6 +1136,8 @@ def _run_full_pipeline(
             paths,
             run_id=args.run_id,
             pipeline_profile=args.pipeline_profile,
+            pass1_language=args.pass1_language,
+            pass2_language=args.pass2_language,
             source=args.source,
             model=args.model,
             phase_timeout_seconds=args.phase_timeout_seconds,
@@ -1076,7 +1148,7 @@ def _run_full_pipeline(
         "B",
         lambda: run_phase_b(
             paths,
-            pipeline_profile=args.pipeline_profile,
+            pass1_language=args.pass1_language,
             model=args.model,
             phase_timeout_seconds=args.phase_timeout_seconds,
             should_abort=should_abort,
@@ -1086,7 +1158,7 @@ def _run_full_pipeline(
         "C",
         lambda: run_phase_c(
             paths,
-            pipeline_profile=args.pipeline_profile,
+            pass2_language=args.pass2_language,
             model=args.model,
             phase_timeout_seconds=args.phase_timeout_seconds,
             should_abort=should_abort,
@@ -1119,6 +1191,15 @@ def _run_rework_only(
     should_abort: Callable[[], Exception | None],
 ) -> None:
     run_phase(
+        "D",
+        lambda: run_phase_d(
+            paths,
+            max_paragraph_attempts=args.max_paragraph_attempts,
+            phase_timeout_seconds=args.phase_timeout_seconds,
+            should_abort=should_abort,
+        ),
+    )
+    run_phase(
         "E",
         lambda: run_phase_e(
             paths,
@@ -1131,12 +1212,29 @@ def _run_rework_only(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Translation toolchain mode orchestrator.")
-    parser.add_argument("--mode", required=True, choices=("full", "rework-only", "status"))
+    parser.add_argument(
+        "--mode",
+        required=True,
+        choices=("full", "rework-only", "status"),
+        help=(
+            "Execution mode. rework-only re-aggregates reviews (phase D), then "
+            "updates attempts for currently rework_queued rows and rebuilds queue projection (phase E)."
+        ),
+    )
     parser.add_argument("--run-id", required=True, help="Run identifier under runs/<run_id>.")
     parser.add_argument(
         "--pipeline-profile",
-        choices=("tamazight_two_pass", "standard_single_pass"),
-        help="Pipeline profile for --mode full.",
+        "--pipeline-preset",
+        dest="pipeline_profile",
+        help="Optional preset defaults for --mode full; explicit language args can be used without a preset.",
+    )
+    parser.add_argument(
+        "--pass1-language",
+        help="Optional first-pass language override. Defaults to preset pass1 language.",
+    )
+    parser.add_argument(
+        "--pass2-language",
+        help="Optional second-pass language override. Use 'none' to disable pass2.",
     )
     parser.add_argument("--source", help="Source manuscript path for --mode full.")
     parser.add_argument("--model", help="Model identifier for active execution modes.")
@@ -1160,6 +1258,43 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+
+
+def _normalize_optional_language(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    if not cleaned or cleaned.lower() == "none":
+        return None
+    return cleaned
+
+
+
+
+def _raise_usage_error(message: str) -> None:
+    print(message, file=sys.stderr)
+    raise SystemExit(EXIT_USAGE_ERROR)
+
+def _resolve_pipeline_languages(args: argparse.Namespace) -> tuple[str, str | None]:
+    preset_defaults: dict[str, str | None] = {}
+    if args.pipeline_profile:
+        if args.pipeline_profile not in PIPELINE_PRESET_CONFIG:
+            _raise_usage_error(f"Unknown pipeline preset: {args.pipeline_profile}")
+        preset_defaults = PIPELINE_PRESET_CONFIG[args.pipeline_profile]
+
+    resolved_pass1_language = _normalize_optional_language(args.pass1_language)
+    if resolved_pass1_language is None:
+        resolved_pass1_language = _normalize_optional_language(preset_defaults.get("pass1_language"))
+
+    resolved_pass2_language = _normalize_optional_language(args.pass2_language)
+    if args.pass2_language is None:
+        resolved_pass2_language = _normalize_optional_language(preset_defaults.get("pass2_language"))
+
+    if resolved_pass1_language is None:
+        _raise_usage_error("pass1 language is required; provide --pass1-language or a known preset with pass1 language")
+
+    return resolved_pass1_language, resolved_pass2_language
+
 def main() -> None:
     args = parse_args()
     if args.max_paragraph_attempts <= 0:
@@ -1170,12 +1305,16 @@ def main() -> None:
         raise SystemExit("--run-id may contain only letters, numbers, dot, underscore, and hyphen")
 
     if args.mode == "full":
-        if not args.pipeline_profile:
-            raise SystemExit("--pipeline-profile is required for --mode full")
         if not args.source:
             raise SystemExit("--source is required for --mode full")
         if not args.model:
             raise SystemExit("--model is required for --mode full")
+
+        resolved_pass1_language, resolved_pass2_language = _resolve_pipeline_languages(args)
+        args.pass1_language = resolved_pass1_language
+        args.pass2_language = resolved_pass2_language
+        if not args.pipeline_profile:
+            args.pipeline_profile = "explicit_languages"
     paths = _run_paths(args.run_id)
     run_dir = paths["run_root"]
 
@@ -1329,14 +1468,18 @@ def main() -> None:
                 return RuntimeError("Heartbeat stalled near stale-lock threshold; aborting to preserve lock authority")
             return None
 
+        phase_succeeded = False
         try:
             _safe_maybe_heartbeat()
             if fatal_heartbeat_error is not None:
                 raise fatal_heartbeat_error
             current_phase_abort_checker = _phase_abort_error
+            # IMPORTANT: phase implementations must either call _exec_phase_command(... should_abort=...)
+            # or periodically invoke should_abort() so heartbeat degradation can interrupt long-running work.
             runner()
             if fatal_heartbeat_error is not None:
                 raise fatal_heartbeat_error
+            phase_succeeded = True
         except Exception:  # noqa: BLE001
             _write_progress(
                 paths,
@@ -1366,6 +1509,22 @@ def main() -> None:
                     )
                 else:
                     print(f"Warning: heartbeat failed during phase {phase_name}: {warning_heartbeat_error}", file=sys.stderr)
+        if not phase_succeeded:
+            return
+
+        if fatal_heartbeat_error is not None:
+            _write_progress(
+                paths,
+                run_id=args.run_id,
+                mode=args.mode,
+                current_phase=phase_name,
+                phase_state="error",
+                phase_started_at=phase_started_at,
+                phase_finished_at=_utc_now_iso(),
+                last_heartbeat_at=progress_state["last_heartbeat_at"],
+            )
+            raise fatal_heartbeat_error
+
         _write_progress(
             paths,
             run_id=args.run_id,
@@ -1408,12 +1567,16 @@ def main() -> None:
     print(f"Acquired lock: {lock_path}")
     progress_state["last_heartbeat_at"] = payload["last_heartbeat_at"]
     try:
-        if args.mode == "full":
-            _run_full_pipeline(paths, args, run_phase_with_progress, current_abort_error)
-        elif args.mode == "rework-only":
-            _run_rework_only(paths, args, run_phase_with_progress, current_abort_error)
-        else:
-            raise SystemExit(EXIT_USAGE_ERROR)
+        try:
+            if args.mode == "full":
+                _run_full_pipeline(paths, args, run_phase_with_progress, current_abort_error)
+            elif args.mode == "rework-only":
+                _run_rework_only(paths, args, run_phase_with_progress, current_abort_error)
+            else:
+                raise SystemExit(EXIT_USAGE_ERROR)
+        except (subprocess.CalledProcessError, TimeoutError, ValueError, FileNotFoundError) as exc:
+            print(f"status=phase_failed error={exc}", file=sys.stderr)
+            raise SystemExit(EXIT_PHASE_FAILURE) from exc
     finally:
         try:
             if lock_path is not None and release_run_lock(lock_path, args.run_id):

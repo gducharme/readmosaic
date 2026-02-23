@@ -16,6 +16,11 @@ from scripts.translation_toolchain import (
     _materialize_preprocessed_from_translation,
     run_phase_c,
     _ensure_manifest,
+    _language_output_dir_name,
+    resolve_paragraph_review_state,
+    _run_rework_only,
+    _is_stale,
+    _resolve_pipeline_languages,
 )
 
 
@@ -37,6 +42,8 @@ class TranslationToolchainQueueTests(unittest.TestCase):
                     pipeline_profile="standard_single_pass",
                     source="book.md",
                     model="gpt-4o",
+                    pass1_language="Tamazight",
+                    pass2_language=None,
                 )
 
     def test_packet_contains_full_rework_fields(self) -> None:
@@ -257,7 +264,7 @@ class TranslationToolchainQueueTests(unittest.TestCase):
             }
             run_phase_c(
                 paths,
-                pipeline_profile="standard_single_pass",
+                pass2_language=None,
                 model="dummy",
                 phase_timeout_seconds=0,
                 should_abort=lambda: None,
@@ -265,6 +272,45 @@ class TranslationToolchainQueueTests(unittest.TestCase):
 
             self.assertTrue((paths["pass2_pre"] / "paragraphs.jsonl").exists())
             self.assertTrue((paths["pass2_pre"] / "sentences.jsonl").exists())
+
+
+
+    def test_resolve_paragraph_review_state_rejects_non_list_blocking_issues(self) -> None:
+        with self.assertRaises(ValueError):
+            resolve_paragraph_review_state(
+                {"paragraph_id": "p_1", "status": "ingested", "attempt": 0, "excluded_by_policy": False},
+                {"blocking_issues": "not-a-list", "scores": {}, "hard_fail": False},
+                max_attempts=4,
+            )
+
+    def test_resolve_paragraph_review_state_rejects_non_string_blocking_issue_item(self) -> None:
+        with self.assertRaises(ValueError):
+            resolve_paragraph_review_state(
+                {"paragraph_id": "p_1", "status": "ingested", "attempt": 0, "excluded_by_policy": False},
+                {"blocking_issues": ["ok", 123], "scores": {}, "hard_fail": False},
+                max_attempts=4,
+            )
+
+    def test_resolve_paragraph_review_state_rejects_non_dict_scores(self) -> None:
+        with self.assertRaises(ValueError):
+            resolve_paragraph_review_state(
+                {"paragraph_id": "p_1", "status": "ingested", "attempt": 0, "excluded_by_policy": False},
+                {"blocking_issues": [], "scores": [0.9], "hard_fail": False},
+                max_attempts=4,
+            )
+
+    def test_resolve_paragraph_review_state_rejects_non_numeric_score_values(self) -> None:
+        with self.assertRaises(ValueError):
+            resolve_paragraph_review_state(
+                {"paragraph_id": "p_1", "status": "ingested", "attempt": 0, "excluded_by_policy": False},
+                {"blocking_issues": [], "scores": {"semantic": "high"}, "hard_fail": False},
+                max_attempts=4,
+            )
+
+    def test_language_output_dir_slug_is_safe_for_arbitrary_input(self) -> None:
+        self.assertEqual(_language_output_dir_name("French"), "french")
+        self.assertEqual(_language_output_dir_name("Русский язык"), "русский_язык")
+        self.assertEqual(_language_output_dir_name("Arabic/RTL"), "arabic_rtl")
 
     def test_queue_rows_are_sorted_by_paragraph_id(self) -> None:
         out = build_rework_queue_rows(
@@ -406,6 +452,82 @@ class TranslationToolchainQueueTests(unittest.TestCase):
         out = build_rework_queue_rows(state_rows, existing)
         self.assertEqual(len(out), 1)
         self.assertEqual(out[0]["attempt"], 2)
+
+
+    def test_run_rework_only_executes_phase_d_then_e(self) -> None:
+        phase_calls: list[str] = []
+
+        def run_phase(name: str, runner):
+            phase_calls.append(name)
+
+        from argparse import Namespace
+
+        args = Namespace(
+            max_paragraph_attempts=4,
+            phase_timeout_seconds=0,
+            no_bump_attempts=False,
+        )
+        _run_rework_only(paths={}, args=args, run_phase=run_phase, should_abort=lambda: None)
+        self.assertEqual(phase_calls, ["D", "E"])
+
+    def test_phase_e_raises_for_missing_content_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state_path = root / "paragraph_state.jsonl"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            state_path.write_text(
+                '{"paragraph_id":"p_1","status":"rework_queued","attempt":0,"content_hash":""}\n',
+                encoding="utf-8",
+            )
+            paths = {
+                "paragraph_state": state_path,
+                "rework_queue": root / "rework_queue.jsonl",
+            }
+            from scripts.translation_toolchain import run_phase_e
+            with self.assertRaises(ValueError):
+                run_phase_e(paths, max_paragraph_attempts=4, bump_attempts=True, should_abort=lambda: None)
+
+    def test_is_stale_treats_future_heartbeat_as_not_stale(self) -> None:
+        import time
+        future = time.time() + 3600
+        payload = {"last_heartbeat_at": __import__("datetime").datetime.fromtimestamp(future, __import__("datetime").timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")}
+        self.assertFalse(_is_stale(payload))
+
+    def test_resolve_pipeline_languages_allows_explicit_languages_without_profile(self) -> None:
+        from argparse import Namespace
+
+        pass1, pass2 = _resolve_pipeline_languages(
+            Namespace(pipeline_profile=None, pass1_language="French", pass2_language="none")
+        )
+        self.assertEqual(pass1, "French")
+        self.assertIsNone(pass2)
+
+    def test_resolve_pipeline_languages_uses_profile_defaults_when_present(self) -> None:
+        from argparse import Namespace
+
+        pass1, pass2 = _resolve_pipeline_languages(
+            Namespace(pipeline_profile="tamazight_two_pass", pass1_language=None, pass2_language=None)
+        )
+        self.assertEqual(pass1, "Tamazight")
+        self.assertEqual(pass2, "Tifinagh")
+
+    def test_resolve_pipeline_languages_rejects_unknown_profile(self) -> None:
+        from argparse import Namespace
+
+        with self.assertRaises(SystemExit) as exc:
+            _resolve_pipeline_languages(
+                Namespace(pipeline_profile="unknown_profile", pass1_language=None, pass2_language=None)
+            )
+        self.assertEqual(exc.exception.code, 5)
+
+    def test_resolve_pipeline_languages_requires_pass1_with_usage_exit_code(self) -> None:
+        from argparse import Namespace
+
+        with self.assertRaises(SystemExit) as exc:
+            _resolve_pipeline_languages(
+                Namespace(pipeline_profile=None, pass1_language=None, pass2_language=None)
+            )
+        self.assertEqual(exc.exception.code, 5)
 
 
 if __name__ == "__main__":
