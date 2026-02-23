@@ -1,0 +1,3 @@
+{"paragraph_id":"p_0003","content_hash":"sha256:3333333333333333333333333333333333333333333333333333333333333333","attempt":1,"failure_reasons":["critical_grammar"],"failure_history":[],"required_fixes":["critical_grammar"]}
+{"paragraph_id":"p_0001","content_hash":"sha256:1111111111111111111111111111111111111111111111111111111111111111","attempt":1,"failure_reasons":["critical_grammar"],"failure_history":[],"required_fixes":["critical_grammar"]}
+{"paragraph_id":"p_0002","content_hash":"sha256:2222222222222222222222222222222222222222222222222222222222222222","attempt":1,"failure_reasons":["critical_grammar"],"failure_history":[],"required_fixes":["critical_grammar"]}

@@ -39,10 +39,14 @@ class TranslationToolchainQueueTests(unittest.TestCase):
     _REWORK_FIXTURE_ROOT = (
         Path(__file__).parent / "fixtures" / "translation_toolchain" / "rework_only_targeted_loop"
     )
+    _REWORK_PARTIAL_BATCH_FIXTURE_ROOT = (
+        Path(__file__).parent / "fixtures" / "translation_toolchain" / "rework_only_partial_batch"
+    )
 
-    def _write_fixture_file(self, src_name: str, dest_path: Path) -> None:
+    def _write_fixture_file(self, src_name: str, dest_path: Path, *, fixture_root: Path | None = None) -> None:
+        root = fixture_root or self._REWORK_FIXTURE_ROOT
         dest_path.parent.mkdir(parents=True, exist_ok=True)
-        dest_path.write_text((self._REWORK_FIXTURE_ROOT / src_name).read_text(encoding="utf-8"), encoding="utf-8")
+        dest_path.write_text((root / src_name).read_text(encoding="utf-8"), encoding="utf-8")
 
     def test_ensure_manifest_raises_clear_error_for_corrupt_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1364,6 +1368,92 @@ class TranslationToolchainQueueTests(unittest.TestCase):
 
             self.assertIn("RW1:beta source", paths["final_candidate"].read_text(encoding="utf-8"))
             self.assertFalse((paths["pass2_pre"] / "paragraphs.jsonl").exists())
+
+    def test_rework_translation_stage_honors_partial_batch_progression(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = {
+                "run_root": root,
+                "source_pre": root / "source_pre",
+                "pass1_pre": root / "pass1_pre",
+                "pass2_pre": root / "pass2_pre",
+                "final_candidate": root / "final" / "candidate.md",
+                "candidate_map": root / "final" / "candidate_map.jsonl",
+                "paragraph_state": root / "state" / "paragraph_state.jsonl",
+                "rework_queue": root / "state" / "rework_queue.jsonl",
+            }
+            self._write_fixture_file(
+                "source_pre_paragraphs.jsonl",
+                paths["source_pre"] / "paragraphs.jsonl",
+                fixture_root=self._REWORK_PARTIAL_BATCH_FIXTURE_ROOT,
+            )
+            self._write_fixture_file(
+                "pass1_pre_before.jsonl",
+                paths["pass1_pre"] / "paragraphs.jsonl",
+                fixture_root=self._REWORK_PARTIAL_BATCH_FIXTURE_ROOT,
+            )
+            self._write_fixture_file(
+                "pass2_pre_before.jsonl",
+                paths["pass2_pre"] / "paragraphs.jsonl",
+                fixture_root=self._REWORK_PARTIAL_BATCH_FIXTURE_ROOT,
+            )
+            self._write_fixture_file(
+                "paragraph_state_before.jsonl",
+                paths["paragraph_state"],
+                fixture_root=self._REWORK_PARTIAL_BATCH_FIXTURE_ROOT,
+            )
+            self._write_fixture_file(
+                "rework_queue.jsonl",
+                paths["rework_queue"],
+                fixture_root=self._REWORK_PARTIAL_BATCH_FIXTURE_ROOT,
+            )
+
+            def _stub_exec(command, **kwargs):
+                preprocessed = Path(command[command.index("--preprocessed") + 1])
+                output_root = Path(command[command.index("--output-root") + 1])
+                language = command[command.index("--language") + 1]
+                paragraphs = read_jsonl(preprocessed / "paragraphs.jsonl")
+                if language == "Tamazight":
+                    out_rows = [f"RW1:{row['text']}" for row in paragraphs]
+                else:
+                    out_rows = [f"RW2:{row['text']}" for row in paragraphs]
+                output_path = output_root / _language_output_dir_name(language)
+                output_path.mkdir(parents=True, exist_ok=True)
+                (output_path / "translation.json").write_text(
+                    json.dumps({"paragraph_translations": out_rows}),
+                    encoding="utf-8",
+                )
+
+            with patch("scripts.translation_toolchain._exec_phase_command", side_effect=_stub_exec):
+                queued_ids = run_rework_translation_stage(
+                    paths,
+                    pass1_language="Tamazight",
+                    pass2_language="Tifinagh",
+                    model="gpt-4o-mini",
+                    phase_timeout_seconds=0,
+                    should_abort=lambda: None,
+                    rework_batch_size=1,
+                    rework_max_batches=2,
+                )
+
+            self.assertEqual(queued_ids, {"p_0001", "p_0002"})
+            self.assertEqual(
+                read_jsonl(paths["pass1_pre"] / "paragraphs.jsonl"),
+                read_jsonl(self._REWORK_PARTIAL_BATCH_FIXTURE_ROOT / "expected_pass1_after_partial.jsonl"),
+            )
+            self.assertEqual(
+                read_jsonl(paths["pass2_pre"] / "paragraphs.jsonl"),
+                read_jsonl(self._REWORK_PARTIAL_BATCH_FIXTURE_ROOT / "expected_pass2_after_partial.jsonl"),
+            )
+            self.assertEqual(
+                read_jsonl(paths["rework_queue"]),
+                read_jsonl(self._REWORK_PARTIAL_BATCH_FIXTURE_ROOT / "expected_queue_after_partial.jsonl"),
+            )
+
+            state_by_id = {row["paragraph_id"]: row for row in read_jsonl(paths["paragraph_state"])}
+            self.assertEqual(state_by_id["p_0001"]["status"], "reworked")
+            self.assertEqual(state_by_id["p_0002"]["status"], "reworked")
+            self.assertEqual(state_by_id["p_0003"]["status"], "rework_queued")
 
     def test_rework_translation_stage_single_pass_does_not_mutate_existing_pass2(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

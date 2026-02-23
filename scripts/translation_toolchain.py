@@ -1092,16 +1092,36 @@ def _resolve_rework_runtime_config(paths: dict[str, Path], args: argparse.Namesp
 
 
 def _build_rework_subset_rows(source_rows: list[dict[str, Any]], paragraph_ids: set[str]) -> list[dict[str, Any]]:
-    by_id: dict[str, dict[str, Any]] = {}
+    out_rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
     for row in source_rows:
         paragraph_id = row.get("paragraph_id")
-        if isinstance(paragraph_id, str) and paragraph_id.strip():
-            by_id[paragraph_id] = row
+        if not isinstance(paragraph_id, str) or not paragraph_id.strip():
+            continue
+        if paragraph_id in paragraph_ids:
+            out_rows.append(row)
+            seen.add(paragraph_id)
 
-    missing = sorted(paragraph_ids - set(by_id))
+    missing = sorted(paragraph_ids - seen)
     if missing:
         raise ValueError(f"Rework queue references unknown paragraph_id values: {', '.join(missing)}")
-    return [by_id[paragraph_id] for paragraph_id in sorted(paragraph_ids)]
+    return out_rows
+
+
+def _split_rework_ids_into_batches(
+    ordered_ids: list[str],
+    *,
+    rework_batch_size: int,
+    rework_max_batches: int | None,
+) -> list[list[str]]:
+    if rework_batch_size <= 0:
+        raise ValueError("rework_batch_size must be > 0")
+    if rework_max_batches is not None and rework_max_batches <= 0:
+        raise ValueError("rework_max_batches must be > 0 when provided")
+    batches = [ordered_ids[idx : idx + rework_batch_size] for idx in range(0, len(ordered_ids), rework_batch_size)]
+    if rework_max_batches is not None:
+        return batches[:rework_max_batches]
+    return batches
 
 
 def _build_merged_paragraph_rows(
@@ -1289,6 +1309,8 @@ def run_rework_translation_stage(
     model: str,
     phase_timeout_seconds: int,
     should_abort: Callable[[], Exception | None],
+    rework_batch_size: int = 0,
+    rework_max_batches: int | None = None,
 ) -> set[str]:
     _assert_rework_stage_pipeline_state(paths)
 
@@ -1307,75 +1329,103 @@ def run_rework_translation_stage(
     _validate_rework_queue_lineage(paths, queue_rows, queued_ids)
 
     source_rows = read_jsonl(paths["source_pre"] / "paragraphs.jsonl", strict=True)
-    subset_rows = _build_rework_subset_rows(source_rows, queued_ids)
+    ordered_queued_ids = [
+        str(row.get("paragraph_id"))
+        for row in source_rows
+        if isinstance(row.get("paragraph_id"), str)
+        and str(row.get("paragraph_id")).strip()
+        and str(row.get("paragraph_id")) in queued_ids
+    ]
+    missing_ordered = sorted(queued_ids - set(ordered_queued_ids))
+    if missing_ordered:
+        raise ValueError(f"Rework queue references unknown paragraph_id values: {', '.join(missing_ordered)}")
+
+    effective_rework_batch_size = rework_batch_size if rework_batch_size > 0 else len(ordered_queued_ids)
+    queued_batches = _split_rework_ids_into_batches(
+        ordered_queued_ids,
+        rework_batch_size=effective_rework_batch_size,
+        rework_max_batches=rework_max_batches,
+    )
+    if not queued_batches:
+        return set()
 
     canonical_pass1_rows = read_jsonl(paths["pass1_pre"] / "paragraphs.jsonl", strict=True)
     canonical_pass2_path = paths["pass2_pre"] / "paragraphs.jsonl"
     canonical_pass2_rows = read_jsonl(canonical_pass2_path, strict=True) if canonical_pass2_path.exists() else []
 
+    merged_pass1_rows = canonical_pass1_rows
+    merged_pass2_rows: list[dict[str, Any]] | None = canonical_pass2_rows if pass2_language else None
+    processed_ids: set[str] = set()
+
     with tempfile.TemporaryDirectory(prefix="rework_loop_", dir=paths["run_root"]) as tmp_dir_raw:
         tmp_dir = Path(tmp_dir_raw)
-        subset_source_pre = tmp_dir / "source_pre_subset"
-        subset_source_pre.mkdir(parents=True, exist_ok=True)
-        atomic_write_jsonl(subset_source_pre / "paragraphs.jsonl", subset_rows)
+        for batch_index, batch_ids in enumerate(queued_batches, start=1):
+            batch_set = set(batch_ids)
+            subset_rows = _build_rework_subset_rows(source_rows, batch_set)
 
-        pass1_translate_output = tmp_dir / "translate_pass1"
-        _exec_phase_command(
-            [
-                sys.executable,
-                "scripts/translate.py",
-                "--language",
-                pass1_language,
-                "--model",
-                model,
-                "--preprocessed",
-                str(subset_source_pre),
-                "--output-root",
-                str(pass1_translate_output),
-            ],
-            timeout_seconds=phase_timeout_seconds or None,
-            should_abort=should_abort,
-        )
-        pass1_translation_json = pass1_translate_output / _language_output_dir_name(pass1_language) / "translation.json"
-        pass1_pre_subset = tmp_dir / "pass1_pre_subset"
-        _materialize_preprocessed_from_translation(subset_source_pre, pass1_translation_json, pass1_pre_subset)
+            subset_source_pre = tmp_dir / f"source_pre_subset_{batch_index:04d}"
+            subset_source_pre.mkdir(parents=True, exist_ok=True)
+            atomic_write_jsonl(subset_source_pre / "paragraphs.jsonl", subset_rows)
 
-        pass1_replacements = {
-            str(row.get("paragraph_id")): row
-            for row in read_jsonl(pass1_pre_subset / "paragraphs.jsonl", strict=True)
-            if isinstance(row.get("paragraph_id"), str) and str(row.get("paragraph_id")).strip()
-        }
-        merged_pass1_rows = _build_merged_paragraph_rows(canonical_pass1_rows, pass1_replacements)
-
-        final_replacements = pass1_replacements
-        merged_pass2_rows: list[dict[str, Any]] | None = None
-        if pass2_language:
-            pass2_translate_output = tmp_dir / "translate_pass2"
+            pass1_translate_output = tmp_dir / f"translate_pass1_{batch_index:04d}"
             _exec_phase_command(
                 [
                     sys.executable,
                     "scripts/translate.py",
                     "--language",
-                    pass2_language,
+                    pass1_language,
                     "--model",
                     model,
                     "--preprocessed",
-                    str(pass1_pre_subset),
+                    str(subset_source_pre),
                     "--output-root",
-                    str(pass2_translate_output),
+                    str(pass1_translate_output),
                 ],
                 timeout_seconds=phase_timeout_seconds or None,
                 should_abort=should_abort,
             )
-            pass2_translation_json = pass2_translate_output / _language_output_dir_name(pass2_language) / "translation.json"
-            pass2_pre_subset = tmp_dir / "pass2_pre_subset"
-            _materialize_preprocessed_from_translation(pass1_pre_subset, pass2_translation_json, pass2_pre_subset)
-            final_replacements = {
+            pass1_translation_json = pass1_translate_output / _language_output_dir_name(pass1_language) / "translation.json"
+            pass1_pre_subset = tmp_dir / f"pass1_pre_subset_{batch_index:04d}"
+            _materialize_preprocessed_from_translation(subset_source_pre, pass1_translation_json, pass1_pre_subset)
+
+            pass1_replacements = {
                 str(row.get("paragraph_id")): row
-                for row in read_jsonl(pass2_pre_subset / "paragraphs.jsonl", strict=True)
+                for row in read_jsonl(pass1_pre_subset / "paragraphs.jsonl", strict=True)
                 if isinstance(row.get("paragraph_id"), str) and str(row.get("paragraph_id")).strip()
             }
-            merged_pass2_rows = _build_merged_paragraph_rows(canonical_pass2_rows, final_replacements)
+            merged_pass1_rows = _build_merged_paragraph_rows(merged_pass1_rows, pass1_replacements)
+
+            if pass2_language:
+                pass2_translate_output = tmp_dir / f"translate_pass2_{batch_index:04d}"
+                _exec_phase_command(
+                    [
+                        sys.executable,
+                        "scripts/translate.py",
+                        "--language",
+                        pass2_language,
+                        "--model",
+                        model,
+                        "--preprocessed",
+                        str(pass1_pre_subset),
+                        "--output-root",
+                        str(pass2_translate_output),
+                    ],
+                    timeout_seconds=phase_timeout_seconds or None,
+                    should_abort=should_abort,
+                )
+                pass2_translation_json = pass2_translate_output / _language_output_dir_name(pass2_language) / "translation.json"
+                pass2_pre_subset = tmp_dir / f"pass2_pre_subset_{batch_index:04d}"
+                _materialize_preprocessed_from_translation(pass1_pre_subset, pass2_translation_json, pass2_pre_subset)
+                pass2_replacements = {
+                    str(row.get("paragraph_id")): row
+                    for row in read_jsonl(pass2_pre_subset / "paragraphs.jsonl", strict=True)
+                    if isinstance(row.get("paragraph_id"), str) and str(row.get("paragraph_id")).strip()
+                }
+                if merged_pass2_rows is None:
+                    raise ValueError("pass2 rows unavailable while pass2 language is configured")
+                merged_pass2_rows = _build_merged_paragraph_rows(merged_pass2_rows, pass2_replacements)
+
+            processed_ids.update(batch_set)
 
     atomic_write_jsonl(paths["pass1_pre"] / "paragraphs.jsonl", merged_pass1_rows)
     if merged_pass2_rows is not None:
@@ -1387,8 +1437,19 @@ def run_rework_translation_stage(
         merge_input_path = paths["pass1_pre"] / "paragraphs.jsonl"
     _validate_candidate_paragraph_indices(read_jsonl(merge_input_path, strict=True), paragraphs_path=merge_input_path)
     assemble_candidate(merge_input_path, paths["final_candidate"], paths["candidate_map"])
-    _mark_reworked_ready_for_review(paths, queued_ids)
-    return queued_ids
+    remaining_queue_rows = [
+        row
+        for row in queue_rows
+        if not (
+            isinstance(row.get("paragraph_id"), str)
+            and str(row.get("paragraph_id")).strip()
+            and str(row.get("paragraph_id")) in processed_ids
+        )
+    ]
+    atomic_write_jsonl(paths["rework_queue"], remaining_queue_rows)
+
+    _mark_reworked_ready_for_review(paths, processed_ids)
+    return processed_ids
 
 
 def _build_final_pre_bundle(output_dir: Path, paragraph_rows: list[dict[str, Any]]) -> None:
@@ -2285,6 +2346,8 @@ def _run_rework_only(
             model=model,
             phase_timeout_seconds=args.phase_timeout_seconds,
             should_abort=should_abort,
+            rework_batch_size=getattr(args, "rework_batch_size", 0),
+            rework_max_batches=getattr(args, "rework_max_batches", None),
         ),
     )
     run_phase(
@@ -2363,6 +2426,23 @@ def parse_args() -> argparse.Namespace:
         "--rework-run-phase-f",
         action="store_true",
         help="For --mode rework-only, run Phase F after rework loop and review/queue updates.",
+    )
+    parser.add_argument(
+        "--rework-batch-size",
+        type=int,
+        default=0,
+        help=(
+            "For --mode rework-only, process queued paragraphs in deterministic translation batches of this size. "
+            "0 or omitted processes the full queue in one batch."
+        ),
+    )
+    parser.add_argument(
+        "--rework-max-batches",
+        type=int,
+        help=(
+            "For --mode rework-only, optional cap on number of queued translation batches to run in phase R. "
+            "Remaining queued paragraphs stay queued for later runs."
+        ),
     )
     parser.add_argument(
         "--phase-timeout-seconds",
@@ -2461,6 +2541,10 @@ def main() -> None:
         raise SystemExit("--max-paragraph-attempts must be > 0")
     if args.phase_timeout_seconds < 0:
         raise SystemExit("--phase-timeout-seconds must be >= 0")
+    if args.rework_batch_size < 0:
+        raise SystemExit("--rework-batch-size must be >= 0")
+    if args.rework_max_batches is not None and args.rework_max_batches <= 0:
+        raise SystemExit("--rework-max-batches must be > 0")
     if not RUN_ID_PATTERN.match(args.run_id):
         raise SystemExit("--run-id must start with a letter/number, use only letters, numbers, dot, underscore, or hyphen, and be at most 64 chars")
 
