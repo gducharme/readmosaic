@@ -25,7 +25,7 @@ if __package__ is None or __package__ == "":
 
 from lib.paragraph_state_machine import assert_pipeline_state_allowed
 from scripts.assemble_candidate import assemble_candidate
-from scripts.normalize_translation_output import normalize_translation_output
+from scripts.normalize_translation_output import PARAGRAPH_SEPARATOR_LEN, normalize_translation_output
 
 LOCK_FILE_NAME = "RUNNING.lock"
 LOCK_HEARTBEAT_WRITE_INTERVAL_SECONDS = 10
@@ -581,6 +581,7 @@ def _run_paths(run_id: str) -> dict[str, Path]:
         "final_candidate": run_root / "final" / "candidate.md",
         "candidate_map": run_root / "final" / "candidate_map.jsonl",
         "final_output": run_root / "final" / "final.md",
+        "final_pre": run_root / "final" / "final_pre",
         "review_normalized": run_root / "review" / "normalized",
         "gate_dir": run_root / "gate",
         "gate_report": run_root / "gate" / "gate_report.json",
@@ -801,6 +802,162 @@ def _compute_status_report(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "progress_percent": progress_percent,
         "status_counts": dict(sorted(status_counts.items())),
     }
+
+
+def _sentence_spans_for_final(text: str) -> list[tuple[str, int, int]]:
+    spans: list[tuple[str, int, int]] = []
+    for match in re.finditer(r"[^.!?؟。！？\n]+(?:[.!?؟。！？]+|$)", text, flags=re.MULTILINE):
+        raw_sentence = match.group(0)
+        if not raw_sentence.strip():
+            continue
+
+        left_trim = len(raw_sentence) - len(raw_sentence.lstrip())
+        right_trim = len(raw_sentence) - len(raw_sentence.rstrip())
+        start = match.start() + left_trim
+        end = match.end() - right_trim
+        if end <= start:
+            continue
+
+        sentence = text[start:end]
+        spans.append((sentence, start, end))
+
+    if not spans and text.strip():
+        clean = text.strip()
+        start = text.find(clean)
+        spans.append((clean, start, start + len(clean)))
+    return spans
+
+
+def _token_spans_for_final(text: str) -> list[tuple[str, int, int]]:
+    return [(m.group(0), m.start(), m.end()) for m in re.finditer(r"\S+", text)]
+
+
+def _coerce_paragraph_index(value: Any, *, paragraph_id: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"Invalid paragraph_index for '{paragraph_id}': boolean values are not allowed")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip()
+        if normalized and normalized.lstrip("-").isdigit():
+            return int(normalized)
+    raise ValueError(f"Invalid paragraph_index for '{paragraph_id}': {value!r}")
+
+
+def _resolve_merge_paragraphs_path(paths: dict[str, Path]) -> Path:
+    pass2_paragraphs = paths["pass2_pre"] / "paragraphs.jsonl"
+    if pass2_paragraphs.exists():
+        return pass2_paragraphs
+    pass1_paragraphs = paths["pass1_pre"] / "paragraphs.jsonl"
+    if pass1_paragraphs.exists():
+        return pass1_paragraphs
+    raise FileNotFoundError(
+        "Missing merge input paragraphs.jsonl: expected one of "
+        f"{pass2_paragraphs} or {pass1_paragraphs}"
+    )
+
+
+def _build_final_pre_bundle(output_dir: Path, paragraph_rows: list[dict[str, Any]]) -> None:
+    sentence_rows: list[dict[str, Any]] = []
+    word_rows: list[dict[str, Any]] = []
+    tokenized_paragraphs: list[dict[str, Any]] = []
+
+    manuscript_id = str(paragraph_rows[0].get("manuscript_id", output_dir.parent.name)) if paragraph_rows else output_dir.parent.name
+    source_value = str(paragraph_rows[0].get("source", str(output_dir.parent))) if paragraph_rows else str(output_dir.parent)
+
+    paragraph_start = 0
+    sentence_counter = 1
+    word_counter = 1
+    token_counter = 1
+
+    for idx, paragraph_row in enumerate(paragraph_rows, start=1):
+        paragraph_text = str(paragraph_row.get("text", ""))
+        paragraph_id = str(paragraph_row.get("paragraph_id") or paragraph_row.get("id") or f"{manuscript_id}-p{idx:04d}")
+        sentence_spans = _sentence_spans_for_final(paragraph_text)
+        paragraph_tokens: list[dict[str, Any]] = []
+
+        for sentence_text, sent_local_start, sent_local_end in sentence_spans:
+            sentence_id = f"{manuscript_id}-s{sentence_counter:06d}"
+            sentence_record = {
+                "id": sentence_id,
+                "order": len(sentence_rows),
+                "prev_id": sentence_rows[-1]["id"] if sentence_rows else None,
+                "next_id": None,
+                "text": sentence_text,
+                "start_char": paragraph_start + sent_local_start,
+                "end_char": paragraph_start + sent_local_end,
+                "paragraph_id": paragraph_id,
+                "manuscript_id": manuscript_id,
+                "source": source_value,
+            }
+            if sentence_rows:
+                sentence_rows[-1]["next_id"] = sentence_id
+            sentence_rows.append(sentence_record)
+
+            for token, token_local_start, token_local_end in _token_spans_for_final(sentence_text):
+                word_id = f"{manuscript_id}-w{word_counter:06d}"
+                word_record = {
+                    "id": word_id,
+                    "order": len(word_rows),
+                    "prev_id": word_rows[-1]["id"] if word_rows else None,
+                    "next_id": None,
+                    "text": token,
+                    "start_char": paragraph_start + sent_local_start + token_local_start,
+                    "end_char": paragraph_start + sent_local_start + token_local_end,
+                    "sentence_id": sentence_id,
+                    "paragraph_id": paragraph_id,
+                    "manuscript_id": manuscript_id,
+                    "source": source_value,
+                }
+                if word_rows:
+                    word_rows[-1]["next_id"] = word_id
+                word_rows.append(word_record)
+                word_counter += 1
+
+            # Increment exactly once per sentence (never per token).
+            sentence_counter += 1
+
+        for local_index, (token, start_char, end_char) in enumerate(_token_spans_for_final(paragraph_text)):
+            paragraph_tokens.append(
+                {
+                    "token_id": f"{manuscript_id}-t{token_counter:06d}",
+                    "text": token,
+                    "start_char": paragraph_start + start_char,
+                    "end_char": paragraph_start + end_char,
+                    "global_index": token_counter,
+                    "local_index": local_index,
+                }
+            )
+            token_counter += 1
+
+        tokenized_paragraphs.append(
+            {
+                "paragraph_id": paragraph_id,
+                "order": idx - 1,
+                "text": paragraph_text,
+                "tokens": paragraph_tokens,
+            }
+        )
+        paragraph_start += len(paragraph_text) + PARAGRAPH_SEPARATOR_LEN
+
+    manuscript_tokens = {
+        "schema_version": "1.0",
+        "manuscript_id": manuscript_id,
+        "source": source_value,
+        "created_at": _utc_now_iso(),
+        "tokenization": {
+            "method": "regex",
+            "model": "whitespace+punctuation",
+            "notes": "Canonical final_pre bundle generated from merge-eligible paragraph rows.",
+        },
+        "paragraphs": tokenized_paragraphs,
+    }
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    atomic_write_jsonl(output_dir / "paragraphs.jsonl", paragraph_rows)
+    atomic_write_jsonl(output_dir / "sentences.jsonl", sentence_rows)
+    atomic_write_jsonl(output_dir / "words.jsonl", word_rows)
+    _atomic_write_json(output_dir / "manuscript_tokens.json", manuscript_tokens)
 
 
 def _print_status_report(report: dict[str, Any], *, run_id: str) -> None:
@@ -1038,10 +1195,116 @@ def run_phase_f(
         abort_error = should_abort()
         if abort_error is not None:
             raise abort_error
-    paths["final_dir"].mkdir(parents=True, exist_ok=True)
-    report = _compute_status_report(read_jsonl(paths["paragraph_state"], strict=True))
+
+    state_rows = read_jsonl(paths["paragraph_state"], strict=True)
+    status_report = _compute_status_report(state_rows)
+
+    source_rows = read_jsonl(paths["source_pre"] / "paragraphs.jsonl", strict=True)
+    source_hash_by_id: dict[str, str] = {}
+    for row in source_rows:
+        paragraph_id = row.get("paragraph_id")
+        if not isinstance(paragraph_id, str) or not paragraph_id.strip():
+            raise ValueError("Invalid source_pre paragraph row: missing non-empty paragraph_id")
+        content_hash = row.get("content_hash")
+        if not isinstance(content_hash, str) or not content_hash.strip():
+            raise ValueError(f"Invalid source_pre paragraph row for '{paragraph_id}': missing non-empty content_hash")
+        source_hash_by_id[paragraph_id] = content_hash
+
+    merge_input_path = _resolve_merge_paragraphs_path(paths)
+    translated_rows = read_jsonl(merge_input_path, strict=True)
+    translated_by_id: dict[str, dict[str, Any]] = {}
+    for row in translated_rows:
+        paragraph_id = row.get("paragraph_id")
+        if not isinstance(paragraph_id, str) or not paragraph_id.strip():
+            raise ValueError(f"Invalid merge input paragraph row in {merge_input_path}: missing non-empty paragraph_id")
+        if paragraph_id in translated_by_id:
+            raise ValueError(f"Invalid merge input paragraphs: duplicate paragraph_id '{paragraph_id}' in {merge_input_path}")
+        translated_by_id[paragraph_id] = row
+
+    blocker_states = {"rework_queued", "manual_review_required"}
+    required_ids: list[str] = []
+    blocking_entries: list[dict[str, str]] = []
+    merged_output_rows: list[dict[str, Any]] = []
+
+    for row in state_rows:
+        paragraph_id = row.get("paragraph_id")
+        if not isinstance(paragraph_id, str) or not paragraph_id.strip():
+            raise ValueError("Invalid paragraph_state row: missing non-empty paragraph_id")
+        excluded = row.get("excluded_by_policy", False) is True
+        status = row.get("status")
+        content_hash = row.get("content_hash")
+        if not isinstance(content_hash, str) or not content_hash.strip():
+            raise ValueError(f"Invalid paragraph_state row for '{paragraph_id}': missing non-empty content_hash")
+
+        source_hash = source_hash_by_id.get(paragraph_id)
+        if source_hash is None:
+            raise ValueError(f"Missing source_pre lineage row for paragraph_id '{paragraph_id}'")
+        if source_hash != content_hash:
+            raise ValueError(
+                f"Lineage mismatch for paragraph_id '{paragraph_id}': paragraph_state content_hash does not match source_pre"
+            )
+
+        if excluded:
+            continue
+
+        required_ids.append(paragraph_id)
+        if status in blocker_states:
+            blocking_entries.append({"paragraph_id": paragraph_id, "reason": f"status:{status}"})
+            continue
+        if status not in {"ready_to_merge", "merged"}:
+            blocking_entries.append({"paragraph_id": paragraph_id, "reason": f"required_not_merge_eligible:{status}"})
+            continue
+
+        merge_row = translated_by_id.get(paragraph_id)
+        if merge_row is None:
+            blocking_entries.append({"paragraph_id": paragraph_id, "reason": "missing_merge_input"})
+            continue
+        translated_hash = merge_row.get("content_hash")
+        if not isinstance(translated_hash, str) or not translated_hash.strip():
+            blocking_entries.append({"paragraph_id": paragraph_id, "reason": "missing_merge_input_content_hash"})
+            continue
+        if translated_hash != source_hash:
+            blocking_entries.append({"paragraph_id": paragraph_id, "reason": "content_hash_lineage_mismatch"})
+            continue
+        merged_output_rows.append(merge_row)
+
+    can_merge = len(blocking_entries) == 0
+
     paths["gate_dir"].mkdir(parents=True, exist_ok=True)
-    _atomic_write_json(paths["gate_report"], {"run_id": run_id, **report})
+    gate_report = {
+        "run_id": run_id,
+        **status_report,
+        "required_paragraph_ids": required_ids,
+        "can_merge": can_merge,
+        "blocking_paragraphs": blocking_entries,
+    }
+    _atomic_write_json(paths["gate_report"], gate_report)
+
+    if not can_merge:
+        return
+
+    paths["final_dir"].mkdir(parents=True, exist_ok=True)
+    ordered_rows = sorted(
+        merged_output_rows,
+        key=lambda row: _coerce_paragraph_index(row.get("paragraph_index"), paragraph_id=str(row.get("paragraph_id", "<unknown>"))),
+    )
+    final_text = "\n\n".join(str(row.get("text", "")) for row in ordered_rows)
+    paths["final_output"].write_text(final_text, encoding="utf-8")
+    _build_final_pre_bundle(paths["final_pre"], ordered_rows)
+
+    updated_rows: list[dict[str, Any]] = []
+    merged_ids = {str(row.get("paragraph_id")) for row in ordered_rows}
+    now_iso = _utc_now_iso()
+    for row in state_rows:
+        paragraph_id = str(row.get("paragraph_id", ""))
+        if paragraph_id in merged_ids and row.get("status") == "ready_to_merge":
+            next_row = dict(row)
+            next_row["status"] = "merged"
+            next_row["updated_at"] = now_iso
+            updated_rows.append(next_row)
+        else:
+            updated_rows.append(row)
+    atomic_write_jsonl(paths["paragraph_state"], updated_rows)
 
 
 def _run_full_pipeline(
