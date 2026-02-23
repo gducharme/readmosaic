@@ -363,19 +363,18 @@ def build_rework_queue_rows(
     return sorted(queue_rows, key=lambda row: row["paragraph_id"])
 
 
-def _cleanup_stale_temp_lock_files(run_dir: Path) -> None:
-    """Best-effort cleanup for abandoned atomic-write temp files."""
-    prefix = f".{LOCK_FILE_NAME}.tmp."
+def _cleanup_stale_temp_files(run_dir: Path) -> None:
+    """Best-effort cleanup for abandoned atomic-write temp files under a run directory."""
     now = time.time()
     max_age = LOCK_STALE_TTL_SECONDS * 2
 
     try:
-        candidates = list(run_dir.iterdir())
+        candidates = list(run_dir.rglob(".*.tmp.*"))
     except OSError:
         return
 
     for candidate in candidates:
-        if not candidate.is_file() or not candidate.name.startswith(prefix):
+        if not candidate.is_file():
             continue
         try:
             age = now - candidate.stat().st_mtime
@@ -437,7 +436,7 @@ def _archive_stale_lock(
 
 def acquire_run_lock(run_dir: Path, run_id: str) -> tuple[Path, dict[str, Any], LockIdentity]:
     run_dir.mkdir(parents=True, exist_ok=True)
-    _cleanup_stale_temp_lock_files(run_dir)
+    _cleanup_stale_temp_files(run_dir)
     lock_path = run_dir / LOCK_FILE_NAME
 
     while True:
@@ -456,16 +455,18 @@ def acquire_run_lock(run_dir: Path, run_id: str) -> tuple[Path, dict[str, Any], 
                     time.sleep(LOCK_STALE_RETRY_BASE_SLEEP_SECONDS + random.uniform(0, 0.05))
                     continue
                 existing = None
+                last_read_exc: InvalidRunLockError = exc
                 for _ in range(LOCK_READ_RETRY_ATTEMPTS):
                     time.sleep(LOCK_READ_RETRY_SLEEP_SECONDS)
                     try:
                         existing = _read_lock(lock_path)
                         break
-                    except InvalidRunLockError:
+                    except InvalidRunLockError as retry_exc:
+                        last_read_exc = retry_exc
                         if not lock_path.exists():
                             break
                 if existing is None:
-                    raise InvalidRunLockError(f"Invalid active lock file at {lock_path}: {exc}") from exc
+                    raise InvalidRunLockError(f"Invalid active lock file at {lock_path}: {last_read_exc}") from last_read_exc
             if not _is_stale(existing):
                 raise ActiveRunLockError(
                     "Run already active: fresh RUNNING.lock exists "
