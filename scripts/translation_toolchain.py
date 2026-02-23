@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""Translation toolchain lock handling primitives.
-
-This module currently focuses on race-safe run lock acquisition/release semantics.
-"""
+"""Translation toolchain orchestrator with lock-safe run lifecycle management."""
 from __future__ import annotations
 
 import argparse
@@ -260,7 +257,7 @@ def build_rework_queue_packet(paragraph_state_row: dict[str, Any]) -> dict[str, 
     return {
         "paragraph_id": paragraph_id,
         "content_hash": content_hash,
-        "attempt": paragraph_state_row.get("attempt", 0),
+        "attempt": _coerce_attempt(paragraph_state_row.get("attempt", 0), paragraph_id=paragraph_id),
         "failure_reasons": failure_reasons,
         "failure_history": failure_history,
         "required_fixes": required_fixes,
@@ -601,7 +598,7 @@ def _exec_phase_command(
             raise TimeoutError(f"Phase command timed out after {timeout_seconds}s: {' '.join(command)}") from exc
         return
 
-    process = subprocess.Popen(command, stdout=sys.stdout, stderr=sys.stderr)
+    process = subprocess.Popen(command)
     stop_heartbeat = threading.Event()
     heartbeat_error: Exception | None = None
 
@@ -715,6 +712,10 @@ def _materialize_preprocessed_from_translation(
 
 def _hash_content(text: str) -> str:
     return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _language_output_dir_name(language: str) -> str:
+    return language.lower().replace(" ", "_")
 
 
 def _build_seed_state_rows(paragraph_rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
@@ -871,12 +872,21 @@ def run_phase_a(
         atomic_write_jsonl(paths["paragraph_state"], state_rows)
     else:
         existing_rows = read_jsonl(paths["paragraph_state"], strict=True)
-        existing_signature = {str(row.get("paragraph_id")): str(row.get("content_hash")) for row in existing_rows}
+        existing_signature: dict[str, str] = {}
+        for row in existing_rows:
+            paragraph_id = row.get("paragraph_id")
+            content_hash = row.get("content_hash")
+            if not isinstance(paragraph_id, str) or not paragraph_id.strip():
+                raise ValueError("Invalid paragraph_state row: missing non-empty paragraph_id")
+            if not isinstance(content_hash, str) or not content_hash.strip():
+                raise ValueError(f"Invalid paragraph_state row for '{paragraph_id}': missing non-empty content_hash")
+            existing_signature[paragraph_id] = content_hash
+
         new_signature = {row["paragraph_id"]: row["content_hash"] for row in state_rows}
         if existing_signature != new_signature:
             raise ValueError(
-                "paragraph_state.jsonl drift detected against source_pre/paragraphs.jsonl; "
-                "refusing to continue with stale state"
+                "paragraph_state.jsonl drift detected against source_pre/paragraphs.jsonl for immutable run_id; "
+                "use a new --run-id for changed inputs"
             )
 
 
@@ -905,12 +915,11 @@ def run_phase_b(
             str(paths["source_pre"]),
             "--output-root",
             str(translate_output),
-        ]
-        ,
+        ],
         heartbeat=heartbeat,
         timeout_seconds=phase_timeout_seconds or None,
     )
-    translation_json = translate_output / "tamazight" / "translation.json"
+    translation_json = translate_output / _language_output_dir_name(pass1_language) / "translation.json"
     _materialize_preprocessed_from_translation(paths["source_pre"], translation_json, paths["pass1_pre"])
 
 
@@ -932,12 +941,11 @@ def run_phase_c(
                 str(paths["pass1_pre"]),
                 "--output-root",
                 str(translate_output),
-            ]
-            ,
+            ],
             heartbeat=heartbeat,
             timeout_seconds=phase_timeout_seconds or None,
         )
-        translation_json = translate_output / "tifinagh" / "translation.json"
+        translation_json = translate_output / _language_output_dir_name(pass2_language) / "translation.json"
         _materialize_preprocessed_from_translation(paths["pass1_pre"], translation_json, paths["pass2_pre"])
 
 
@@ -963,8 +971,7 @@ def run_phase_d(
             str(paths["rework_queue"]),
             "--max-attempts",
             str(max_paragraph_attempts),
-        ]
-        ,
+        ],
         heartbeat=heartbeat,
         timeout_seconds=phase_timeout_seconds or None,
     )
@@ -1226,7 +1233,17 @@ def main() -> None:
         )
         marker_path = _phase_marker_path(paths, phase_name)
         marker_path.parent.mkdir(parents=True, exist_ok=True)
-        marker_path.write_text(_utc_now_iso() + "\n", encoding="utf-8")
+        marker_tmp = marker_path.with_name(f".{marker_path.name}.tmp.{os.getpid()}")
+        try:
+            marker_tmp.write_text(_utc_now_iso() + "\n", encoding="utf-8")
+            os.replace(marker_tmp, marker_path)
+            _fsync_directory(marker_path.parent)
+        finally:
+            if marker_tmp.exists():
+                try:
+                    marker_tmp.unlink()
+                except OSError:
+                    pass
 
     try:
         lock_path, payload, lock_identity = acquire_run_lock(run_dir, args.run_id)
