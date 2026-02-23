@@ -62,7 +62,43 @@
           "ignore_case": true
         }
       ]
-    }
+    },
+    "semantic_language": "Tifinagh",
+    "script_mode": "two_pass",
+    "source_pre": "runs/tx_happy_001/source_pre",
+    "pass1_pre": "runs/tx_happy_001/pass1_pre",
+    "pass2_pre": "runs/tx_happy_001/pass2_pre",
+    "review_pre_dir": "pass2_pre",
+    "final": "runs/tx_happy_001/final/final.md",
+    "gate": "runs/tx_happy_001/gate/gate_report.json",
+    "aggregation_policy_snapshot": {
+      "max_paragraph_attempts": 4,
+      "score_thresholds": {
+        "grammar": 0.8,
+        "semantic_fidelity": 0.85,
+        "style": 0.8,
+        "voice": 0.8,
+        "vocabulary": 0.8
+      },
+      "immediate_manual_review_reasons": [
+        "artifact_corrupt",
+        "content_hash_mismatch",
+        "mapping_error",
+        "semantic_fidelity_hard_floor"
+      ]
+    },
+    "canonical_state_counts": {
+      "total": 1,
+      "required_total": 1,
+      "required_merge_blockers": 0,
+      "done": 1,
+      "in_flight": 0,
+      "progress_percent": 100.0,
+      "status_counts": {
+        "ready_to_merge": 1
+      }
+    },
+    "updated_at": "2026-01-15T09:55:00Z"
   },
   "paragraph_scores_row": {
     "paragraph_id": "p_0001",
