@@ -616,16 +616,16 @@ def _exec_phase_command(
 
     try:
         while True:
-            if should_abort is not None:
-                abort_error = should_abort()
-                if abort_error is not None:
-                    raise abort_error
-
             code = process.poll()
             if code is not None:
                 if code != 0:
                     raise subprocess.CalledProcessError(code, command)
                 return
+
+            if should_abort is not None:
+                abort_error = should_abort()
+                if abort_error is not None:
+                    raise abort_error
 
             if timeout_seconds is not None and timeout_seconds > 0:
                 if time.monotonic() - start_monotonic > timeout_seconds:
@@ -1303,7 +1303,7 @@ def main() -> None:
                     heartbeat_stop.set()
 
         def _heartbeat_loop() -> None:
-            nonlocal fatal_heartbeat_error
+            nonlocal fatal_heartbeat_error, warning_heartbeat_error
             while not heartbeat_stop.wait(1):
                 if time.monotonic() - last_heartbeat_success_monotonic > LOCK_HEARTBEAT_STALE_ABORT_SECONDS:
                     fatal_heartbeat_error = RuntimeError("Heartbeat stalled near stale-lock threshold; aborting to preserve lock authority")
@@ -1312,6 +1312,11 @@ def main() -> None:
                 try:
                     _safe_maybe_heartbeat()
                 except InvalidRunLockError:
+                    heartbeat_stop.set()
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    warning_heartbeat_error = exc
+                    fatal_heartbeat_error = RuntimeError("Heartbeat thread crashed unexpectedly; aborting to preserve lock authority")
                     heartbeat_stop.set()
                     break
 
@@ -1356,7 +1361,7 @@ def main() -> None:
             if warning_heartbeat_error is not None:
                 if heartbeat_degraded:
                     print(
-                        f"Warning: heartbeat degraded during phase {phase_name} after repeated failures: {warning_heartbeat_error}",
+                        f"Error: heartbeat degraded during phase {phase_name} after repeated failures: {warning_heartbeat_error}",
                         file=sys.stderr,
                     )
                 else:
