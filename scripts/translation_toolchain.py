@@ -681,6 +681,7 @@ def _run_paths(run_id: str) -> dict[str, Path]:
         "final_output": run_root / "final" / "final.md",
         "final_pre": run_root / "final" / "final_pre",
         "review_normalized": run_root / "review" / "normalized",
+        "review_grammar": run_root / "review" / "grammar",
         "gate_dir": run_root / "gate",
         "gate_report": run_root / "gate" / "gate_report.json",
     }
@@ -966,6 +967,35 @@ def _read_manifest(paths: dict[str, Path], *, run_id: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError(f"manifest must be a JSON object for run '{run_id}': {manifest_path}")
     return payload
+
+
+def _resolve_review_pre_dir(manifest: dict[str, Any], override_profile: str | None = None) -> str:
+    if override_profile is not None:
+        profile = override_profile.strip()
+    else:
+        configured_review_pre_dir = manifest.get("review_pre_dir")
+        if isinstance(configured_review_pre_dir, str) and configured_review_pre_dir.strip():
+            return configured_review_pre_dir.strip()
+        raw_profile = manifest.get("pipeline_profile")
+        profile = raw_profile.strip() if isinstance(raw_profile, str) else None
+
+    if not profile:
+        raise ValueError(
+            "Missing pipeline profile for phase D review inputs. Remediation: set manifest pipeline_profile "
+            "(or pass --pipeline-profile) to one of: tamazight_two_pass, standard_single_pass. "
+            "Alternatively set manifest review_pre_dir directly (for example: pass1_pre or pass2_pre)."
+        )
+
+    if profile == "tamazight_two_pass":
+        return "pass2_pre"
+    if profile == "standard_single_pass":
+        return "pass1_pre"
+
+    raise ValueError(
+        "Unknown pipeline profile for phase D review inputs: "
+        f"{profile!r}. Remediation: set manifest pipeline_profile (or pass --pipeline-profile) "
+        "to one of: tamazight_two_pass, standard_single_pass, or set manifest review_pre_dir directly."
+    )
 
 
 def _resolve_rework_runtime_config(paths: dict[str, Path], args: argparse.Namespace) -> tuple[str, str | None, str]:
@@ -1632,7 +1662,13 @@ def run_phase_c5(paths: dict[str, Path]) -> None:
 
 
 def run_phase_d(
-    paths: dict[str, Path], *, max_paragraph_attempts: int, phase_timeout_seconds: int, should_abort: Callable[[], Exception | None]
+    paths: dict[str, Path],
+    *,
+    run_id: str,
+    max_paragraph_attempts: int,
+    phase_timeout_seconds: int,
+    should_abort: Callable[[], Exception | None],
+    pipeline_profile: str | None = None,
 ) -> None:
     if not paths["final_candidate"].exists() or not paths["candidate_map"].exists():
         raise FileNotFoundError(
@@ -1644,6 +1680,8 @@ def run_phase_d(
     normalized_rows = paths["review_normalized"] / "all_reviews.jsonl"
     if not normalized_rows.exists():
         atomic_write_jsonl(normalized_rows, [])
+
+    # phase D profile-resolved paragraph review input (used by grammar and other paragraph-scoped reviewers)
 
     candidate_map_rows = read_jsonl(paths["candidate_map"], strict=True)
     reviewable_ids = {
@@ -1664,11 +1702,51 @@ def run_phase_d(
             + ", ".join(unknown_candidate_ids)
         )
 
+    manifest = _read_manifest(paths, run_id=run_id)
+    review_pre_dir = _resolve_review_pre_dir(manifest, pipeline_profile)
+    review_preprocessed = paths[review_pre_dir]
+
+    # Guardrail: paragraph-scoped reviewers (especially grammar) must consume profile-resolved preprocessed input.
+    if not review_preprocessed.exists():
+        raise FileNotFoundError(
+            f"Resolved review input directory '{review_pre_dir}' does not exist for run '{run_id}': {review_preprocessed}"
+        )
+    review_paragraphs = review_preprocessed / "paragraphs.jsonl"
+    if not review_paragraphs.exists():
+        raise FileNotFoundError(
+            "Resolved review input is incomplete for phase D grammar reviewer; missing required artifact "
+            f"{review_paragraphs}. Remediation: complete phase B/C preprocessing before phase D."
+        )
+
+    manifest_model = manifest.get("model")
+    if not isinstance(manifest_model, str) or not manifest_model.strip():
+        raise ValueError(
+            f"Missing model in manifest for run '{run_id}'; phase D grammar reviewer requires manifest['model']."
+        )
+    grammar_output_dir = paths.get("review_grammar", paths["run_root"] / "review" / "grammar")
+
     _mutate_paragraph_statuses(
         paths,
         next_status="review_in_progress",
         eligible_statuses={"candidate_assembled", "reworked"},
         paragraph_ids=reviewable_ids,
+    )
+
+    timeout_seconds = None if phase_timeout_seconds == 0 else phase_timeout_seconds
+
+    _exec_phase_command(
+        [
+            sys.executable,
+            "scripts/grammar_auditor.py",
+            "--preprocessed",
+            str(review_preprocessed),
+            "--model",
+            manifest_model.strip(),
+            "--output-dir",
+            str(grammar_output_dir),
+        ],
+        timeout_seconds=timeout_seconds,
+        should_abort=should_abort,
     )
 
     _exec_phase_command(
@@ -1686,7 +1764,7 @@ def run_phase_d(
             "--max-attempts",
             str(max_paragraph_attempts),
         ],
-        timeout_seconds=phase_timeout_seconds or None,
+        timeout_seconds=timeout_seconds,
         should_abort=should_abort,
     )
     if not paths["paragraph_scores"].exists():
@@ -1929,9 +2007,11 @@ def _run_full_pipeline(
         "D",
         lambda: run_phase_d(
             paths,
+            run_id=args.run_id,
             max_paragraph_attempts=args.max_paragraph_attempts,
             phase_timeout_seconds=args.phase_timeout_seconds,
             should_abort=should_abort,
+            pipeline_profile=args.pipeline_profile,
         ),
     )
     run_phase(
@@ -1967,9 +2047,11 @@ def _run_rework_only(
         "D",
         lambda: run_phase_d(
             paths,
+            run_id=args.run_id,
             max_paragraph_attempts=args.max_paragraph_attempts,
             phase_timeout_seconds=args.phase_timeout_seconds,
             should_abort=should_abort,
+            pipeline_profile=args.pipeline_profile,
         ),
     )
     run_phase(

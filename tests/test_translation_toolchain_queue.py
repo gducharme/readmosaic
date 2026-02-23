@@ -605,10 +605,16 @@ class TranslationToolchainQueueTests(unittest.TestCase):
                 "paragraph_state": state_path,
                 "final_candidate": final_candidate,
                 "candidate_map": candidate_map,
+                "run_root": root,
+                "manifest": root / "manifest.json",
                 "review_normalized": root / "review_normalized",
                 "paragraph_scores": root / "state" / "paragraph_scores.jsonl",
                 "rework_queue": root / "state" / "rework_queue.jsonl",
             }
+            paths["manifest"].write_text('{"pipeline_profile":"tamazight_two_pass","model":"stub-model"}', encoding="utf-8")
+            paths["pass2_pre"] = root / "pass2_pre"
+            paths["pass2_pre"].mkdir(parents=True, exist_ok=True)
+            (paths["pass2_pre"] / "paragraphs.jsonl").write_text('{"paragraph_id":"p_1"}\n', encoding="utf-8")
 
             def _stub_exec(*args, **kwargs):
                 self.assertEqual(read_jsonl(state_path)[0]["status"], "review_in_progress")
@@ -616,7 +622,7 @@ class TranslationToolchainQueueTests(unittest.TestCase):
                 atomic_write_jsonl(paths["rework_queue"], [])
 
             with patch("scripts.translation_toolchain._exec_phase_command", side_effect=_stub_exec):
-                run_phase_d(paths, max_paragraph_attempts=4, phase_timeout_seconds=0, should_abort=lambda: None)
+                run_phase_d(paths, run_id="tx_001", max_paragraph_attempts=4, phase_timeout_seconds=0, should_abort=lambda: None)
 
 
     def test_phase_d_only_marks_candidate_map_rows_review_in_progress(self) -> None:
@@ -640,17 +646,23 @@ class TranslationToolchainQueueTests(unittest.TestCase):
                 "paragraph_state": state_path,
                 "final_candidate": final_candidate,
                 "candidate_map": candidate_map,
+                "run_root": root,
+                "manifest": root / "manifest.json",
                 "review_normalized": root / "review_normalized",
                 "paragraph_scores": root / "state" / "paragraph_scores.jsonl",
                 "rework_queue": root / "state" / "rework_queue.jsonl",
             }
+            paths["manifest"].write_text('{"pipeline_profile":"tamazight_two_pass","model":"stub-model"}', encoding="utf-8")
+            paths["pass2_pre"] = root / "pass2_pre"
+            paths["pass2_pre"].mkdir(parents=True, exist_ok=True)
+            (paths["pass2_pre"] / "paragraphs.jsonl").write_text('{"paragraph_id":"p_1"}\n', encoding="utf-8")
 
             def _stub_exec(*args, **kwargs):
                 atomic_write_jsonl(paths["paragraph_scores"], [])
                 atomic_write_jsonl(paths["rework_queue"], [])
 
             with patch("scripts.translation_toolchain._exec_phase_command", side_effect=_stub_exec):
-                run_phase_d(paths, max_paragraph_attempts=4, phase_timeout_seconds=0, should_abort=lambda: None)
+                run_phase_d(paths, run_id="tx_001", max_paragraph_attempts=4, phase_timeout_seconds=0, should_abort=lambda: None)
 
             rows = {row["paragraph_id"]: row for row in read_jsonl(state_path)}
             self.assertEqual(rows["p_1"]["status"], "review_in_progress")
@@ -675,13 +687,19 @@ class TranslationToolchainQueueTests(unittest.TestCase):
                 "paragraph_state": state_path,
                 "final_candidate": final_candidate,
                 "candidate_map": candidate_map,
+                "run_root": root,
+                "manifest": root / "manifest.json",
                 "review_normalized": root / "review_normalized",
                 "paragraph_scores": root / "state" / "paragraph_scores.jsonl",
                 "rework_queue": root / "state" / "rework_queue.jsonl",
             }
+            paths["manifest"].write_text('{"pipeline_profile":"tamazight_two_pass","model":"stub-model"}', encoding="utf-8")
+            paths["pass2_pre"] = root / "pass2_pre"
+            paths["pass2_pre"].mkdir(parents=True, exist_ok=True)
+            (paths["pass2_pre"] / "paragraphs.jsonl").write_text('{"paragraph_id":"p_1"}\n', encoding="utf-8")
 
             with self.assertRaises(ValueError):
-                run_phase_d(paths, max_paragraph_attempts=4, phase_timeout_seconds=0, should_abort=lambda: None)
+                run_phase_d(paths, run_id="tx_001", max_paragraph_attempts=4, phase_timeout_seconds=0, should_abort=lambda: None)
 
     def test_phase_d_rejects_candidate_map_ids_missing_in_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -701,13 +719,19 @@ class TranslationToolchainQueueTests(unittest.TestCase):
                 "paragraph_state": state_path,
                 "final_candidate": final_candidate,
                 "candidate_map": candidate_map,
+                "run_root": root,
+                "manifest": root / "manifest.json",
                 "review_normalized": root / "review_normalized",
                 "paragraph_scores": root / "state" / "paragraph_scores.jsonl",
                 "rework_queue": root / "state" / "rework_queue.jsonl",
             }
+            paths["manifest"].write_text('{"pipeline_profile":"tamazight_two_pass","model":"stub-model"}', encoding="utf-8")
+            paths["pass2_pre"] = root / "pass2_pre"
+            paths["pass2_pre"].mkdir(parents=True, exist_ok=True)
+            (paths["pass2_pre"] / "paragraphs.jsonl").write_text('{"paragraph_id":"p_1"}\n', encoding="utf-8")
 
             with self.assertRaises(ValueError):
-                run_phase_d(paths, max_paragraph_attempts=4, phase_timeout_seconds=0, should_abort=lambda: None)
+                run_phase_d(paths, run_id="tx_001", max_paragraph_attempts=4, phase_timeout_seconds=0, should_abort=lambda: None)
 
     def test_phase_c5_rerun_does_not_backslide_review_in_progress_rows(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
