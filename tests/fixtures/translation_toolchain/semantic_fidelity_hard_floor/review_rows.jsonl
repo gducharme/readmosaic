@@ -1,1 +1,1 @@
-{"paragraph_id": "p_0201", "hard_fail": true, "blocking_issues": ["semantic_fidelity_hard_floor"], "scores": {"semantic_fidelity": 0.41}}
+{"paragraph_id": "p_0201", "hard_fail": false, "blocking_issues": [], "scores": {"semantic_fidelity": 0.41}}

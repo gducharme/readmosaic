@@ -17,6 +17,7 @@ from lib.paragraph_state_machine import (
     assert_pipeline_state_allowed,
     evaluate_score_threshold_issues,
     resolve_review_transition,
+    DEFAULT_SEMANTIC_FIDELITY_HARD_FLOOR,
 )
 from scripts.translation_toolchain import (
     atomic_write_jsonl,
@@ -33,6 +34,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--scores-out", type=Path, required=True, help="Path to paragraph_scores.jsonl output")
     parser.add_argument("--queue-out", type=Path, required=True, help="Path to rework_queue.jsonl output")
     parser.add_argument("--max-attempts", type=int, default=4, help="Maximum paragraph attempts before manual review")
+    parser.add_argument(
+        "--semantic-fidelity-hard-floor",
+        type=float,
+        default=DEFAULT_SEMANTIC_FIDELITY_HARD_FLOOR,
+        help="Immediate manual-review floor for semantic_fidelity score.",
+    )
     parser.add_argument("--source-paragraphs", type=Path, default=None, help="Optional source_pre/paragraphs.jsonl for queue text projection")
     parser.add_argument("--current-paragraphs", type=Path, default=None, help="Optional active review stage paragraphs.jsonl for queue text projection")
     parser.add_argument(
@@ -61,19 +68,34 @@ def _resolve_score_thresholds(policy: ParagraphPolicyConfig, review_rows: list[d
 def _apply_threshold_failures(
     merged_reviews: dict[str, dict[str, Any]],
     score_thresholds: dict[str, float],
+    semantic_fidelity_hard_floor: float,
 ) -> None:
     for aggregate in merged_reviews.values():
-        threshold_issues = evaluate_score_threshold_issues(
-            dict(aggregate.get("scores", {})),
-            score_thresholds,
-        )
-        if not threshold_issues:
-            continue
-        aggregate["hard_fail"] = True
+        scores = dict(aggregate.get("scores", {}))
+        threshold_issues = evaluate_score_threshold_issues(scores, score_thresholds)
+
         blocking_issues = list(aggregate.get("blocking_issues", []))
-        for issue in threshold_issues:
-            if issue not in blocking_issues:
-                blocking_issues.append(issue)
+
+        semantic_raw = scores.get("semantic_fidelity")
+        try:
+            semantic_fidelity = float(semantic_raw)
+        except (TypeError, ValueError):
+            semantic_fidelity = None
+
+        if (
+            semantic_fidelity is not None
+            and semantic_fidelity < semantic_fidelity_hard_floor
+            and "semantic_fidelity_hard_floor" not in blocking_issues
+        ):
+            blocking_issues.append("semantic_fidelity_hard_floor")
+            aggregate["hard_fail"] = True
+
+        if threshold_issues:
+            aggregate["hard_fail"] = True
+            for issue in threshold_issues:
+                if issue not in blocking_issues:
+                    blocking_issues.append(issue)
+
         aggregate["blocking_issues"] = blocking_issues
 
 
@@ -162,13 +184,16 @@ def _merge_reviews(review_rows: list[dict[str, Any]]) -> dict[str, dict[str, Any
 
 def main() -> None:
     args = parse_args()
-    policy = ParagraphPolicyConfig(max_attempts=args.max_attempts)
+    policy = ParagraphPolicyConfig(
+        max_attempts=args.max_attempts,
+        semantic_fidelity_hard_floor=args.semantic_fidelity_hard_floor,
+    )
 
     state_rows = read_jsonl(args.state)
     review_rows = read_jsonl(args.review_rows)
     merged_reviews = _merge_reviews(review_rows)
     score_thresholds = _resolve_score_thresholds(policy, review_rows)
-    _apply_threshold_failures(merged_reviews, score_thresholds)
+    _apply_threshold_failures(merged_reviews, score_thresholds, args.semantic_fidelity_hard_floor)
     run_level_blockers = _collect_run_level_blockers(review_rows)
 
     score_rows: list[dict[str, Any]] = []

@@ -84,6 +84,7 @@
       "required": [
         "max_paragraph_attempts",
         "score_thresholds",
+        "semantic_fidelity_hard_floor",
         "immediate_manual_review_reasons"
       ],
       "properties": {
@@ -96,6 +97,11 @@
           "additionalProperties": {
             "type": "number"
           }
+        },
+        "semantic_fidelity_hard_floor": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
         },
         "immediate_manual_review_reasons": {
           "type": "array",

@@ -36,6 +36,8 @@ DEFAULT_REVIEW_SCORE_THRESHOLDS: dict[str, float] = {
     "semantic_fidelity": 0.85,
 }
 
+DEFAULT_SEMANTIC_FIDELITY_HARD_FLOOR: float = 0.5
+
 EXCLUSION_DISALLOWED_STATES = {
     "translated_pass1",
     "translated_pass2",
@@ -71,6 +73,7 @@ ALLOWED_STATUS_EVOLUTION: dict[str, set[str]] = {
 class ParagraphPolicyConfig:
     max_attempts: int = 4
     score_thresholds: dict[str, float] = field(default_factory=lambda: dict(DEFAULT_REVIEW_SCORE_THRESHOLDS))
+    semantic_fidelity_hard_floor: float = DEFAULT_SEMANTIC_FIDELITY_HARD_FLOOR
     immediate_manual_review_reasons: frozenset[str] = frozenset(
         {
             "mapping_error",

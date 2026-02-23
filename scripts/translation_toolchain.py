@@ -25,6 +25,7 @@ if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from lib.paragraph_state_machine import (
+    DEFAULT_SEMANTIC_FIDELITY_HARD_FLOOR,
     ParagraphPolicyConfig,
     ParagraphReviewAggregate,
     assert_pipeline_state_allowed,
@@ -744,13 +745,17 @@ def _ensure_manifest(
     model: str,
     pass1_language: str,
     pass2_language: str | None,
-    max_paragraph_attempts: int,
-    exclusion_policy: dict[str, Any] | None,
+    max_paragraph_attempts: int = 4,
+    semantic_fidelity_hard_floor: float = DEFAULT_SEMANTIC_FIDELITY_HARD_FLOOR,
+    exclusion_policy: dict[str, Any] | None = None,
 ) -> None:
     semantic_language = pass2_language or pass1_language
     script_mode = "two_pass" if pass2_language else "single_pass"
     review_pre_dir = _resolve_review_pre_dir({"pipeline_profile": pipeline_profile})
-    policy = ParagraphPolicyConfig(max_attempts=max_paragraph_attempts)
+    policy = ParagraphPolicyConfig(
+        max_attempts=max_paragraph_attempts,
+        semantic_fidelity_hard_floor=semantic_fidelity_hard_floor,
+    )
     state_counts = _compute_status_report(read_jsonl(paths["paragraph_state"], strict=False))
 
     desired = {
@@ -771,6 +776,7 @@ def _ensure_manifest(
         "aggregation_policy_snapshot": {
             "max_paragraph_attempts": policy.max_attempts,
             "score_thresholds": dict(sorted(policy.score_thresholds.items())),
+            "semantic_fidelity_hard_floor": policy.semantic_fidelity_hard_floor,
             "immediate_manual_review_reasons": sorted(policy.immediate_manual_review_reasons),
         },
         "canonical_state_counts": state_counts,
@@ -1715,8 +1721,9 @@ def run_phase_a(
     exclusion_policy: dict[str, Any] | None,
     allow_exclusion_policy_reauthorization: bool,
     phase_timeout_seconds: int,
-    max_paragraph_attempts: int,
-    should_abort: Callable[[], Exception | None],
+    max_paragraph_attempts: int = 4,
+    semantic_fidelity_hard_floor: float = DEFAULT_SEMANTIC_FIDELITY_HARD_FLOOR,
+    should_abort: Callable[[], Exception | None] = lambda: None,
 ) -> None:
     paths["source_pre"].mkdir(parents=True, exist_ok=True)
     paths["state_dir"].mkdir(parents=True, exist_ok=True)
@@ -1729,6 +1736,7 @@ def run_phase_a(
         pass1_language=pass1_language,
         pass2_language=pass2_language,
         max_paragraph_attempts=max_paragraph_attempts,
+        semantic_fidelity_hard_floor=semantic_fidelity_hard_floor,
         exclusion_policy=exclusion_policy,
     )
 
@@ -1976,8 +1984,9 @@ def run_phase_d(
     *,
     run_id: str,
     max_paragraph_attempts: int,
-    phase_timeout_seconds: int,
-    should_abort: Callable[[], Exception | None],
+    semantic_fidelity_hard_floor: float = DEFAULT_SEMANTIC_FIDELITY_HARD_FLOOR,
+    phase_timeout_seconds: int = 0,
+    should_abort: Callable[[], Exception | None] = lambda: None,
     pipeline_profile: str | None = None,
 ) -> None:
     if not paths["final_candidate"].exists() or not paths["candidate_map"].exists():
@@ -2194,6 +2203,8 @@ def run_phase_d(
         str(paths["review_blockers"]),
         "--max-attempts",
         str(max_paragraph_attempts),
+        "--semantic-fidelity-hard-floor",
+        str(semantic_fidelity_hard_floor),
     ]
     if "source_pre" in paths:
         aggregate_command.extend(["--source-paragraphs", str(paths["source_pre"] / "paragraphs.jsonl")])
@@ -2491,6 +2502,7 @@ def _run_full_pipeline(
             paths,
             run_id=args.run_id,
             max_paragraph_attempts=args.max_paragraph_attempts,
+            semantic_fidelity_hard_floor=args.semantic_fidelity_hard_floor,
             phase_timeout_seconds=args.phase_timeout_seconds,
             should_abort=should_abort,
             pipeline_profile=args.pipeline_profile,
@@ -2533,6 +2545,7 @@ def _run_rework_only(
             paths,
             run_id=args.run_id,
             max_paragraph_attempts=args.max_paragraph_attempts,
+            semantic_fidelity_hard_floor=args.semantic_fidelity_hard_floor,
             phase_timeout_seconds=args.phase_timeout_seconds,
             should_abort=should_abort,
             pipeline_profile=args.pipeline_profile,
@@ -2597,6 +2610,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=4,
         help="Maximum attempts before manual review is required.",
+    )
+    parser.add_argument(
+        "--semantic-fidelity-hard-floor",
+        type=float,
+        default=DEFAULT_SEMANTIC_FIDELITY_HARD_FLOOR,
+        help="Immediate manual-review floor for semantic_fidelity score.",
     )
     parser.add_argument(
         "--no-bump-attempts",
@@ -2750,6 +2769,8 @@ def main() -> None:
     args = parse_args()
     if args.max_paragraph_attempts <= 0:
         raise SystemExit("--max-paragraph-attempts must be > 0")
+    if not 0.0 <= args.semantic_fidelity_hard_floor <= 1.0:
+        raise SystemExit("--semantic-fidelity-hard-floor must be between 0 and 1")
     if args.phase_timeout_seconds < 0:
         raise SystemExit("--phase-timeout-seconds must be >= 0")
     if args.rework_batch_size < 0:

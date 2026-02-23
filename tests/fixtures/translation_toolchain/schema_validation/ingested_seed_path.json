@@ -52,7 +52,8 @@
         "content_hash_mismatch",
         "mapping_error",
         "semantic_fidelity_hard_floor"
-      ]
+      ],
+      "semantic_fidelity_hard_floor": 0.5
     },
     "canonical_state_counts": {
       "total": 1,

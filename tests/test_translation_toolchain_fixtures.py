@@ -78,7 +78,7 @@ class TranslationToolchainFixtureTests(unittest.TestCase):
         review_rows = read_jsonl(fixture_dir / "review_rows.jsonl")
         merged_reviews = _merge_reviews(review_rows)
         score_thresholds = _resolve_score_thresholds(policy, review_rows)
-        _apply_threshold_failures(merged_reviews, score_thresholds)
+        _apply_threshold_failures(merged_reviews, score_thresholds, policy.semantic_fidelity_hard_floor)
 
         updated_state_rows: list[dict] = []
         score_rows: list[dict] = []

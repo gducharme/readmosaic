@@ -134,6 +134,23 @@ class AggregateParagraphReviewsTests(unittest.TestCase):
             self.assertNotIn("paragraph_id='__unmapped__'", proc.stderr)
 
 
+
+    def test_semantic_hard_floor_adds_issue_and_hard_fail_without_upstream_code(self) -> None:
+        review_rows = [
+            {
+                "paragraph_id": "p_0003",
+                "hard_fail": False,
+                "blocking_issues": [],
+                "scores": {"semantic_fidelity": 0.41},
+            }
+        ]
+        merged = _merge_reviews(review_rows)
+        thresholds = _resolve_score_thresholds(ParagraphPolicyConfig(), review_rows)
+        _apply_threshold_failures(merged, thresholds, ParagraphPolicyConfig().semantic_fidelity_hard_floor)
+
+        self.assertTrue(merged["p_0003"]["hard_fail"])
+        self.assertIn("semantic_fidelity_hard_floor", merged["p_0003"]["blocking_issues"])
+
     def test_threshold_failures_append_deterministic_blocking_issue_codes(self) -> None:
         review_rows = [
             {
@@ -157,7 +174,7 @@ class AggregateParagraphReviewsTests(unittest.TestCase):
         ]
         merged = _merge_reviews(review_rows)
         thresholds = _resolve_score_thresholds(ParagraphPolicyConfig(), review_rows)
-        _apply_threshold_failures(merged, thresholds)
+        _apply_threshold_failures(merged, thresholds, ParagraphPolicyConfig().semantic_fidelity_hard_floor)
 
         self.assertFalse(merged["p_0001"]["hard_fail"])
         self.assertEqual(merged["p_0001"]["blocking_issues"], [])
