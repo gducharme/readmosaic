@@ -10,7 +10,18 @@
     "model",
     "pass1_language",
     "pass2_language",
-    "created_at"
+    "semantic_language",
+    "script_mode",
+    "source_pre",
+    "pass1_pre",
+    "pass2_pre",
+    "review_pre_dir",
+    "final",
+    "gate",
+    "aggregation_policy_snapshot",
+    "canonical_state_counts",
+    "created_at",
+    "updated_at"
   ],
   "properties": {
     "run_id": {
@@ -36,7 +47,107 @@
     "pass2_language": {
       "type": ["string", "null"]
     },
+    "semantic_language": {
+      "type": "string",
+      "minLength": 1
+    },
+    "script_mode": {
+      "type": "string",
+      "enum": ["single_pass", "two_pass"]
+    },
+    "source_pre": {
+      "type": "string",
+      "pattern": "^runs/.+/source_pre$"
+    },
+    "pass1_pre": {
+      "type": "string",
+      "pattern": "^runs/.+/pass1_pre$"
+    },
+    "pass2_pre": {
+      "type": "string",
+      "pattern": "^runs/.+/pass2_pre$"
+    },
+    "review_pre_dir": {
+      "type": "string",
+      "enum": ["pass1_pre", "pass2_pre"]
+    },
+    "final": {
+      "type": "string",
+      "pattern": "^runs/.+/final/final\\.md$"
+    },
+    "gate": {
+      "type": "string",
+      "pattern": "^runs/.+/gate/gate_report\\.json$"
+    },
+    "aggregation_policy_snapshot": {
+      "type": "object",
+      "required": [
+        "max_paragraph_attempts",
+        "score_thresholds",
+        "immediate_manual_review_reasons"
+      ],
+      "properties": {
+        "max_paragraph_attempts": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "score_thresholds": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "number"
+          }
+        },
+        "immediate_manual_review_reasons": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "canonical_state_counts": {
+      "type": "object",
+      "required": [
+        "total",
+        "required_total",
+        "required_merge_blockers",
+        "done",
+        "in_flight",
+        "progress_percent",
+        "status_counts"
+      ],
+      "properties": {
+        "total": {"type": "integer", "minimum": 0},
+        "required_total": {"type": "integer", "minimum": 0},
+        "required_merge_blockers": {"type": "integer", "minimum": 0},
+        "done": {"type": "integer", "minimum": 0},
+        "in_flight": {"type": "integer", "minimum": 0},
+        "progress_percent": {"type": "number", "minimum": 0},
+        "status_counts": {
+          "type": "object",
+          "additionalProperties": {"type": "integer", "minimum": 0}
+        }
+      },
+      "additionalProperties": false
+    },
+    "status_checkpoint": {
+      "type": "object",
+      "required": ["phase", "phase_state", "updated_at"],
+      "properties": {
+        "phase": {"type": "string", "minLength": 1},
+        "phase_state": {"type": "string", "enum": ["running", "done", "error"]},
+        "updated_at": {"type": "string", "format": "date-time"}
+      },
+      "additionalProperties": false
+    },
     "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
       "type": "string",
       "format": "date-time"
     },

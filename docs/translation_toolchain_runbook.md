@@ -142,19 +142,28 @@ Required fields:
 
 ### `manifest.json`
 
-Required fields:
+Required authoritative fields:
 
-- `run_id`
-- `pipeline_profile`
-- `source`
-- `model`
-- `pass1_language`
-- `pass2_language` (nullable)
-- `created_at`
+- Identity/runtime: `run_id`, `pipeline_profile`, `source`, `model`
+- Language/script routing: `pass1_language`, `pass2_language` (nullable), `semantic_language`, `script_mode`
+- Stage paths: `source_pre`, `pass1_pre`, `pass2_pre`, `review_pre_dir`, `final`, `gate`
+- Aggregation policy snapshot: `aggregation_policy_snapshot.max_paragraph_attempts`, `aggregation_policy_snapshot.score_thresholds`, `aggregation_policy_snapshot.immediate_manual_review_reasons`
+- Canonical status totals: `canonical_state_counts` (same shape as toolchain status report)
+- Timestamps: `created_at`, `updated_at`
+
+Optional run checkpoint field:
+
+- `status_checkpoint` (`phase`, `phase_state`, `updated_at`) written at phase status checkpoints.
 
 Optional lineage field:
 
 - `source_content_hash`
+
+Operational authority notes:
+
+- `review_pre_dir` is the authoritative selector for phase-D paragraph-scoped review input (`pass1_pre` vs `pass2_pre`).
+- `aggregation_policy_snapshot` is the authoritative record of threshold/manual-routing policy used when review aggregation executed.
+- `canonical_state_counts` is authoritative for manifest-embedded run snapshots and is refreshed after major phases/status checkpoints.
 
 `manifest.json` is the canonical run-level linkage for row files that omit explicit `run_id`.
 

@@ -744,8 +744,15 @@ def _ensure_manifest(
     model: str,
     pass1_language: str,
     pass2_language: str | None,
+    max_paragraph_attempts: int,
     exclusion_policy: dict[str, Any] | None,
 ) -> None:
+    semantic_language = pass2_language or pass1_language
+    script_mode = "two_pass" if pass2_language else "single_pass"
+    review_pre_dir = _resolve_review_pre_dir({"pipeline_profile": pipeline_profile})
+    policy = ParagraphPolicyConfig(max_attempts=max_paragraph_attempts)
+    state_counts = _compute_status_report(read_jsonl(paths["paragraph_state"], strict=False))
+
     desired = {
         "run_id": run_id,
         "pipeline_profile": pipeline_profile,
@@ -753,7 +760,29 @@ def _ensure_manifest(
         "model": model,
         "pass1_language": pass1_language,
         "pass2_language": pass2_language,
+        "semantic_language": semantic_language,
+        "script_mode": script_mode,
+        "source_pre": str(paths["source_pre"]),
+        "pass1_pre": str(paths["pass1_pre"]),
+        "pass2_pre": str(paths["pass2_pre"]),
+        "review_pre_dir": review_pre_dir,
+        "final": str(paths["final_output"]),
+        "gate": str(paths["gate_report"]),
+        "aggregation_policy_snapshot": {
+            "max_paragraph_attempts": policy.max_attempts,
+            "score_thresholds": dict(sorted(policy.score_thresholds.items())),
+            "immediate_manual_review_reasons": sorted(policy.immediate_manual_review_reasons),
+        },
+        "canonical_state_counts": state_counts,
         "exclusion_policy": exclusion_policy,
+    }
+    immutable_fields = {
+        "run_id",
+        "pipeline_profile",
+        "source",
+        "model",
+        "pass1_language",
+        "pass2_language",
     }
     if paths["manifest"].exists():
         try:
@@ -762,15 +791,55 @@ def _ensure_manifest(
             raise ValueError(f"manifest is not valid JSON for run '{run_id}': {paths['manifest']}") from exc
         if not isinstance(existing, dict):
             raise ValueError(f"manifest must be a JSON object for run '{run_id}': {paths['manifest']}")
-        drift_fields = [field for field, expected in desired.items() if existing.get(field) != expected]
+        drift_fields = [field for field in immutable_fields if existing.get(field) != desired[field]]
         if drift_fields:
             mismatches = ", ".join(
                 f"{field}: existing={existing.get(field)!r} expected={desired[field]!r}" for field in drift_fields
             )
             raise ValueError(f"manifest drift detected for run '{run_id}': {mismatches}")
+        _atomic_write_json(
+            paths["manifest"],
+            {
+                **existing,
+                **{key: value for key, value in desired.items() if key not in immutable_fields},
+                "updated_at": _utc_now_iso(),
+            },
+        )
         return
     paths["run_root"].mkdir(parents=True, exist_ok=True)
-    payload = {**desired, "created_at": _utc_now_iso()}
+    payload = {**desired, "created_at": _utc_now_iso(), "updated_at": _utc_now_iso()}
+    _atomic_write_json(paths["manifest"], payload)
+
+
+def _update_manifest_status_checkpoint(
+    paths: dict[str, Path],
+    *,
+    run_id: str,
+    phase_name: str,
+    phase_state: str,
+) -> None:
+    if not paths["manifest"].exists():
+        return
+
+    manifest = _read_manifest(paths, run_id=run_id)
+    review_pre_dir = _resolve_review_pre_dir(manifest)
+    counts = _compute_status_report(read_jsonl(paths["paragraph_state"], strict=False))
+    payload = {
+        **manifest,
+        "source_pre": str(paths["source_pre"]),
+        "pass1_pre": str(paths["pass1_pre"]),
+        "pass2_pre": str(paths["pass2_pre"]),
+        "review_pre_dir": review_pre_dir,
+        "final": str(paths["final_output"]),
+        "gate": str(paths["gate_report"]),
+        "canonical_state_counts": counts,
+        "status_checkpoint": {
+            "phase": phase_name,
+            "phase_state": phase_state,
+            "updated_at": _utc_now_iso(),
+        },
+        "updated_at": _utc_now_iso(),
+    }
     _atomic_write_json(paths["manifest"], payload)
 
 
@@ -1646,6 +1715,7 @@ def run_phase_a(
     exclusion_policy: dict[str, Any] | None,
     allow_exclusion_policy_reauthorization: bool,
     phase_timeout_seconds: int,
+    max_paragraph_attempts: int,
     should_abort: Callable[[], Exception | None],
 ) -> None:
     paths["source_pre"].mkdir(parents=True, exist_ok=True)
@@ -1658,6 +1728,7 @@ def run_phase_a(
         model=model,
         pass1_language=pass1_language,
         pass2_language=pass2_language,
+        max_paragraph_attempts=max_paragraph_attempts,
         exclusion_policy=exclusion_policy,
     )
 
@@ -2373,6 +2444,7 @@ def _run_full_pipeline(
             exclusion_policy=exclusion_policy,
             allow_exclusion_policy_reauthorization=args.allow_exclusion_policy_reauthorization,
             phase_timeout_seconds=args.phase_timeout_seconds,
+            max_paragraph_attempts=args.max_paragraph_attempts,
             should_abort=should_abort,
         ),
     )
@@ -2759,6 +2831,7 @@ def main() -> None:
             phase_finished_at=None,
             last_heartbeat_at=progress_state["last_heartbeat_at"],
         )
+        _update_manifest_status_checkpoint(paths, run_id=args.run_id, phase_name=phase_name, phase_state="running")
         heartbeat_stop = threading.Event()
         fatal_heartbeat_error: InvalidRunLockError | None = None
         warning_heartbeat_error: Exception | None = None
@@ -2832,6 +2905,7 @@ def main() -> None:
                 phase_finished_at=_utc_now_iso(),
                 last_heartbeat_at=progress_state["last_heartbeat_at"],
             )
+            _update_manifest_status_checkpoint(paths, run_id=args.run_id, phase_name=phase_name, phase_state="error")
             raise
         finally:
             heartbeat_stop.set()
@@ -2876,6 +2950,7 @@ def main() -> None:
             phase_finished_at=_utc_now_iso(),
             last_heartbeat_at=progress_state["last_heartbeat_at"],
         )
+        _update_manifest_status_checkpoint(paths, run_id=args.run_id, phase_name=phase_name, phase_state="done")
         marker_path = _phase_marker_path(paths, phase_name)
         marker_path.parent.mkdir(parents=True, exist_ok=True)
         marker_tmp = marker_path.with_name(f".{marker_path.name}.tmp.{os.getpid()}")

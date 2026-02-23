@@ -111,6 +111,33 @@ class TranslationToolchainSchemaContractTests(unittest.TestCase):
         with self.assertRaises(Exception):
             _validate(bad_row, "paragraph_state_row.schema.json", store)
 
+    def test_manifest_contract_requires_rich_metadata(self) -> None:
+        store = _schema_store()
+        fixture = json.loads((FIXTURE_ROOT / "happy_path.json").read_text(encoding="utf-8"))
+        manifest = dict(fixture["manifest"])
+
+        _validate(manifest, "manifest.schema.json", store)
+
+        missing_policy = dict(manifest)
+        missing_policy.pop("aggregation_policy_snapshot", None)
+        with self.assertRaises(Exception):
+            _validate(missing_policy, "manifest.schema.json", store)
+
+        bad_checkpoint = dict(manifest)
+        bad_checkpoint["status_checkpoint"] = {
+            "phase": "D",
+            "phase_state": "paused",
+            "updated_at": manifest["updated_at"],
+        }
+        with self.assertRaises(Exception):
+            _validate(bad_checkpoint, "manifest.schema.json", store)
+
+        bad_review_dir = dict(manifest)
+        bad_review_dir["review_pre_dir"] = "source_pre"
+        with self.assertRaises(Exception):
+            _validate(bad_review_dir, "manifest.schema.json", store)
+
+
 
 if __name__ == "__main__":
     unittest.main()
