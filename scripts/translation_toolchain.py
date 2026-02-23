@@ -1487,54 +1487,136 @@ def run_phase_b(
     model: str,
     phase_timeout_seconds: int,
     should_abort: Callable[[], Exception | None],
+    subset_paragraph_ids: set[str] | None = None,
 ) -> None:
+    if subset_paragraph_ids is not None and not subset_paragraph_ids:
+        return
+
+    preprocessed_source = paths["source_pre"]
+    canonical_rows: list[dict[str, Any]] | None = None
+    selected_ids: set[str] | None = None
+    tmp_dir_context: tempfile.TemporaryDirectory[str] | None = None
+    if subset_paragraph_ids is not None:
+        selected_ids = set(subset_paragraph_ids)
+        canonical_rows = read_jsonl(paths["source_pre"] / "paragraphs.jsonl", strict=True)
+        subset_rows = _build_rework_subset_rows(canonical_rows, selected_ids)
+        tmp_dir_context = tempfile.TemporaryDirectory(prefix="phase_b_subset_", dir=paths["run_root"])
+        subset_preprocessed = Path(tmp_dir_context.name) / "source_pre_subset"
+        _build_final_pre_bundle(subset_preprocessed, subset_rows)
+        preprocessed_source = subset_preprocessed
+
     translate_output = paths["run_root"] / "translate_pass1"
-    _exec_phase_command(
-        [
-            sys.executable,
-            "scripts/translate.py",
-            "--language",
-            pass1_language,
-            "--model",
-            model,
-            "--preprocessed",
-            str(paths["source_pre"]),
-            "--output-root",
-            str(translate_output),
-        ],
-        timeout_seconds=phase_timeout_seconds or None,
-        should_abort=should_abort,
-    )
-    translation_json = translate_output / _language_output_dir_name(pass1_language) / "translation.json"
-    _materialize_preprocessed_from_translation(paths["source_pre"], translation_json, paths["pass1_pre"])
-    _mutate_paragraph_statuses(paths, next_status="translated_pass1", eligible_statuses={"ingested", "reworked"})
-
-
-def run_phase_c(
-    paths: dict[str, Path], *, pass2_language: str | None, model: str, phase_timeout_seconds: int, should_abort: Callable[[], Exception | None]
-) -> None:
-    if pass2_language:
-        translate_output = paths["run_root"] / "translate_pass2"
+    try:
         _exec_phase_command(
             [
                 sys.executable,
                 "scripts/translate.py",
                 "--language",
-                pass2_language,
+                pass1_language,
                 "--model",
                 model,
                 "--preprocessed",
-                str(paths["pass1_pre"]),
+                str(preprocessed_source),
                 "--output-root",
                 str(translate_output),
             ],
             timeout_seconds=phase_timeout_seconds or None,
             should_abort=should_abort,
         )
-        translation_json = translate_output / _language_output_dir_name(pass2_language) / "translation.json"
-        _materialize_preprocessed_from_translation(paths["pass1_pre"], translation_json, paths["pass2_pre"])
-        _mutate_paragraph_statuses(paths, next_status="translated_pass2", eligible_statuses={"translated_pass1"})
+        translation_json = translate_output / _language_output_dir_name(pass1_language) / "translation.json"
+        if selected_ids is None:
+            _materialize_preprocessed_from_translation(paths["source_pre"], translation_json, paths["pass1_pre"])
+            _mutate_paragraph_statuses(paths, next_status="translated_pass1", eligible_statuses={"ingested", "reworked"})
+            return
+
+        subset_out_pre = Path(tmp_dir_context.name) / "pass1_pre_subset"
+        _materialize_preprocessed_from_translation(preprocessed_source, translation_json, subset_out_pre)
+        replacements = {
+            str(row.get("paragraph_id")): row
+            for row in read_jsonl(subset_out_pre / "paragraphs.jsonl", strict=True)
+            if isinstance(row.get("paragraph_id"), str) and str(row.get("paragraph_id")).strip()
+        }
+        merged_rows = _build_merged_paragraph_rows(canonical_rows or [], replacements)
+        _build_final_pre_bundle(paths["pass1_pre"], merged_rows)
+        _mutate_paragraph_statuses(
+            paths,
+            next_status="translated_pass1",
+            eligible_statuses={"ingested", "reworked"},
+            paragraph_ids=selected_ids,
+        )
+    finally:
+        if tmp_dir_context is not None:
+            tmp_dir_context.cleanup()
+
+
+def run_phase_c(
+    paths: dict[str, Path], *, pass2_language: str | None, model: str, phase_timeout_seconds: int, should_abort: Callable[[], Exception | None], subset_paragraph_ids: set[str] | None = None
+) -> None:
+    if subset_paragraph_ids is not None and not subset_paragraph_ids:
         return
+
+    if pass2_language:
+        preprocessed_source = paths["pass1_pre"]
+        canonical_pass1_rows: list[dict[str, Any]] | None = None
+        selected_ids: set[str] | None = None
+        tmp_dir_context: tempfile.TemporaryDirectory[str] | None = None
+        if subset_paragraph_ids is not None:
+            selected_ids = set(subset_paragraph_ids)
+            canonical_pass1_rows = read_jsonl(paths["pass1_pre"] / "paragraphs.jsonl", strict=True)
+            subset_rows = _build_rework_subset_rows(canonical_pass1_rows, selected_ids)
+            tmp_dir_context = tempfile.TemporaryDirectory(prefix="phase_c_subset_", dir=paths["run_root"])
+            subset_preprocessed = Path(tmp_dir_context.name) / "pass1_pre_subset"
+            _build_final_pre_bundle(subset_preprocessed, subset_rows)
+            preprocessed_source = subset_preprocessed
+
+        translate_output = paths["run_root"] / "translate_pass2"
+        try:
+            _exec_phase_command(
+                [
+                    sys.executable,
+                    "scripts/translate.py",
+                    "--language",
+                    pass2_language,
+                    "--model",
+                    model,
+                    "--preprocessed",
+                    str(preprocessed_source),
+                    "--output-root",
+                    str(translate_output),
+                ],
+                timeout_seconds=phase_timeout_seconds or None,
+                should_abort=should_abort,
+            )
+            translation_json = translate_output / _language_output_dir_name(pass2_language) / "translation.json"
+            if selected_ids is None:
+                _materialize_preprocessed_from_translation(paths["pass1_pre"], translation_json, paths["pass2_pre"])
+                _mutate_paragraph_statuses(paths, next_status="translated_pass2", eligible_statuses={"translated_pass1"})
+                return
+
+            subset_out_pre = Path(tmp_dir_context.name) / "pass2_pre_subset"
+            _materialize_preprocessed_from_translation(preprocessed_source, translation_json, subset_out_pre)
+            replacements = {
+                str(row.get("paragraph_id")): row
+                for row in read_jsonl(subset_out_pre / "paragraphs.jsonl", strict=True)
+                if isinstance(row.get("paragraph_id"), str) and str(row.get("paragraph_id")).strip()
+            }
+            canonical_pass2_path = paths["pass2_pre"] / "paragraphs.jsonl"
+            if canonical_pass2_path.exists():
+                base_rows = read_jsonl(canonical_pass2_path, strict=True)
+            else:
+                base_rows = canonical_pass1_rows or []
+            merged_rows = _build_merged_paragraph_rows(base_rows, replacements)
+            _build_final_pre_bundle(paths["pass2_pre"], merged_rows)
+            _mutate_paragraph_statuses(
+                paths,
+                next_status="translated_pass2",
+                eligible_statuses={"translated_pass1"},
+                paragraph_ids=selected_ids,
+            )
+            return
+        finally:
+            if tmp_dir_context is not None:
+                tmp_dir_context.cleanup()
 
     paths["pass2_pre"].mkdir(parents=True, exist_ok=True)
     for artifact_name in ("paragraphs.jsonl", "sentences.jsonl", "words.jsonl", "manuscript_tokens.json"):
@@ -1801,6 +1883,11 @@ def _run_full_pipeline(
     run_phase: Callable[[str, Callable[[], None]], None],
     should_abort: Callable[[], Exception | None],
 ) -> None:
+    subset_paragraph_ids = _resolve_subset_paragraph_ids(
+        paths,
+        subset_from_queue=args.subset_from_queue,
+        subset_paragraph_ids_raw=args.subset_paragraph_ids,
+    )
     run_phase(
         "A",
         lambda: run_phase_a(
@@ -1823,6 +1910,7 @@ def _run_full_pipeline(
             model=args.model,
             phase_timeout_seconds=args.phase_timeout_seconds,
             should_abort=should_abort,
+            subset_paragraph_ids=subset_paragraph_ids,
         ),
     )
     run_phase(
@@ -1833,6 +1921,7 @@ def _run_full_pipeline(
             model=args.model,
             phase_timeout_seconds=args.phase_timeout_seconds,
             should_abort=should_abort,
+            subset_paragraph_ids=subset_paragraph_ids,
         ),
     )
     run_phase("C5", lambda: run_phase_c5(paths))
@@ -1946,9 +2035,54 @@ def parse_args() -> argparse.Namespace:
         default=0,
         help="Optional per-phase subprocess timeout in seconds (0 disables timeout).",
     )
+    parser.add_argument(
+        "--subset-from-queue",
+        action="store_true",
+        help=(
+            "For --mode full, run Phases B/C only for paragraph IDs present in state/rework_queue.jsonl. "
+            "If the queue is empty, translation phases no-op."
+        ),
+    )
+    parser.add_argument(
+        "--subset-paragraph-ids",
+        help="Optional comma-separated paragraph_id list for subset translation in Phases B/C.",
+    )
     return parser.parse_args()
 
 
+
+
+def _parse_subset_paragraph_ids(raw: str | None) -> set[str]:
+    if raw is None:
+        return set()
+    out: set[str] = set()
+    for item in raw.split(','):
+        paragraph_id = item.strip()
+        if paragraph_id:
+            out.add(paragraph_id)
+    return out
+
+
+def _resolve_subset_paragraph_ids(
+    paths: dict[str, Path],
+    *,
+    subset_from_queue: bool,
+    subset_paragraph_ids_raw: str | None,
+) -> set[str] | None:
+    explicit_ids = _parse_subset_paragraph_ids(subset_paragraph_ids_raw)
+    queue_ids: set[str] = set()
+    if subset_from_queue:
+        queue_rows = read_jsonl(paths["rework_queue"], strict=False) if paths["rework_queue"].exists() else []
+        queue_ids = {
+            str(row.get("paragraph_id"))
+            for row in queue_rows
+            if isinstance(row.get("paragraph_id"), str) and str(row.get("paragraph_id")).strip()
+        }
+
+    selected_ids = explicit_ids | queue_ids
+    if not subset_from_queue and not explicit_ids:
+        return None
+    return selected_ids
 
 
 def _normalize_optional_language(value: str | None) -> str | None:
