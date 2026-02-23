@@ -43,7 +43,26 @@
     "model": "gpt-4o",
     "pass1_language": "Tamazight",
     "pass2_language": "Tifinagh",
-    "created_at": "2026-01-15T09:55:00Z"
+    "created_at": "2026-01-15T09:55:00Z",
+    "exclusion_policy": {
+      "metadata": {
+        "policy_version": "2026-02-01",
+        "immutable": true
+      },
+      "rules": [
+        {
+          "paragraph_id": "p_0420",
+          "reason": "front_matter"
+        }
+      ],
+      "templates": [
+        {
+          "pattern": "^SKIP:",
+          "reason": "skip_prefix",
+          "ignore_case": true
+        }
+      ]
+    }
   },
   "paragraph_scores_row": {
     "paragraph_id": "p_0001",

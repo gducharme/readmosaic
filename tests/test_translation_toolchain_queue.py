@@ -22,6 +22,7 @@ from scripts.translation_toolchain import (
     run_phase_c5,
     run_phase_d,
     run_phase_e,
+    run_phase_a,
     _ensure_manifest,
     _language_output_dir_name,
     resolve_paragraph_review_state,
@@ -61,7 +62,126 @@ class TranslationToolchainQueueTests(unittest.TestCase):
                     model="gpt-4o",
                     pass1_language="Tamazight",
                     pass2_language=None,
+                    exclusion_policy=None,
                 )
+
+    def test_phase_a_materializes_exclusion_policy_flags(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = {
+                "run_root": root,
+                "manifest": root / "manifest.json",
+                "source_pre": root / "source_pre",
+                "state_dir": root / "state",
+                "paragraph_state": root / "state" / "paragraph_state.jsonl",
+            }
+
+            def _stub_exec_phase_command(command, **kwargs):
+                del command, kwargs
+                paths["source_pre"].mkdir(parents=True, exist_ok=True)
+                atomic_write_jsonl(
+                    paths["source_pre"] / "paragraphs.jsonl",
+                    [
+                        {"paragraph_id": "p_0001", "text": "Keep this paragraph"},
+                        {"paragraph_id": "p_0002", "text": "SKIP: policy excluded paragraph"},
+                    ],
+                )
+
+            policy = {
+                "metadata": {"policy_version": "2026-02-01"},
+                "templates": [{"pattern": "SKIP", "reason": "policy_template_match", "ignore_case": True}],
+            }
+
+            with patch("scripts.translation_toolchain._exec_phase_command", side_effect=_stub_exec_phase_command):
+                run_phase_a(
+                    paths,
+                    run_id="run_policy_seed",
+                    pipeline_profile="tamazight_two_pass",
+                    pass1_language="Tamazight",
+                    pass2_language="Tifinagh",
+                    source="source.md",
+                    model="gpt-4o",
+                    exclusion_policy=policy,
+                    allow_exclusion_policy_reauthorization=False,
+                    phase_timeout_seconds=0,
+                    should_abort=lambda: None,
+                )
+
+            rows = {row["paragraph_id"]: row for row in read_jsonl(paths["paragraph_state"])}
+            self.assertFalse(rows["p_0001"]["excluded_by_policy"])
+            self.assertNotIn("exclude_reason", rows["p_0001"])
+            self.assertTrue(rows["p_0002"]["excluded_by_policy"])
+            self.assertEqual(rows["p_0002"]["exclude_reason"], "policy_template_match")
+            self.assertEqual(rows["p_0002"]["status"], "ingested")
+
+    def test_phase_a_rejects_exclusion_policy_drift_without_reauthorization(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = {
+                "run_root": root,
+                "manifest": root / "manifest.json",
+                "source_pre": root / "source_pre",
+                "state_dir": root / "state",
+                "paragraph_state": root / "state" / "paragraph_state.jsonl",
+            }
+
+            def _stub_exec_phase_command(command, **kwargs):
+                del command, kwargs
+                paths["source_pre"].mkdir(parents=True, exist_ok=True)
+                atomic_write_jsonl(
+                    paths["source_pre"] / "paragraphs.jsonl",
+                    [{"paragraph_id": "p_0001", "text": "skip me"}],
+                )
+
+            with patch("scripts.translation_toolchain._exec_phase_command", side_effect=_stub_exec_phase_command):
+                run_phase_a(
+                    paths,
+                    run_id="run_policy_immutable",
+                    pipeline_profile="tamazight_two_pass",
+                    pass1_language="Tamazight",
+                    pass2_language="Tifinagh",
+                    source="source.md",
+                    model="gpt-4o",
+                    exclusion_policy={"templates": [{"pattern": "skip", "reason": "skip_reason", "ignore_case": True}]},
+                    allow_exclusion_policy_reauthorization=False,
+                    phase_timeout_seconds=0,
+                    should_abort=lambda: None,
+                )
+
+                with self.assertRaises(ValueError):
+                    run_phase_a(
+                        paths,
+                        run_id="run_policy_immutable",
+                        pipeline_profile="tamazight_two_pass",
+                        pass1_language="Tamazight",
+                        pass2_language="Tifinagh",
+                        source="source.md",
+                        model="gpt-4o",
+                        exclusion_policy={"templates": [{"pattern": "different", "reason": "changed", "ignore_case": True}]},
+                        allow_exclusion_policy_reauthorization=False,
+                        phase_timeout_seconds=0,
+                        should_abort=lambda: None,
+                    )
+
+    def test_status_and_queue_ignore_excluded_blocker_rows(self) -> None:
+        rows = [
+            {"paragraph_id": "p_1", "status": "rework_queued", "excluded_by_policy": True, "content_hash": "sha256:" + "a" * 64},
+            {"paragraph_id": "p_2", "status": "manual_review_required", "excluded_by_policy": False, "content_hash": "sha256:" + "b" * 64},
+            {"paragraph_id": "p_3", "status": "ready_to_merge", "excluded_by_policy": False, "content_hash": "sha256:" + "c" * 64},
+        ]
+
+        report = _compute_status_report(rows)
+        self.assertEqual(report["required_total"], 2)
+        self.assertEqual(report["required_merge_blockers"], 1)
+
+        queue_rows = build_rework_queue_rows(
+            [
+                {"paragraph_id": "p_1", "status": "ingested", "excluded_by_policy": True, "content_hash": "sha256:" + "a" * 64},
+                {"paragraph_id": "p_2", "status": "rework_queued", "excluded_by_policy": False, "content_hash": "sha256:" + "b" * 64},
+            ],
+            [],
+        )
+        self.assertEqual([row["paragraph_id"] for row in queue_rows], ["p_2"])
 
     def test_packet_contains_full_rework_fields(self) -> None:
         row = {
