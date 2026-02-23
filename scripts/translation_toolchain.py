@@ -429,9 +429,8 @@ def acquire_run_lock(run_dir: Path, run_id: str) -> tuple[Path, dict[str, Any], 
         except FileExistsError:
             try:
                 existing = _read_lock(lock_path)
-            except InvalidRunLockError:
-                time.sleep(LOCK_STALE_RETRY_BASE_SLEEP_SECONDS + random.uniform(0, 0.05))
-                continue
+            except InvalidRunLockError as exc:
+                raise InvalidRunLockError(f"Invalid active lock file at {lock_path}: {exc}") from exc
             if not _is_stale(existing):
                 raise ActiveRunLockError(
                     "Run already active: fresh RUNNING.lock exists "
@@ -634,6 +633,10 @@ def _materialize_preprocessed_from_translation(
                 idx = record.get("paragraph_index")
                 if not isinstance(idx, int):
                     raise ValueError(f"Invalid translation record in {translation_json}: missing integer paragraph_index")
+                if idx in by_index:
+                    raise ValueError(
+                        f"Invalid translation records in {translation_json}: duplicate paragraph_index={idx}"
+                    )
                 translation_value = record.get("translation", "")
                 by_index[idx] = "" if translation_value is None else str(translation_value)
 
@@ -1090,6 +1093,11 @@ def main() -> None:
     paths = _run_paths(args.run_id)
     run_dir = paths["run_root"]
 
+    if args.mode == "rework-only":
+        if not run_dir.exists() or not paths["paragraph_state"].exists():
+            print("status=run_not_initialized", file=sys.stderr)
+            return
+
     if args.mode == "status":
         if not paths["run_root"].exists():
             print("status=run_not_initialized")
@@ -1175,24 +1183,38 @@ def main() -> None:
             last_heartbeat_at=progress_state["last_heartbeat_at"],
         )
         heartbeat_stop = threading.Event()
-        heartbeat_error: Exception | None = None
+        fatal_heartbeat_error: InvalidRunLockError | None = None
+        warning_heartbeat_error: Exception | None = None
+
+        def _safe_maybe_heartbeat() -> None:
+            nonlocal fatal_heartbeat_error, warning_heartbeat_error
+            try:
+                maybe_heartbeat()
+            except InvalidRunLockError as exc:
+                fatal_heartbeat_error = exc
+                raise
+            except Exception as exc:  # noqa: BLE001
+                warning_heartbeat_error = exc
 
         def _heartbeat_loop() -> None:
-            nonlocal heartbeat_error
+            nonlocal fatal_heartbeat_error
             while not heartbeat_stop.wait(1):
                 try:
-                    maybe_heartbeat()
-                except Exception as exc:  # noqa: BLE001
-                    heartbeat_error = exc
+                    _safe_maybe_heartbeat()
+                except InvalidRunLockError:
                     heartbeat_stop.set()
                     break
 
         heartbeat_thread = threading.Thread(target=_heartbeat_loop, daemon=True)
         heartbeat_thread.start()
         try:
-            maybe_heartbeat()
+            _safe_maybe_heartbeat()
+            if fatal_heartbeat_error is not None:
+                raise fatal_heartbeat_error
             runner()
-        except Exception as exc:  # noqa: BLE001
+            if fatal_heartbeat_error is not None:
+                raise fatal_heartbeat_error
+        except Exception:  # noqa: BLE001
             _write_progress(
                 paths,
                 run_id=args.run_id,
@@ -1207,8 +1229,8 @@ def main() -> None:
         finally:
             heartbeat_stop.set()
             heartbeat_thread.join(timeout=2)
-            if heartbeat_error is not None:
-                print(f"Warning: heartbeat failed during phase {phase_name}: {heartbeat_error}", file=sys.stderr)
+            if warning_heartbeat_error is not None:
+                print(f"Warning: heartbeat failed during phase {phase_name}: {warning_heartbeat_error}", file=sys.stderr)
         _write_progress(
             paths,
             run_id=args.run_id,

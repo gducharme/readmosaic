@@ -179,6 +179,36 @@ class TranslationToolchainQueueTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 _materialize_preprocessed_from_translation(source_pre, translation_json, root / "out")
 
+
+    def test_materialize_raises_on_duplicate_record_index(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_pre = root / "source_pre"
+            source_pre.mkdir(parents=True, exist_ok=True)
+            (source_pre / "paragraphs.jsonl").write_text(
+                "\n".join([
+                    '{"paragraph_id":"p_1","text":"a"}',
+                    '{"paragraph_id":"p_2","text":"b"}',
+                ]) + "\n",
+                encoding="utf-8",
+            )
+
+            translation_json = root / "translation.json"
+            translation_json.write_text(
+                json.dumps(
+                    {
+                        "records": [
+                            {"paragraph_index": 0, "translation": "A"},
+                            {"paragraph_index": 0, "translation": "A2"},
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(ValueError):
+                _materialize_preprocessed_from_translation(source_pre, translation_json, root / "out")
+
     def test_phase_c_copies_pass1_when_no_pass2_language(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
