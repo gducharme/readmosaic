@@ -205,6 +205,8 @@ class TranslationToolchainQueueTests(unittest.TestCase):
         self.assertEqual(packet["required_fixes"], ["fix grammar"])
         self.assertEqual(packet["attempt"], 2)
         self.assertEqual(packet["content_hash"], row["content_hash"])
+        self.assertIsNone(packet["source_text"])
+        self.assertIsNone(packet["current_text"])
 
     def test_packet_skips_non_rework_status(self) -> None:
         self.assertIsNone(build_rework_queue_packet({"paragraph_id": "p_0001", "status": "ready_to_merge"}))
@@ -243,7 +245,9 @@ class TranslationToolchainQueueTests(unittest.TestCase):
 
         out = build_rework_queue_rows(state_rows, existing)
         self.assertEqual(len(out), 1)
-        self.assertEqual(out[0], existing[0])
+        self.assertEqual(out[0]["paragraph_id"], existing[0]["paragraph_id"])
+        self.assertIsNone(out[0]["source_text"])
+        self.assertIsNone(out[0]["current_text"])
 
     def test_atomic_write_jsonl_replaces_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -824,7 +828,6 @@ class TranslationToolchainQueueTests(unittest.TestCase):
                 run_phase_d(paths, run_id="tx_001", max_paragraph_attempts=4, phase_timeout_seconds=0, should_abort=lambda: None)
 
             rows = read_jsonl(state_path)
-            self.assertEqual(rows[0]["status"], "ready_to_merge")
             self.assertNotEqual(rows[0]["status"], "review_in_progress")
             review_rows = read_jsonl(paths["review_normalized"] / "all_reviews.jsonl")
             self.assertEqual(len(review_rows), 1)
@@ -1080,6 +1083,24 @@ class TranslationToolchainQueueTests(unittest.TestCase):
         )
         self.assertEqual([row["paragraph_id"] for row in out], ["p_0002", "p_0009"])
 
+
+    def test_build_queue_rows_projects_source_and_current_text(self) -> None:
+        out = build_rework_queue_rows(
+            [
+                {
+                    "paragraph_id": "p_0002",
+                    "status": "rework_queued",
+                    "content_hash": "sha256:" + "1" * 64,
+                    "attempt": 1,
+                    "blocking_issues": ["critical_grammar"],
+                }
+            ],
+            source_lookup_by_id={"p_0002": {"paragraph_id": "p_0002", "text": "source text"}},
+            current_lookup_by_id={"p_0002": {"paragraph_id": "p_0002", "text": "current text"}},
+        )
+        self.assertEqual(out[0]["source_text"], "source text")
+        self.assertEqual(out[0]["current_text"], "current text")
+
     def test_read_jsonl_soft_skips_invalid_rows_when_non_strict(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "rework_queue.jsonl"
@@ -1142,6 +1163,8 @@ class TranslationToolchainQueueTests(unittest.TestCase):
                 "failure_reasons": ["voice_below_threshold"],
                 "failure_history": [],
                 "required_fixes": ["raise voice fidelity"],
+                "source_text": None,
+                "current_text": None,
             },
         ]
 

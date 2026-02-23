@@ -329,7 +329,42 @@ def resolve_paragraph_review_state(
     next_row["review_transition_trace"] = transition_trace
     return next_row
 
-def build_rework_queue_packet(paragraph_state_row: dict[str, Any]) -> dict[str, Any] | None:
+def _build_paragraph_lookup_by_id(paragraph_rows: list[dict[str, Any]], *, label: str) -> dict[str, dict[str, Any]]:
+    lookup: dict[str, dict[str, Any]] = {}
+    for row in paragraph_rows:
+        paragraph_id = row.get("paragraph_id")
+        if not isinstance(paragraph_id, str) or not paragraph_id.strip():
+            raise ValueError(f"Invalid {label} paragraph row: missing non-empty paragraph_id")
+        if paragraph_id in lookup:
+            raise ValueError(f"Invalid {label} paragraphs: duplicate paragraph_id '{paragraph_id}'")
+        lookup[paragraph_id] = row
+    return lookup
+
+
+def _load_paragraph_lookup(path: Path, *, label: str) -> dict[str, dict[str, Any]]:
+    if not path.exists():
+        return {}
+    return _build_paragraph_lookup_by_id(read_jsonl(path, strict=True), label=label)
+
+
+def _extract_paragraph_text(lookup: dict[str, dict[str, Any]], paragraph_id: str) -> str | None:
+    paragraph_row = lookup.get(paragraph_id)
+    if paragraph_row is None:
+        return None
+    paragraph_text = paragraph_row.get("text")
+    if paragraph_text is None:
+        return None
+    if not isinstance(paragraph_text, str):
+        raise ValueError(f"Invalid paragraph text for '{paragraph_id}': expected string or null")
+    return paragraph_text
+
+
+def build_rework_queue_packet(
+    paragraph_state_row: dict[str, Any],
+    *,
+    source_lookup_by_id: dict[str, dict[str, Any]] | None = None,
+    current_lookup_by_id: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
     if paragraph_state_row.get("status") != "rework_queued":
         return None
 
@@ -370,6 +405,9 @@ def build_rework_queue_packet(paragraph_state_row: dict[str, Any]) -> dict[str, 
         paragraph_id=paragraph_id,
     ) or []
 
+    source_lookup = source_lookup_by_id or {}
+    current_lookup = current_lookup_by_id or {}
+
     return {
         "paragraph_id": paragraph_id,
         "content_hash": content_hash,
@@ -377,6 +415,8 @@ def build_rework_queue_packet(paragraph_state_row: dict[str, Any]) -> dict[str, 
         "failure_reasons": failure_reasons,
         "failure_history": failure_history,
         "required_fixes": required_fixes,
+        "source_text": _extract_paragraph_text(source_lookup, paragraph_id),
+        "current_text": _extract_paragraph_text(current_lookup, paragraph_id),
     }
 
 
@@ -418,6 +458,9 @@ def _canonical_packet_json(packet: dict[str, Any]) -> str:
 def build_rework_queue_rows(
     paragraph_state_rows: list[dict[str, Any]],
     existing_queue_rows: list[dict[str, Any]] | None = None,
+    *,
+    source_lookup_by_id: dict[str, dict[str, Any]] | None = None,
+    current_lookup_by_id: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Return deduplicated rework queue rows for the current paragraph state snapshot.
 
@@ -442,7 +485,11 @@ def build_rework_queue_rows(
 
     queue_rows: list[dict[str, Any]] = []
     for state_row in paragraph_state_rows:
-        packet = build_rework_queue_packet(state_row)
+        packet = build_rework_queue_packet(
+            state_row,
+            source_lookup_by_id=source_lookup_by_id,
+            current_lookup_by_id=current_lookup_by_id,
+        )
         if packet is None:
             continue
 
@@ -1052,6 +1099,21 @@ def _resolve_review_pre_dir(manifest: dict[str, Any], override_profile: str | No
         f"{profile!r}. Remediation: set manifest pipeline_profile (or pass --pipeline-profile) "
         "to one of: tamazight_two_pass, standard_single_pass, or set manifest review_pre_dir directly."
     )
+
+
+def _resolve_active_review_pre_dir(
+    paths: dict[str, Path],
+    *,
+    pipeline_profile: str | None = None,
+    run_id: str | None = None,
+) -> str:
+    if pipeline_profile is not None:
+        return _resolve_review_pre_dir({}, override_profile=pipeline_profile)
+    manifest_path = paths.get("manifest")
+    if manifest_path is not None and manifest_path.exists():
+        manifest = _read_manifest(paths, run_id=run_id or "<unknown>")
+        return _resolve_review_pre_dir(manifest)
+    return "pass1_pre"
 def _load_exclusion_policy(path: str | None) -> dict[str, Any] | None:
     if path is None:
         return None
@@ -2030,28 +2092,49 @@ def run_phase_d(
         should_abort=should_abort,
     )
 
+    review_pre_dir = _resolve_active_review_pre_dir(paths, pipeline_profile=pipeline_profile, run_id=run_id)
+
+    aggregate_command = [
+        sys.executable,
+        "scripts/aggregate_paragraph_reviews.py",
+        "--state",
+        str(paths["paragraph_state"]),
+        "--review-rows",
+        str(normalized_rows),
+        "--scores-out",
+        str(paths["paragraph_scores"]),
+        "--queue-out",
+        str(paths["rework_queue"]),
+        "--review-blockers-out",
+        str(paths["review_blockers"]),
+        "--max-attempts",
+        str(max_paragraph_attempts),
+    ]
+    if "source_pre" in paths:
+        aggregate_command.extend(["--source-paragraphs", str(paths["source_pre"] / "paragraphs.jsonl")])
+    if review_pre_dir in paths:
+        aggregate_command.extend(["--current-paragraphs", str(paths[review_pre_dir] / "paragraphs.jsonl")])
+
     _exec_phase_command(
-        [
-            sys.executable,
-            "scripts/aggregate_paragraph_reviews.py",
-            "--state",
-            str(paths["paragraph_state"]),
-            "--review-rows",
-            str(normalized_rows),
-            "--scores-out",
-            str(paths["paragraph_scores"]),
-            "--queue-out",
-            str(paths["rework_queue"]),
-            "--review-blockers-out",
-            str(paths["review_blockers"]),
-            "--max-attempts",
-            str(max_paragraph_attempts),
-        ],
+        aggregate_command,
         timeout_seconds=timeout_seconds,
         should_abort=should_abort,
     )
     if not paths["paragraph_scores"].exists():
         atomic_write_jsonl(paths["paragraph_scores"], [])
+
+    state_rows = read_jsonl(paths["paragraph_state"], strict=True)
+    existing_queue = read_jsonl(paths["rework_queue"], strict=False) if paths["rework_queue"].exists() else []
+    source_lookup_by_id = _load_paragraph_lookup(paths["source_pre"] / "paragraphs.jsonl", label="source_pre") if "source_pre" in paths else {}
+    review_pre_dir = _resolve_active_review_pre_dir(paths, pipeline_profile=pipeline_profile, run_id=run_id)
+    current_lookup_by_id = _load_paragraph_lookup(paths[review_pre_dir] / "paragraphs.jsonl", label=review_pre_dir) if review_pre_dir in paths else {}
+    queue_rows = build_rework_queue_rows(
+        state_rows,
+        existing_queue_rows=existing_queue,
+        source_lookup_by_id=source_lookup_by_id,
+        current_lookup_by_id=current_lookup_by_id,
+    )
+    atomic_write_jsonl(paths["rework_queue"], queue_rows)
 
 
 def run_phase_e(
@@ -2112,7 +2195,15 @@ def run_phase_e(
     if did_change:
         atomic_write_jsonl(paths["paragraph_state"], rows)
     existing_queue = read_jsonl(paths["rework_queue"], strict=False) if paths["rework_queue"].exists() else []
-    queue_rows = build_rework_queue_rows(rows, existing_queue_rows=existing_queue)
+    source_lookup_by_id = _load_paragraph_lookup(paths["source_pre"] / "paragraphs.jsonl", label="source_pre") if "source_pre" in paths else {}
+    review_pre_dir = _resolve_active_review_pre_dir(paths)
+    current_lookup_by_id = _load_paragraph_lookup(paths[review_pre_dir] / "paragraphs.jsonl", label=review_pre_dir) if review_pre_dir in paths else {}
+    queue_rows = build_rework_queue_rows(
+        rows,
+        existing_queue_rows=existing_queue,
+        source_lookup_by_id=source_lookup_by_id,
+        current_lookup_by_id=current_lookup_by_id,
+    )
     atomic_write_jsonl(paths["rework_queue"], queue_rows)
 
 

@@ -22,6 +22,7 @@ from scripts.translation_toolchain import (
     atomic_write_jsonl,
     build_rework_queue_rows,
     read_jsonl,
+    _load_paragraph_lookup,
 )
 
 
@@ -32,6 +33,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--scores-out", type=Path, required=True, help="Path to paragraph_scores.jsonl output")
     parser.add_argument("--queue-out", type=Path, required=True, help="Path to rework_queue.jsonl output")
     parser.add_argument("--max-attempts", type=int, default=4, help="Maximum paragraph attempts before manual review")
+    parser.add_argument("--source-paragraphs", type=Path, default=None, help="Optional source_pre/paragraphs.jsonl for queue text projection")
+    parser.add_argument("--current-paragraphs", type=Path, default=None, help="Optional active review stage paragraphs.jsonl for queue text projection")
     parser.add_argument(
         "--review-blockers-out",
         type=Path,
@@ -204,7 +207,14 @@ def main() -> None:
         )
 
     existing_queue_rows = read_jsonl(args.queue_out, strict=False)
-    rework_queue_rows = build_rework_queue_rows(updated_state_rows, existing_queue_rows)
+    source_lookup_by_id = _load_paragraph_lookup(args.source_paragraphs, label="source_pre") if args.source_paragraphs else {}
+    current_lookup_by_id = _load_paragraph_lookup(args.current_paragraphs, label="review_pre") if args.current_paragraphs else {}
+    rework_queue_rows = build_rework_queue_rows(
+        updated_state_rows,
+        existing_queue_rows,
+        source_lookup_by_id=source_lookup_by_id,
+        current_lookup_by_id=current_lookup_by_id,
+    )
 
     atomic_write_jsonl(args.state, updated_state_rows)
     atomic_write_jsonl(args.scores_out, score_rows)

@@ -91,6 +91,8 @@
     ],
     "required_fixes": [
       "resolve_mapping"
-    ]
+    ],
+    "current_text": null,
+    "source_text": null
   }
 }

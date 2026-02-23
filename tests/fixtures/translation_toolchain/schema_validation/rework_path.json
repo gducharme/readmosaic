@@ -93,6 +93,8 @@
     ],
     "required_fixes": [
       "critical_grammar"
-    ]
+    ],
+    "current_text": null,
+    "source_text": null
   }
 }
