@@ -1,1 +1,2 @@
 {"paragraph_id": "p_0101", "hard_fail": true, "blocking_issues": ["mapping_error"], "scores": {"semantic_fidelity": 0.88}}
+{"paragraph_id": "__unmapped__", "hard_fail": true, "blocking_issues": ["mapping_error"], "scores": {}, "run_level_blocker": true, "run_level_blocker_reason": "mapping_error_unresolved", "run_level_blocker_detail": "quote_not_found"}

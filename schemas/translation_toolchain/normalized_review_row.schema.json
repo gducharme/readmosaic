@@ -28,13 +28,27 @@
       "items": {
         "type": "object",
         "properties": {
-          "issue_id": {"type": "string"},
-          "code": {"type": "string"},
-          "category": {"type": "string"},
-          "severity": {"type": "string"},
-          "reviewer": {"type": "string"},
-          "mapping_status": {"type": "string"},
-          "reason": {"type": "string"}
+          "issue_id": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string"
+          },
+          "reviewer": {
+            "type": "string"
+          },
+          "mapping_status": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
         },
         "additionalProperties": true
       }
@@ -56,6 +70,17 @@
     "blocker_count": {
       "type": "integer",
       "minimum": 0
+    },
+    "run_level_blocker": {
+      "type": "boolean"
+    },
+    "run_level_blocker_reason": {
+      "type": "string",
+      "minLength": 1
+    },
+    "run_level_blocker_detail": {
+      "type": "string",
+      "minLength": 1
     }
   },
   "additionalProperties": false
