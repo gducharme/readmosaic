@@ -52,7 +52,7 @@ EXIT_CORRUPT_STATE = 6
 EXIT_PHASE_FAILURE = 7
 
 LockIdentity = tuple[int, int]
-RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
+RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
 class ActiveRunLockError(RuntimeError):
@@ -382,7 +382,12 @@ def _is_stale(payload: dict[str, Any]) -> bool:
     return age_seconds > LOCK_STALE_TTL_SECONDS
 
 
-def _archive_stale_lock(lock_path: Path, payload: dict[str, Any]) -> Path | None:
+def _archive_stale_lock(
+    lock_path: Path,
+    payload: dict[str, Any],
+    *,
+    expected_identity: LockIdentity,
+) -> Path | None:
     heartbeat_ts = int(_parse_iso8601(payload["last_heartbeat_at"]))
     suffix = 0
 
@@ -398,6 +403,8 @@ def _archive_stale_lock(lock_path: Path, payload: dict[str, Any]) -> Path | None
             continue
 
         try:
+            if _lock_identity(lock_path) != expected_identity:
+                return None
             lock_path.replace(stale_path)
             _fsync_directory(lock_path.parent)
             return stale_path
@@ -425,15 +432,23 @@ def acquire_run_lock(run_dir: Path, run_id: str) -> tuple[Path, dict[str, Any], 
             fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         except FileExistsError:
             try:
+                existing_identity = _lock_identity(lock_path)
+            except FileNotFoundError:
+                time.sleep(LOCK_STALE_RETRY_BASE_SLEEP_SECONDS + random.uniform(0, 0.05))
+                continue
+            try:
                 existing = _read_lock(lock_path)
             except InvalidRunLockError as exc:
+                if not lock_path.exists():
+                    time.sleep(LOCK_STALE_RETRY_BASE_SLEEP_SECONDS + random.uniform(0, 0.05))
+                    continue
                 raise InvalidRunLockError(f"Invalid active lock file at {lock_path}: {exc}") from exc
             if not _is_stale(existing):
                 raise ActiveRunLockError(
                     "Run already active: fresh RUNNING.lock exists "
                     f"(run_id={existing['run_id']}, host={existing['host']}, pid={existing['pid']})."
                 )
-            stale_path = _archive_stale_lock(lock_path, existing)
+            stale_path = _archive_stale_lock(lock_path, existing, expected_identity=existing_identity)
             if stale_path is not None:
                 print(
                     "Archived stale lock to "
@@ -1247,7 +1262,7 @@ def main() -> None:
     if args.phase_timeout_seconds < 0:
         raise SystemExit("--phase-timeout-seconds must be >= 0")
     if not RUN_ID_PATTERN.match(args.run_id):
-        raise SystemExit("--run-id may contain only letters, numbers, dot, underscore, and hyphen")
+        raise SystemExit("--run-id must start with a letter/number, use only letters, numbers, dot, underscore, or hyphen, and be at most 64 chars")
 
     if args.mode == "full":
         if not args.source:
@@ -1322,12 +1337,12 @@ def main() -> None:
             return None
         return current_phase_abort_checker()
 
-    def maybe_heartbeat() -> None:
+    def maybe_heartbeat() -> bool:
         nonlocal payload, lock_identity, last_heartbeat, progress_state
         assert lock_path is not None and payload is not None and lock_identity is not None
         now = time.monotonic()
         if now - last_heartbeat < LOCK_HEARTBEAT_WRITE_INTERVAL_SECONDS:
-            return
+            return False
         payload, lock_identity = write_lock_heartbeat(lock_path, payload, args.run_id, lock_identity)
         last_heartbeat = now
         progress_state["last_heartbeat_at"] = payload["last_heartbeat_at"]
@@ -1341,6 +1356,7 @@ def main() -> None:
             phase_finished_at=progress_state["phase_finished_at"],
             last_heartbeat_at=progress_state["last_heartbeat_at"],
         )
+        return True
 
     def run_phase_with_progress(phase_name: str, runner: Callable[[], None]) -> None:
         nonlocal progress_state, current_phase_abort_checker
@@ -1367,14 +1383,15 @@ def main() -> None:
         warning_heartbeat_error: Exception | None = None
         warning_heartbeat_consecutive_failures = 0
         heartbeat_degraded = False
-        last_heartbeat_success_monotonic = time.monotonic()
+        last_heartbeat_write_monotonic = time.monotonic()
 
         def _safe_maybe_heartbeat() -> None:
-            nonlocal fatal_heartbeat_error, warning_heartbeat_error, warning_heartbeat_consecutive_failures, heartbeat_degraded, last_heartbeat_success_monotonic
+            nonlocal fatal_heartbeat_error, warning_heartbeat_error, warning_heartbeat_consecutive_failures, heartbeat_degraded, last_heartbeat_write_monotonic
             try:
-                maybe_heartbeat()
+                wrote_heartbeat = maybe_heartbeat()
                 warning_heartbeat_consecutive_failures = 0
-                last_heartbeat_success_monotonic = time.monotonic()
+                if wrote_heartbeat:
+                    last_heartbeat_write_monotonic = time.monotonic()
             except InvalidRunLockError as exc:
                 fatal_heartbeat_error = exc
                 raise
@@ -1389,7 +1406,7 @@ def main() -> None:
         def _heartbeat_loop() -> None:
             nonlocal fatal_heartbeat_error, warning_heartbeat_error
             while not heartbeat_stop.wait(1):
-                if time.monotonic() - last_heartbeat_success_monotonic > LOCK_HEARTBEAT_STALE_ABORT_SECONDS:
+                if time.monotonic() - last_heartbeat_write_monotonic > LOCK_HEARTBEAT_STALE_ABORT_SECONDS:
                     fatal_heartbeat_error = RuntimeError("Heartbeat stalled near stale-lock threshold; aborting to preserve lock authority")
                     heartbeat_stop.set()
                     break
