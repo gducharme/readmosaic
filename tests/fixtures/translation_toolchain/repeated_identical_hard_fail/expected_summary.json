@@ -1,0 +1,15 @@
+{
+  "counts": {
+    "ready_to_merge": 0,
+    "manual_review_required": 1,
+    "merged": 0,
+    "rework_queued": 0,
+    "ingested": 0
+  },
+  "required_merge": {
+    "can_merge": false,
+    "blocking_required_ids": [
+      "p_0301"
+    ]
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "pipeline_profile": "tamazight_two_pass",
+  "max_attempts": 4,
+  "fixed_now": "2026-02-01T10:00:00Z"
+}
