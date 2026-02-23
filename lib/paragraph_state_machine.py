@@ -145,6 +145,29 @@ def _resolve_excluded_state(prior_status: str) -> str:
     return "ingested"
 
 
+def _top_level_issue_code(issue: Any) -> str:
+    return str(issue).split(":", 1)[0]
+
+
+def _has_repeated_identical_hard_fail(
+    prior_failure_history: list[dict[str, Any]],
+    blocking_issues: list[str],
+) -> bool:
+    if not blocking_issues:
+        return False
+
+    current_issue_codes = {_top_level_issue_code(issue) for issue in blocking_issues}
+    for issue_code in current_issue_codes:
+        prior_matches = 0
+        for failure in prior_failure_history:
+            historical_issues = failure.get("issues") or []
+            if any(_top_level_issue_code(historical_issue) == issue_code for historical_issue in historical_issues):
+                prior_matches += 1
+            if prior_matches >= 1:
+                return True
+    return False
+
+
 def resolve_review_transition(
     prior_state: dict[str, Any],
     review: ParagraphReviewAggregate,
@@ -178,6 +201,9 @@ def resolve_review_transition(
 
     next_attempt = prior_attempt + 1
     blocking_issues = list(dict.fromkeys(review.blocking_issues))
+    has_repeated_identical_hard_fail = _has_repeated_identical_hard_fail(prior_failure_history, blocking_issues)
+    if has_repeated_identical_hard_fail:
+        blocking_issues = list(dict.fromkeys(blocking_issues + ["repeated_identical_hard_fail"]))
     metadata_updates: dict[str, Any] = {
         "attempt": next_attempt,
         "scores": dict(review.scores),
@@ -206,6 +232,7 @@ def resolve_review_transition(
 
     requires_manual = (
         next_attempt >= policy.max_attempts
+        or has_repeated_identical_hard_fail
         or any(issue in policy.immediate_manual_review_reasons for issue in blocking_issues)
     )
 
