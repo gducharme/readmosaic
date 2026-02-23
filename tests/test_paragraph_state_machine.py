@@ -71,6 +71,32 @@ class ParagraphStateMachineTests(unittest.TestCase):
         result = resolve_review_transition(prior, review, ParagraphPolicyConfig(max_attempts=10), now_iso="2026-02-23T00:00:00Z")
         self.assertEqual(result.next_state, "manual_review_required")
 
+    def test_repeated_identical_hard_fail_goes_manual_before_max_attempts(self) -> None:
+        prior = {
+            "status": "review_in_progress",
+            "attempt": 1,
+            "failure_history": [
+                {
+                    "attempt": 1,
+                    "issues": ["score_below_threshold:grammar"],
+                    "timestamp": "2026-02-22T00:00:00Z",
+                    "state": "review_failed",
+                }
+            ],
+            "excluded_by_policy": False,
+        }
+        review = ParagraphReviewAggregate(
+            hard_fail=True,
+            blocking_issues=("score_below_threshold:grammar",),
+            scores={},
+        )
+        result = resolve_review_transition(prior, review, ParagraphPolicyConfig(max_attempts=10), now_iso="2026-02-23T00:00:00Z")
+
+        self.assertEqual(result.immediate_state, "review_failed")
+        self.assertEqual(result.follow_up_state, "manual_review_required")
+        self.assertIn("repeated_identical_hard_fail", result.metadata_updates["blocking_issues"])
+        self.assertIn("repeated_identical_hard_fail", result.metadata_updates["failure_history"][-1]["issues"])
+
     def test_pass_goes_ready_to_merge_and_increments_attempt(self) -> None:
         prior = {"status": "review_in_progress", "attempt": 0, "failure_history": [], "excluded_by_policy": False}
         review = ParagraphReviewAggregate(hard_fail=False, blocking_issues=(), scores={"grammar": 0.95})
