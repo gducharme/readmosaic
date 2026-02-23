@@ -45,7 +45,10 @@
       "minLength": 1
     },
     "pass2_language": {
-      "type": ["string", "null"]
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "semantic_language": {
       "type": "string",
@@ -53,7 +56,10 @@
     },
     "script_mode": {
       "type": "string",
-      "enum": ["single_pass", "two_pass"]
+      "enum": [
+        "single_pass",
+        "two_pass"
+      ]
     },
     "source_pre": {
       "type": "string",
@@ -69,7 +75,10 @@
     },
     "review_pre_dir": {
       "type": "string",
-      "enum": ["pass1_pre", "pass2_pre"]
+      "enum": [
+        "pass1_pre",
+        "pass2_pre"
+      ]
     },
     "final": {
       "type": "string",
@@ -120,26 +129,64 @@
         "status_counts"
       ],
       "properties": {
-        "total": {"type": "integer", "minimum": 0},
-        "required_total": {"type": "integer", "minimum": 0},
-        "required_merge_blockers": {"type": "integer", "minimum": 0},
-        "done": {"type": "integer", "minimum": 0},
-        "in_flight": {"type": "integer", "minimum": 0},
-        "progress_percent": {"type": "number", "minimum": 0},
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "required_total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "required_merge_blockers": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "done": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "in_flight": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "progress_percent": {
+          "type": "number",
+          "minimum": 0
+        },
         "status_counts": {
           "type": "object",
-          "additionalProperties": {"type": "integer", "minimum": 0}
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
         }
       },
       "additionalProperties": false
     },
     "status_checkpoint": {
       "type": "object",
-      "required": ["phase", "phase_state", "updated_at"],
+      "required": [
+        "phase",
+        "phase_state",
+        "updated_at"
+      ],
       "properties": {
-        "phase": {"type": "string", "minLength": 1},
-        "phase_state": {"type": "string", "enum": ["running", "done", "error"]},
-        "updated_at": {"type": "string", "format": "date-time"}
+        "phase": {
+          "type": "string",
+          "minLength": 1
+        },
+        "phase_state": {
+          "type": "string",
+          "enum": [
+            "running",
+            "done",
+            "error"
+          ]
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        }
       },
       "additionalProperties": false
     },
@@ -160,17 +207,30 @@
         "metadata": {
           "type": "object",
           "additionalProperties": {
-            "type": ["string", "number", "boolean", "null"]
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
           }
         },
         "rules": {
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["paragraph_id", "reason"],
+            "required": [
+              "paragraph_id",
+              "reason"
+            ],
             "properties": {
-              "paragraph_id": {"$ref": "defs.schema.json#/$defs/paragraph_id"},
-              "reason": {"type": "string", "minLength": 1}
+              "paragraph_id": {
+                "$ref": "defs.schema.json#/$defs/paragraph_id"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              }
             },
             "additionalProperties": false
           }
@@ -179,14 +239,83 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["pattern", "reason"],
+            "required": [
+              "pattern",
+              "reason"
+            ],
             "properties": {
-              "pattern": {"type": "string", "minLength": 1},
-              "reason": {"type": "string", "minLength": 1},
-              "ignore_case": {"type": "boolean"}
+              "pattern": {
+                "type": "string",
+                "minLength": 1
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              },
+              "ignore_case": {
+                "type": "boolean"
+              }
             },
             "additionalProperties": false
           }
+        }
+      },
+      "additionalProperties": false
+    },
+    "orchestration_status": {
+      "type": "object",
+      "required": [
+        "mode",
+        "rework_cycles_completed",
+        "stop_reason",
+        "queue_remaining",
+        "manual_review_remaining",
+        "max_rework_cycles",
+        "phase_f_policy",
+        "updated_at"
+      ],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "converge"
+          ]
+        },
+        "rework_cycles_completed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "stop_reason": {
+          "type": "string",
+          "enum": [
+            "running",
+            "converged_no_blockers",
+            "manual_review_only",
+            "max_rework_cycles_reached"
+          ]
+        },
+        "queue_remaining": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "manual_review_remaining": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_rework_cycles": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "phase_f_policy": {
+          "type": "string",
+          "enum": [
+            "each_cycle",
+            "final_only"
+          ]
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
         }
       },
       "additionalProperties": false

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import unittest
+from argparse import Namespace
 from pathlib import Path
+from unittest.mock import patch
 
 from lib.paragraph_state_machine import (
     ParagraphPolicyConfig,
@@ -15,7 +18,12 @@ from scripts.aggregate_paragraph_reviews import (
     _merge_reviews,
     _resolve_score_thresholds,
 )
-from scripts.translation_toolchain import build_rework_queue_rows, read_jsonl
+from scripts.translation_toolchain import (
+    _run_converge_pipeline,
+    atomic_write_jsonl,
+    build_rework_queue_rows,
+    read_jsonl,
+)
 
 FIXTURES_ROOT = Path(__file__).parent / "fixtures" / "translation_toolchain"
 REQUIRED_FIXTURE_FILES = {
@@ -169,6 +177,112 @@ class TranslationToolchainFixtureTests(unittest.TestCase):
                 self.assertEqual(self._sorted_rows(actual_scores), self._sorted_rows(expected_scores))
                 self.assertEqual(self._sorted_rows(actual_queue), self._sorted_rows(expected_queue))
                 self.assertEqual(actual_summary, expected_summary)
+
+
+class TranslationToolchainConvergeFixtureTests(unittest.TestCase):
+    def _make_paths(self, root: Path) -> dict[str, Path]:
+        return {
+            "manifest": root / "manifest.json",
+            "paragraph_state": root / "state" / "paragraph_state.jsonl",
+            "rework_queue": root / "state" / "rework_queue.jsonl",
+        }
+
+    def _read_orchestration_status(self, manifest_path: Path) -> dict:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        return payload["orchestration_status"]
+
+    def test_converge_fixture_converges_to_mergeable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = self._make_paths(root)
+            paths["manifest"].parent.mkdir(parents=True, exist_ok=True)
+            paths["manifest"].write_text("{}", encoding="utf-8")
+            atomic_write_jsonl(paths["paragraph_state"], [{"paragraph_id": "p1", "content_hash": "sha256:" + "a" * 64, "status": "rework_queued", "excluded_by_policy": False}])
+            atomic_write_jsonl(paths["rework_queue"], [{"paragraph_id": "p1", "content_hash": "sha256:" + "a" * 64, "attempt": 1}])
+
+            args = Namespace(
+                run_id="run_conv",
+                max_rework_cycles=3,
+                run_phase_f_each_cycle=False,
+                rework_run_phase_f=False,
+            )
+            calls: list[str] = []
+
+            def run_phase(name: str, runner):
+                calls.append(name)
+                runner()
+
+            def stub_full(_paths, _args, _run_phase, _should_abort):
+                return None
+
+            def stub_rework(_paths, _args, _run_phase, _should_abort):
+                atomic_write_jsonl(_paths["paragraph_state"], [{"paragraph_id": "p1", "content_hash": "sha256:" + "a" * 64, "status": "ready_to_merge", "excluded_by_policy": False}])
+                atomic_write_jsonl(_paths["rework_queue"], [])
+
+            with patch("scripts.translation_toolchain._run_full_pipeline", side_effect=stub_full), patch(
+                "scripts.translation_toolchain._run_rework_only", side_effect=stub_rework
+            ), patch("scripts.translation_toolchain.run_phase_f", return_value=None):
+                _run_converge_pipeline(paths, args, run_phase, lambda: None, run_initial_full=True)
+
+            self.assertEqual(calls, ["F"])
+            status = self._read_orchestration_status(paths["manifest"])
+            self.assertEqual(status["rework_cycles_completed"], 1)
+            self.assertEqual(status["stop_reason"], "converged_no_blockers")
+
+    def test_converge_fixture_stops_manual_review_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = self._make_paths(root)
+            paths["manifest"].parent.mkdir(parents=True, exist_ok=True)
+            paths["manifest"].write_text("{}", encoding="utf-8")
+            atomic_write_jsonl(paths["paragraph_state"], [{"paragraph_id": "p1", "content_hash": "sha256:" + "b" * 64, "status": "manual_review_required", "excluded_by_policy": False}])
+            atomic_write_jsonl(paths["rework_queue"], [])
+
+            args = Namespace(
+                run_id="run_manual",
+                max_rework_cycles=3,
+                run_phase_f_each_cycle=False,
+                rework_run_phase_f=False,
+            )
+
+            with patch("scripts.translation_toolchain._run_full_pipeline", return_value=None), patch(
+                "scripts.translation_toolchain._run_rework_only", return_value=None
+            ), patch("scripts.translation_toolchain.run_phase_f", return_value=None):
+                _run_converge_pipeline(paths, args, lambda name, runner: runner(), lambda: None, run_initial_full=True)
+
+            status = self._read_orchestration_status(paths["manifest"])
+            self.assertEqual(status["rework_cycles_completed"], 0)
+            self.assertEqual(status["stop_reason"], "manual_review_only")
+
+    def test_converge_fixture_stops_at_max_cycle_cap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = self._make_paths(root)
+            paths["manifest"].parent.mkdir(parents=True, exist_ok=True)
+            paths["manifest"].write_text("{}", encoding="utf-8")
+            atomic_write_jsonl(paths["paragraph_state"], [{"paragraph_id": "p1", "content_hash": "sha256:" + "c" * 64, "status": "rework_queued", "excluded_by_policy": False}])
+            atomic_write_jsonl(paths["rework_queue"], [{"paragraph_id": "p1", "content_hash": "sha256:" + "c" * 64, "attempt": 1}])
+
+            args = Namespace(
+                run_id="run_cap",
+                max_rework_cycles=2,
+                run_phase_f_each_cycle=False,
+                rework_run_phase_f=False,
+            )
+            cycle_calls = {"count": 0}
+
+            def stub_rework(_paths, _args, _run_phase, _should_abort):
+                cycle_calls["count"] += 1
+
+            with patch("scripts.translation_toolchain._run_full_pipeline", return_value=None), patch(
+                "scripts.translation_toolchain._run_rework_only", side_effect=stub_rework
+            ), patch("scripts.translation_toolchain.run_phase_f", return_value=None):
+                _run_converge_pipeline(paths, args, lambda name, runner: runner(), lambda: None, run_initial_full=True)
+
+            status = self._read_orchestration_status(paths["manifest"])
+            self.assertEqual(cycle_calls["count"], 2)
+            self.assertEqual(status["rework_cycles_completed"], 2)
+            self.assertEqual(status["stop_reason"], "max_rework_cycles_reached")
 
 
 if __name__ == "__main__":

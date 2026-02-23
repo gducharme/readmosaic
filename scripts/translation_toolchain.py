@@ -843,6 +843,39 @@ def _update_manifest_status_checkpoint(
     _atomic_write_json(paths["manifest"], payload)
 
 
+def _update_manifest_orchestration_status(
+    paths: dict[str, Path],
+    *,
+    run_id: str,
+    mode: str,
+    rework_cycles_completed: int,
+    stop_reason: str,
+    queue_remaining: int,
+    manual_review_remaining: int,
+    max_rework_cycles: int,
+    run_phase_f_each_cycle: bool,
+) -> None:
+    if not paths["manifest"].exists():
+        return
+
+    manifest = _read_manifest(paths, run_id=run_id)
+    payload = {
+        **manifest,
+        "orchestration_status": {
+            "mode": mode,
+            "rework_cycles_completed": rework_cycles_completed,
+            "stop_reason": stop_reason,
+            "queue_remaining": queue_remaining,
+            "manual_review_remaining": manual_review_remaining,
+            "max_rework_cycles": max_rework_cycles,
+            "phase_f_policy": "each_cycle" if run_phase_f_each_cycle else "final_only",
+            "updated_at": _utc_now_iso(),
+        },
+        "updated_at": _utc_now_iso(),
+    }
+    _atomic_write_json(paths["manifest"], payload)
+
+
 def _match_exclusion_policy(
     paragraph_row: dict[str, Any], exclusion_policy: dict[str, Any] | None
 ) -> tuple[bool, str | None]:
@@ -2551,15 +2584,94 @@ def _run_rework_only(
         run_phase("F", lambda: run_phase_f(paths, run_id=args.run_id, should_abort=should_abort))
 
 
+def _converge_snapshot(paths: dict[str, Path]) -> tuple[int, int, int]:
+    state_rows = read_jsonl(paths["paragraph_state"], strict=False) if paths["paragraph_state"].exists() else []
+    existing_queue = read_jsonl(paths["rework_queue"], strict=False) if paths["rework_queue"].exists() else []
+    queue_rows = build_rework_queue_rows(state_rows, existing_queue_rows=existing_queue)
+    queue_remaining = len(queue_rows)
+
+    blocker_rows = [
+        row
+        for row in state_rows
+        if row.get("excluded_by_policy", False) is not True
+        and row.get("status") in {"rework_queued", "manual_review_required"}
+    ]
+    manual_review_remaining = sum(1 for row in blocker_rows if row.get("status") == "manual_review_required")
+    return queue_remaining, manual_review_remaining, len(blocker_rows)
+
+
+def _run_converge_pipeline(
+    paths: dict[str, Path],
+    args: argparse.Namespace,
+    run_phase: Callable[[str, Callable[[], None]], None],
+    should_abort: Callable[[], Exception | None],
+    *,
+    run_initial_full: bool,
+) -> None:
+    if run_initial_full:
+        _run_full_pipeline(paths, args, run_phase, should_abort)
+
+    rework_cycles_completed = 0
+    stop_reason = "converged_no_blockers"
+
+    while True:
+        queue_remaining, manual_review_remaining, blocker_count = _converge_snapshot(paths)
+        if queue_remaining == 0:
+            stop_reason = "manual_review_only" if blocker_count > 0 and blocker_count == manual_review_remaining else "converged_no_blockers"
+            break
+        if rework_cycles_completed >= args.max_rework_cycles:
+            stop_reason = "max_rework_cycles_reached"
+            break
+
+        rework_cycles_completed += 1
+        original_rework_phase_f = args.rework_run_phase_f
+        args.rework_run_phase_f = args.run_phase_f_each_cycle
+        try:
+            _run_rework_only(paths, args, run_phase, should_abort)
+        finally:
+            args.rework_run_phase_f = original_rework_phase_f
+
+        queue_remaining, manual_review_remaining, _ = _converge_snapshot(paths)
+        _update_manifest_orchestration_status(
+            paths,
+            run_id=args.run_id,
+            mode="converge",
+            rework_cycles_completed=rework_cycles_completed,
+            stop_reason="running",
+            queue_remaining=queue_remaining,
+            manual_review_remaining=manual_review_remaining,
+            max_rework_cycles=args.max_rework_cycles,
+            run_phase_f_each_cycle=args.run_phase_f_each_cycle,
+        )
+
+    if not args.run_phase_f_each_cycle:
+        run_phase("F", lambda: run_phase_f(paths, run_id=args.run_id, should_abort=should_abort))
+
+    queue_remaining, manual_review_remaining, _ = _converge_snapshot(paths)
+    _update_manifest_orchestration_status(
+        paths,
+        run_id=args.run_id,
+        mode="converge",
+        rework_cycles_completed=rework_cycles_completed,
+        stop_reason=stop_reason,
+        queue_remaining=queue_remaining,
+        manual_review_remaining=manual_review_remaining,
+        max_rework_cycles=args.max_rework_cycles,
+        run_phase_f_each_cycle=args.run_phase_f_each_cycle,
+    )
+
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Translation toolchain mode orchestrator.")
     parser.add_argument(
         "--mode",
         required=True,
-        choices=("full", "rework-only", "status"),
+        choices=("full", "rework-only", "converge", "status"),
         help=(
             "Execution mode. rework-only runs targeted queued-paragraph translation rework (phase R), "
-            "then review aggregation (phase D) and queue/state projection (phase E)."
+            "then review aggregation (phase D) and queue/state projection (phase E). "
+            "converge runs full A→F once, then automatic R→D→E rework cycles until stable."
         ),
     )
     parser.add_argument("--run-id", required=True, help="Run identifier under runs/<run_id>.")
@@ -2624,6 +2736,23 @@ def parse_args() -> argparse.Namespace:
             "For --mode rework-only, optional cap on number of queued translation batches to run in phase R. "
             "Remaining queued paragraphs stay queued for later runs."
         ),
+    )
+
+    parser.add_argument(
+        "--auto-rework-until-stable",
+        action="store_true",
+        help="For --mode full, continue with automatic R→D→E cycles until queue convergence.",
+    )
+    parser.add_argument(
+        "--max-rework-cycles",
+        type=int,
+        default=3,
+        help="For converge orchestration, maximum number of R→D→E cycles after initial full pass.",
+    )
+    parser.add_argument(
+        "--run-phase-f-each-cycle",
+        action="store_true",
+        help="For converge orchestration, run phase F at the end of every rework cycle (default: final only).",
     )
     parser.add_argument(
         "--phase-timeout-seconds",
@@ -2756,14 +2885,16 @@ def main() -> None:
         raise SystemExit("--rework-batch-size must be >= 0")
     if args.rework_max_batches is not None and args.rework_max_batches <= 0:
         raise SystemExit("--rework-max-batches must be > 0")
+    if args.max_rework_cycles <= 0:
+        raise SystemExit("--max-rework-cycles must be > 0")
     if not RUN_ID_PATTERN.match(args.run_id):
         raise SystemExit("--run-id must start with a letter/number, use only letters, numbers, dot, underscore, or hyphen, and be at most 64 chars")
 
-    if args.mode == "full":
+    if args.mode in {"full", "converge"}:
         if not args.source:
-            raise SystemExit("--source is required for --mode full")
+            raise SystemExit(f"--source is required for --mode {args.mode}")
         if not args.model:
-            raise SystemExit("--model is required for --mode full")
+            raise SystemExit(f"--model is required for --mode {args.mode}")
 
         resolved_pass1_language, resolved_pass2_language = _resolve_pipeline_languages(args)
         args.pass1_language = resolved_pass1_language
@@ -2812,6 +2943,21 @@ def main() -> None:
                 f"last_heartbeat={last_heartbeat or 'n/a'}"
             )
         _print_status_report(_compute_status_report(rows), run_id=args.run_id)
+        if paths["manifest"].exists():
+            try:
+                manifest_payload = _read_manifest(paths, run_id=args.run_id)
+            except (FileNotFoundError, ValueError):
+                manifest_payload = {}
+            orchestration = manifest_payload.get("orchestration_status") if isinstance(manifest_payload, dict) else None
+            if isinstance(orchestration, dict):
+                print(
+                    "orchestration="
+                    f"mode:{orchestration.get('mode', 'n/a')} "
+                    f"cycles:{orchestration.get('rework_cycles_completed', 0)} "
+                    f"stop_reason:{orchestration.get('stop_reason', 'n/a')} "
+                    f"queue_remaining:{orchestration.get('queue_remaining', 0)} "
+                    f"manual_review_remaining:{orchestration.get('manual_review_remaining', 0)}"
+                )
         return
 
     lock_path: Path | None = None
@@ -3033,7 +3179,24 @@ def main() -> None:
     try:
         try:
             if args.mode == "full":
-                _run_full_pipeline(paths, args, run_phase_with_progress, current_abort_error)
+                if args.auto_rework_until_stable:
+                    _run_converge_pipeline(
+                        paths,
+                        args,
+                        run_phase_with_progress,
+                        current_abort_error,
+                        run_initial_full=True,
+                    )
+                else:
+                    _run_full_pipeline(paths, args, run_phase_with_progress, current_abort_error)
+            elif args.mode == "converge":
+                _run_converge_pipeline(
+                    paths,
+                    args,
+                    run_phase_with_progress,
+                    current_abort_error,
+                    run_initial_full=True,
+                )
             elif args.mode == "rework-only":
                 _run_rework_only(paths, args, run_phase_with_progress, current_abort_error)
         except (subprocess.CalledProcessError, TimeoutError, ValueError, FileNotFoundError) as exc:
