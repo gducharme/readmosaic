@@ -227,6 +227,61 @@ class TranslationToolchainPhaseDProfileInputsTests(unittest.TestCase):
             ]
             self.assertEqual(mapped_inputs, [str(typography_rows), str(critics_rows)])
 
+    def test_phase_d_inserts_critics_adapter_before_mapping(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self._build_paths(Path(tmp), "tamazight_two_pass")
+            commands: list[list[str]] = []
+
+            def _stub_exec(command: list[str], **_: object) -> None:
+                commands.append(command)
+                if any("grammar_auditor.py" in part for part in command):
+                    out_dir = paths["run_root"] / "review" / "grammar"
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    (out_dir / "grammar_audit_issues_20260101T000000Z.json").write_text("[]", encoding="utf-8")
+                    return
+                if any("typographic_precision_review.py" in part for part in command):
+                    output_path = Path(command[command.index("--output") + 1])
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    output_path.write_text('{"issues":[]}', encoding="utf-8")
+                    return
+                if any("critics_runner.py" in part for part in command):
+                    output_path = Path(command[command.index("--output") + 1])
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    output_path.write_text('{"critic_a":{"issues":[{"issue_id":"crit_1","line":1}]}}', encoding="utf-8")
+                    return
+                if any("normalize_critics_runner_output.py" in part for part in command):
+                    import subprocess
+
+                    subprocess.run(command, check=True)
+                    return
+                if any("map_review_to_paragraphs.py" in part for part in command):
+                    mapped_output = Path(command[command.index("--output") + 1])
+                    mapped_output.parent.mkdir(parents=True, exist_ok=True)
+                    mapped_output.write_text('', encoding="utf-8")
+                    return
+                if any("normalize_review_output.py" in part for part in command) or any("aggregate_paragraph_reviews.py" in part for part in command):
+                    import subprocess
+
+                    subprocess.run(command, check=True)
+                    return
+                raise AssertionError(f"Unexpected command: {command}")
+
+            with patch("scripts.translation_toolchain._exec_phase_command", side_effect=_stub_exec):
+                run_phase_d(paths, run_id="tx_001", max_paragraph_attempts=4, phase_timeout_seconds=0, should_abort=lambda: None)
+
+            adapter_cmd = next(command for command in commands if any("normalize_critics_runner_output.py" in part for part in command))
+            critics_map_cmd = next(
+                command
+                for command in commands
+                if any("map_review_to_paragraphs.py" in part for part in command) and command[command.index("--reviewer") + 1] == "critics"
+            )
+
+            self.assertEqual(
+                critics_map_cmd[critics_map_cmd.index("--review-input") + 1],
+                adapter_cmd[adapter_cmd.index("--output") + 1],
+            )
+            self.assertLess(commands.index(adapter_cmd), commands.index(critics_map_cmd))
+
     def test_phase_d_mapping_errors_become_run_level_blockers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             paths = self._build_paths(Path(tmp), "tamazight_two_pass")
@@ -246,6 +301,11 @@ class TranslationToolchainPhaseDProfileInputsTests(unittest.TestCase):
                     output_path = Path(command[command.index("--output") + 1])
                     output_path.parent.mkdir(parents=True, exist_ok=True)
                     output_path.write_text('{"critic_a":{"issues":[{"issue_id":"crit_1","description":"bad anchor"}]}}', encoding="utf-8")
+                    return
+                if any("normalize_critics_runner_output.py" in part for part in command):
+                    import subprocess
+
+                    subprocess.run(command, check=True)
                     return
                 if any("map_review_to_paragraphs.py" in part for part in command):
                     mapped_output = Path(command[command.index("--output") + 1])
@@ -292,6 +352,11 @@ class TranslationToolchainPhaseDProfileInputsTests(unittest.TestCase):
                     output_path = Path(command[command.index("--output") + 1])
                     output_path.parent.mkdir(parents=True, exist_ok=True)
                     output_path.write_text('{"issues":[]}', encoding="utf-8")
+                    return
+                if any("normalize_critics_runner_output.py" in part for part in command):
+                    import subprocess
+
+                    subprocess.run(command, check=True)
                     return
                 if any("map_review_to_paragraphs.py" in part for part in command):
                     mapped_output = Path(command[command.index("--output") + 1])
