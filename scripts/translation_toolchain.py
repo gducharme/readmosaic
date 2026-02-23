@@ -536,10 +536,20 @@ def resolve_paragraph_review_state(
     if any(not isinstance(issue, str) for issue in raw_blocking_issues):
         raise ValueError("review_aggregate.blocking_issues must contain only strings")
 
+    raw_scores = review_aggregate.get("scores", {})
+    if raw_scores is None:
+        raw_scores = {}
+    if not isinstance(raw_scores, dict):
+        raise ValueError("review_aggregate.scores must be an object mapping metric names to numeric values")
+    if any(not isinstance(metric, str) for metric in raw_scores.keys()):
+        raise ValueError("review_aggregate.scores keys must be strings")
+    if any((isinstance(value, bool) or not isinstance(value, (int, float))) for value in raw_scores.values()):
+        raise ValueError("review_aggregate.scores values must be numeric")
+
     review = ParagraphReviewAggregate(
         hard_fail=bool(review_aggregate.get("hard_fail", False)),
         blocking_issues=tuple(raw_blocking_issues),
-        scores=dict(review_aggregate.get("scores", {})),
+        scores=dict(raw_scores),
     )
     policy = ParagraphPolicyConfig(max_attempts=max_attempts)
     transition = resolve_review_transition(prior_state, review, policy)

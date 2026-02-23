@@ -290,6 +290,22 @@ class TranslationToolchainQueueTests(unittest.TestCase):
                 max_attempts=4,
             )
 
+    def test_resolve_paragraph_review_state_rejects_non_dict_scores(self) -> None:
+        with self.assertRaises(ValueError):
+            resolve_paragraph_review_state(
+                {"paragraph_id": "p_1", "status": "ingested", "attempt": 0, "excluded_by_policy": False},
+                {"blocking_issues": [], "scores": [0.9], "hard_fail": False},
+                max_attempts=4,
+            )
+
+    def test_resolve_paragraph_review_state_rejects_non_numeric_score_values(self) -> None:
+        with self.assertRaises(ValueError):
+            resolve_paragraph_review_state(
+                {"paragraph_id": "p_1", "status": "ingested", "attempt": 0, "excluded_by_policy": False},
+                {"blocking_issues": [], "scores": {"semantic": "high"}, "hard_fail": False},
+                max_attempts=4,
+            )
+
     def test_language_output_dir_slug_is_safe_for_arbitrary_input(self) -> None:
         self.assertEqual(_language_output_dir_name("French"), "french")
         self.assertEqual(_language_output_dir_name("Русский язык"), "русский_язык")
