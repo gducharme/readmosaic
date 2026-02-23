@@ -176,7 +176,7 @@ def _normalize_response(raw_text: str) -> dict[str, Any]:
                     "issue_id": "parse_error",
                     "description": "Critic response was not valid JSON.",
                     "quote": raw_text.strip()[:240] or "<empty response>",
-                    "severity": "major",
+                    "severity": "critical",
                     "category": "parse_error",
                 }
             ],

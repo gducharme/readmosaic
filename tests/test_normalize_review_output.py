@@ -91,6 +91,22 @@ class NormalizeReviewOutputTests(unittest.TestCase):
         self.assertTrue(result[0]["hard_fail"])
         self.assertIn("mapping_error", result[0]["blocking_issues"])
 
+
+    def test_mapping_error_sets_code_and_category_without_reason(self) -> None:
+        mapped_rows = [
+            {
+                "issue_id": "issue_0009",
+                "mapping_status": "mapping_error",
+                "paragraph_id": "p_0010",
+                "issue": {"line": 22},
+            }
+        ]
+        result = _normalize_mapped_rows(mapped_rows, reviewer_name="critics")
+        self.assertEqual(len(result), 1)
+        issue = result[0]["issues"][0]
+        self.assertEqual(issue.get("code"), "mapping_error")
+        self.assertEqual(issue.get("category"), "mapping_error")
+
     def test_mapped_rows_record_issues_without_hard_fail(self) -> None:
         mapped_rows = [
             {

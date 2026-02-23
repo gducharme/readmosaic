@@ -155,10 +155,10 @@ def _normalize_mapped_rows(rows: list[dict[str, Any]], reviewer_name: str) -> li
             continue
 
         if status == "mapping_error":
+            issue_out["category"] = "mapping_error"
+            issue_out["code"] = "mapping_error"
             reason = row.get("reason")
             if isinstance(reason, str) and reason.strip():
-                issue_out.setdefault("category", "mapping_error")
-                issue_out.setdefault("code", "mapping_error")
                 issue_out.setdefault("reason", reason)
 
             candidates = row.get("candidates") if isinstance(row.get("candidates"), list) else []
