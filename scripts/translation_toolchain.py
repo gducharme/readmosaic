@@ -15,10 +15,12 @@ import random
 import socket
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
+import re
 
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -49,6 +51,7 @@ EXIT_LOCK_RACE = 4
 EXIT_USAGE_ERROR = 5
 
 LockIdentity = tuple[int, int]
+RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 class ActiveRunLockError(RuntimeError):
@@ -579,22 +582,53 @@ def _ensure_manifest(paths: dict[str, Path], *, run_id: str, pipeline_profile: s
     _atomic_write_json(paths["manifest"], payload)
 
 
-def _exec_phase_command(command: list[str], *, heartbeat: Callable[[], None] | None = None) -> None:
+def _exec_phase_command(
+    command: list[str],
+    *,
+    heartbeat: Callable[[], None] | None = None,
+    timeout_seconds: int | None = None,
+) -> None:
     if heartbeat is None:
-        subprocess.run(command, check=True)
+        subprocess.run(command, check=True, timeout=timeout_seconds)
         return
 
     process = subprocess.Popen(command, stdout=sys.stdout, stderr=sys.stderr)
+    stop_heartbeat = threading.Event()
+    heartbeat_error: Exception | None = None
+
+    def _heartbeat_loop() -> None:
+        nonlocal heartbeat_error
+        while not stop_heartbeat.wait(1):
+            try:
+                heartbeat()
+            except Exception as exc:  # noqa: BLE001
+                heartbeat_error = exc
+                stop_heartbeat.set()
+                break
+
+    heartbeat_thread = threading.Thread(target=_heartbeat_loop, daemon=True)
+    heartbeat_thread.start()
+    start_monotonic = time.monotonic()
+
     try:
         while True:
+            if heartbeat_error is not None:
+                raise heartbeat_error
+
             code = process.poll()
             if code is not None:
                 if code != 0:
                     raise subprocess.CalledProcessError(code, command)
                 return
-            heartbeat()
-            time.sleep(1)
+
+            if timeout_seconds is not None and timeout_seconds > 0:
+                if time.monotonic() - start_monotonic > timeout_seconds:
+                    raise TimeoutError(f"Phase command timed out after {timeout_seconds}s: {' '.join(command)}")
+
+            time.sleep(0.2)
     finally:
+        stop_heartbeat.set()
+        heartbeat_thread.join(timeout=2)
         if process.poll() is None:
             process.terminate()
             try:
@@ -622,23 +656,28 @@ def _materialize_preprocessed_from_translation(
         by_index: dict[int, str] = {}
         for record in records:
             if not isinstance(record, dict):
-                continue
+                raise ValueError(f"Invalid translation record in {translation_json}: expected object rows")
             idx = record.get("paragraph_index")
             if not isinstance(idx, int):
-                continue
+                raise ValueError(f"Invalid translation record in {translation_json}: missing integer paragraph_index")
             by_index[idx] = str(record.get("translation", ""))
 
         keys = set(by_index.keys())
         expected_len = len(source_rows)
-        if by_index and len(by_index) == expected_len:
-            if keys == set(range(1, expected_len + 1)):
-                translated = [by_index[i] for i in range(1, expected_len + 1)]
-            elif keys == set(range(0, expected_len)):
-                translated = [by_index[i] for i in range(0, expected_len)]
-            else:
-                translated = payload.get("paragraph_translations", [])
+        if len(by_index) != expected_len:
+            raise ValueError(
+                f"Invalid translation records in {translation_json}: expected {expected_len} unique indices, got {len(by_index)}"
+            )
+
+        if keys == set(range(1, expected_len + 1)):
+            translated = [by_index[i] for i in range(1, expected_len + 1)]
+        elif keys == set(range(0, expected_len)):
+            translated = [by_index[i] for i in range(0, expected_len)]
         else:
-            translated = payload.get("paragraph_translations", [])
+            raise ValueError(
+                "Invalid translation record indices in "
+                f"{translation_json}: expected contiguous 0-based or 1-based indices"
+            )
     else:
         translated = payload.get("paragraph_translations", [])
 
@@ -772,6 +811,7 @@ def run_phase_a(
     source: str,
     model: str,
     heartbeat: Callable[[], None],
+    phase_timeout_seconds: int,
 ) -> None:
     paths["source_pre"].mkdir(parents=True, exist_ok=True)
     paths["state_dir"].mkdir(parents=True, exist_ok=True)
@@ -780,6 +820,7 @@ def run_phase_a(
     _exec_phase_command(
         [sys.executable, "scripts/pre_processing.py", source, "--output-dir", str(paths["source_pre"])],
         heartbeat=heartbeat,
+        timeout_seconds=phase_timeout_seconds or None,
     )
 
     if not paths["paragraph_state"].exists():
@@ -811,7 +852,9 @@ def run_phase_a(
         atomic_write_jsonl(paths["paragraph_state"], state_rows)
 
 
-def run_phase_b(paths: dict[str, Path], *, model: str, heartbeat: Callable[[], None]) -> None:
+def run_phase_b(
+    paths: dict[str, Path], *, model: str, heartbeat: Callable[[], None], phase_timeout_seconds: int
+) -> None:
     translate_output = paths["run_root"] / "translate_pass1"
     _exec_phase_command(
         [
@@ -828,12 +871,15 @@ def run_phase_b(paths: dict[str, Path], *, model: str, heartbeat: Callable[[], N
         ]
         ,
         heartbeat=heartbeat,
+        timeout_seconds=phase_timeout_seconds or None,
     )
     translation_json = translate_output / "tamazight" / "translation.json"
     _materialize_preprocessed_from_translation(paths["source_pre"], translation_json, paths["pass1_pre"])
 
 
-def run_phase_c(paths: dict[str, Path], *, pipeline_profile: str, model: str, heartbeat: Callable[[], None]) -> None:
+def run_phase_c(
+    paths: dict[str, Path], *, pipeline_profile: str, model: str, heartbeat: Callable[[], None], phase_timeout_seconds: int
+) -> None:
     if pipeline_profile == "tamazight_two_pass":
         translate_output = paths["run_root"] / "translate_pass2"
         _exec_phase_command(
@@ -851,12 +897,15 @@ def run_phase_c(paths: dict[str, Path], *, pipeline_profile: str, model: str, he
             ]
             ,
             heartbeat=heartbeat,
+            timeout_seconds=phase_timeout_seconds or None,
         )
         translation_json = translate_output / "tifinagh" / "translation.json"
         _materialize_preprocessed_from_translation(paths["pass1_pre"], translation_json, paths["pass2_pre"])
 
 
-def run_phase_d(paths: dict[str, Path], *, max_paragraph_attempts: int, heartbeat: Callable[[], None]) -> None:
+def run_phase_d(
+    paths: dict[str, Path], *, max_paragraph_attempts: int, heartbeat: Callable[[], None], phase_timeout_seconds: int
+) -> None:
     paths["review_normalized"].mkdir(parents=True, exist_ok=True)
     paths["paragraph_scores"].parent.mkdir(parents=True, exist_ok=True)
     normalized_rows = paths["review_normalized"] / "all_reviews.jsonl"
@@ -879,6 +928,7 @@ def run_phase_d(paths: dict[str, Path], *, max_paragraph_attempts: int, heartbea
         ]
         ,
         heartbeat=heartbeat,
+        timeout_seconds=phase_timeout_seconds or None,
     )
     if not paths["paragraph_scores"].exists():
         atomic_write_jsonl(paths["paragraph_scores"], [])
@@ -927,9 +977,18 @@ def _run_full_pipeline(
             source=args.source,
             model=args.model,
             heartbeat=heartbeat,
+            phase_timeout_seconds=args.phase_timeout_seconds,
         ),
     )
-    run_phase("B", lambda: run_phase_b(paths, model=args.model, heartbeat=heartbeat))
+    run_phase(
+        "B",
+        lambda: run_phase_b(
+            paths,
+            model=args.model,
+            heartbeat=heartbeat,
+            phase_timeout_seconds=args.phase_timeout_seconds,
+        ),
+    )
     run_phase(
         "C",
         lambda: run_phase_c(
@@ -937,6 +996,7 @@ def _run_full_pipeline(
             pipeline_profile=args.pipeline_profile,
             model=args.model,
             heartbeat=heartbeat,
+            phase_timeout_seconds=args.phase_timeout_seconds,
         ),
     )
     run_phase(
@@ -945,6 +1005,7 @@ def _run_full_pipeline(
             paths,
             max_paragraph_attempts=args.max_paragraph_attempts,
             heartbeat=heartbeat,
+            phase_timeout_seconds=args.phase_timeout_seconds,
         ),
     )
     run_phase("E", lambda: run_phase_e(paths, max_paragraph_attempts=args.max_paragraph_attempts))
@@ -988,6 +1049,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="For --mode rework-only, rebuild queue/state projection without incrementing attempts.",
     )
+    parser.add_argument(
+        "--phase-timeout-seconds",
+        type=int,
+        default=0,
+        help="Optional per-phase subprocess timeout in seconds (0 disables timeout).",
+    )
     return parser.parse_args()
 
 
@@ -995,6 +1062,10 @@ def main() -> None:
     args = parse_args()
     if args.max_paragraph_attempts <= 0:
         raise SystemExit("--max-paragraph-attempts must be > 0")
+    if args.phase_timeout_seconds < 0:
+        raise SystemExit("--phase-timeout-seconds must be >= 0")
+    if not RUN_ID_PATTERN.match(args.run_id):
+        raise SystemExit("--run-id may contain only letters, numbers, dot, underscore, and hyphen")
 
     if args.mode == "full":
         if not args.pipeline_profile:
@@ -1007,6 +1078,10 @@ def main() -> None:
     run_dir = paths["run_root"]
 
     if args.mode == "status":
+        if not paths["run_root"].exists():
+            print("status=run_not_initialized")
+            _print_status_report(_compute_status_report([]), run_id=args.run_id)
+            return
         state_path = paths["paragraph_state"]
         if not state_path.exists():
             print("status=run_not_initialized")
