@@ -16,6 +16,7 @@ from scripts.translation_toolchain import (
     _materialize_preprocessed_from_translation,
     run_phase_c,
     _ensure_manifest,
+    _language_output_dir_name,
 )
 
 
@@ -37,6 +38,8 @@ class TranslationToolchainQueueTests(unittest.TestCase):
                     pipeline_profile="standard_single_pass",
                     source="book.md",
                     model="gpt-4o",
+                    pass1_language="Tamazight",
+                    pass2_language=None,
                 )
 
     def test_packet_contains_full_rework_fields(self) -> None:
@@ -257,7 +260,7 @@ class TranslationToolchainQueueTests(unittest.TestCase):
             }
             run_phase_c(
                 paths,
-                pipeline_profile="standard_single_pass",
+                pass2_language=None,
                 model="dummy",
                 phase_timeout_seconds=0,
                 should_abort=lambda: None,
@@ -265,6 +268,12 @@ class TranslationToolchainQueueTests(unittest.TestCase):
 
             self.assertTrue((paths["pass2_pre"] / "paragraphs.jsonl").exists())
             self.assertTrue((paths["pass2_pre"] / "sentences.jsonl").exists())
+
+
+    def test_language_output_dir_slug_is_safe_for_arbitrary_input(self) -> None:
+        self.assertEqual(_language_output_dir_name("French"), "french")
+        self.assertEqual(_language_output_dir_name("Русский язык"), "русский_язык")
+        self.assertEqual(_language_output_dir_name("Arabic/RTL"), "arabic_rtl")
 
     def test_queue_rows_are_sorted_by_paragraph_id(self) -> None:
         out = build_rework_queue_rows(

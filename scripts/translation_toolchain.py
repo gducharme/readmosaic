@@ -15,6 +15,7 @@ import sys
 import threading
 import time
 import re
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -579,12 +580,23 @@ def _run_paths(run_id: str) -> dict[str, Path]:
     }
 
 
-def _ensure_manifest(paths: dict[str, Path], *, run_id: str, pipeline_profile: str, source: str, model: str) -> None:
+def _ensure_manifest(
+    paths: dict[str, Path],
+    *,
+    run_id: str,
+    pipeline_profile: str,
+    source: str,
+    model: str,
+    pass1_language: str,
+    pass2_language: str | None,
+) -> None:
     desired = {
         "run_id": run_id,
         "pipeline_profile": pipeline_profile,
         "source": source,
         "model": model,
+        "pass1_language": pass1_language,
+        "pass2_language": pass2_language,
     }
     if paths["manifest"].exists():
         try:
@@ -726,7 +738,33 @@ def _hash_content(text: str) -> str:
 
 
 def _language_output_dir_name(language: str) -> str:
-    return language.lower().replace(" ", "_")
+    normalized = unicodedata.normalize("NFKC", language).strip().lower()
+    sanitized_chars: list[str] = []
+    previous_was_separator = False
+
+    for char in normalized:
+        category = unicodedata.category(char)
+        if category.startswith("C"):
+            continue
+
+        if char.isspace() or char in {"/", "\\"}:
+            if not previous_was_separator:
+                sanitized_chars.append("_")
+                previous_was_separator = True
+            continue
+
+        if char.isalnum() or char in {"_", "-"}:
+            sanitized_chars.append(char)
+            previous_was_separator = False
+            continue
+
+        if not previous_was_separator:
+            sanitized_chars.append("_")
+            previous_was_separator = True
+
+    slug = "".join(sanitized_chars).strip("._-")
+    slug = re.sub(r"_+", "_", slug)
+    return slug or "language"
 
 
 def _build_seed_state_rows(paragraph_rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
@@ -855,6 +893,8 @@ def run_phase_a(
     *,
     run_id: str,
     pipeline_profile: str,
+    pass1_language: str,
+    pass2_language: str | None,
     source: str,
     model: str,
     phase_timeout_seconds: int,
@@ -862,7 +902,15 @@ def run_phase_a(
 ) -> None:
     paths["source_pre"].mkdir(parents=True, exist_ok=True)
     paths["state_dir"].mkdir(parents=True, exist_ok=True)
-    _ensure_manifest(paths, run_id=run_id, pipeline_profile=pipeline_profile, source=source, model=model)
+    _ensure_manifest(
+        paths,
+        run_id=run_id,
+        pipeline_profile=pipeline_profile,
+        source=source,
+        model=model,
+        pass1_language=pass1_language,
+        pass2_language=pass2_language,
+    )
 
     _exec_phase_command(
         [sys.executable, "scripts/pre_processing.py", source, "--output-dir", str(paths["source_pre"])],
@@ -911,15 +959,11 @@ def run_phase_a(
 def run_phase_b(
     paths: dict[str, Path],
     *,
-    pipeline_profile: str,
+    pass1_language: str,
     model: str,
     phase_timeout_seconds: int,
     should_abort: Callable[[], Exception | None],
 ) -> None:
-    pass1_language = PIPELINE_PROFILE_CONFIG[pipeline_profile]["pass1_language"]
-    if pass1_language is None:
-        raise ValueError(f"pipeline_profile={pipeline_profile} missing pass1 language")
-
     translate_output = paths["run_root"] / "translate_pass1"
     _exec_phase_command(
         [
@@ -942,9 +986,8 @@ def run_phase_b(
 
 
 def run_phase_c(
-    paths: dict[str, Path], *, pipeline_profile: str, model: str, phase_timeout_seconds: int, should_abort: Callable[[], Exception | None]
+    paths: dict[str, Path], *, pass2_language: str | None, model: str, phase_timeout_seconds: int, should_abort: Callable[[], Exception | None]
 ) -> None:
-    pass2_language = PIPELINE_PROFILE_CONFIG[pipeline_profile]["pass2_language"]
     if pass2_language:
         translate_output = paths["run_root"] / "translate_pass2"
         _exec_phase_command(
@@ -1066,6 +1109,8 @@ def _run_full_pipeline(
             paths,
             run_id=args.run_id,
             pipeline_profile=args.pipeline_profile,
+            pass1_language=args.pass1_language,
+            pass2_language=args.pass2_language,
             source=args.source,
             model=args.model,
             phase_timeout_seconds=args.phase_timeout_seconds,
@@ -1076,7 +1121,7 @@ def _run_full_pipeline(
         "B",
         lambda: run_phase_b(
             paths,
-            pipeline_profile=args.pipeline_profile,
+            pass1_language=args.pass1_language,
             model=args.model,
             phase_timeout_seconds=args.phase_timeout_seconds,
             should_abort=should_abort,
@@ -1086,7 +1131,7 @@ def _run_full_pipeline(
         "C",
         lambda: run_phase_c(
             paths,
-            pipeline_profile=args.pipeline_profile,
+            pass2_language=args.pass2_language,
             model=args.model,
             phase_timeout_seconds=args.phase_timeout_seconds,
             should_abort=should_abort,
@@ -1135,8 +1180,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run-id", required=True, help="Run identifier under runs/<run_id>.")
     parser.add_argument(
         "--pipeline-profile",
-        choices=("tamazight_two_pass", "standard_single_pass"),
         help="Pipeline profile for --mode full.",
+    )
+    parser.add_argument(
+        "--pass1-language",
+        help="Optional first-pass language override. Defaults to profile pass1 language.",
+    )
+    parser.add_argument(
+        "--pass2-language",
+        help="Optional second-pass language override. Use 'none' to disable pass2.",
     )
     parser.add_argument("--source", help="Source manuscript path for --mode full.")
     parser.add_argument("--model", help="Model identifier for active execution modes.")
@@ -1176,6 +1228,30 @@ def main() -> None:
             raise SystemExit("--source is required for --mode full")
         if not args.model:
             raise SystemExit("--model is required for --mode full")
+
+        profile_defaults = PIPELINE_PROFILE_CONFIG.get(args.pipeline_profile, {})
+
+        def _normalize_optional_language(value: str | None) -> str | None:
+            if value is None:
+                return None
+            cleaned = value.strip()
+            if not cleaned or cleaned.lower() == "none":
+                return None
+            return cleaned
+
+        resolved_pass1_language = _normalize_optional_language(args.pass1_language)
+        if resolved_pass1_language is None:
+            resolved_pass1_language = _normalize_optional_language(profile_defaults.get("pass1_language"))
+
+        resolved_pass2_language = _normalize_optional_language(args.pass2_language)
+        if args.pass2_language is None:
+            resolved_pass2_language = _normalize_optional_language(profile_defaults.get("pass2_language"))
+
+        if resolved_pass1_language is None:
+            raise SystemExit("pass1 language is required; provide --pass1-language or a profile with pass1 language")
+
+        args.pass1_language = resolved_pass1_language
+        args.pass2_language = resolved_pass2_language
     paths = _run_paths(args.run_id)
     run_dir = paths["run_root"]
 
