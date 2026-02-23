@@ -23,10 +23,15 @@ from typing import Any, Callable
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from lib.paragraph_state_machine import assert_pipeline_state_allowed
+
 LOCK_FILE_NAME = "RUNNING.lock"
 LOCK_HEARTBEAT_WRITE_INTERVAL_SECONDS = 10
 LOCK_STALE_TTL_SECONDS = 120
 LOCK_STALE_RETRY_BASE_SLEEP_SECONDS = 0.05
+LOCK_READ_RETRY_ATTEMPTS = 3
+LOCK_READ_RETRY_SLEEP_SECONDS = 0.05
+LOCK_TIMESTAMP_SKEW_ALLOWANCE_SECONDS = 300
 LOCK_HEARTBEAT_MAX_CONSECUTIVE_FAILURES = 3
 LOCK_HEARTBEAT_STALE_ABORT_SECONDS = max(30, LOCK_STALE_TTL_SECONDS - 30)
 LOCK_FILE_FIELDS = (
@@ -103,10 +108,18 @@ def _validate_lock_payload(payload: dict[str, Any], lock_path: Path) -> dict[str
             raise InvalidRunLockError(f"{lock_path} field '{key}' must be a non-empty string")
 
     try:
-        _parse_iso8601(payload["started_at"])
-        _parse_iso8601(payload["last_heartbeat_at"])
+        started_at = _parse_iso8601(payload["started_at"])
+        last_heartbeat_at = _parse_iso8601(payload["last_heartbeat_at"])
     except ValueError as exc:
         raise InvalidRunLockError(f"{lock_path} contains invalid timestamp: {exc}") from exc
+
+    if last_heartbeat_at < started_at:
+        raise InvalidRunLockError(f"{lock_path} last_heartbeat_at must be >= started_at")
+    if last_heartbeat_at > time.time() + LOCK_TIMESTAMP_SKEW_ALLOWANCE_SECONDS:
+        raise InvalidRunLockError(
+            f"{lock_path} last_heartbeat_at is too far in the future "
+            f"(>{LOCK_TIMESTAMP_SKEW_ALLOWANCE_SECONDS}s skew allowance)"
+        )
 
     return payload
 
@@ -442,7 +455,17 @@ def acquire_run_lock(run_dir: Path, run_id: str) -> tuple[Path, dict[str, Any], 
                 if not lock_path.exists():
                     time.sleep(LOCK_STALE_RETRY_BASE_SLEEP_SECONDS + random.uniform(0, 0.05))
                     continue
-                raise InvalidRunLockError(f"Invalid active lock file at {lock_path}: {exc}") from exc
+                existing = None
+                for _ in range(LOCK_READ_RETRY_ATTEMPTS):
+                    time.sleep(LOCK_READ_RETRY_SLEEP_SECONDS)
+                    try:
+                        existing = _read_lock(lock_path)
+                        break
+                    except InvalidRunLockError:
+                        if not lock_path.exists():
+                            break
+                if existing is None:
+                    raise InvalidRunLockError(f"Invalid active lock file at {lock_path}: {exc}") from exc
             if not _is_stale(existing):
                 raise ActiveRunLockError(
                     "Run already active: fresh RUNNING.lock exists "
@@ -1346,16 +1369,22 @@ def main() -> None:
         payload, lock_identity = write_lock_heartbeat(lock_path, payload, args.run_id, lock_identity)
         last_heartbeat = now
         progress_state["last_heartbeat_at"] = payload["last_heartbeat_at"]
-        _write_progress(
-            paths,
-            run_id=args.run_id,
-            mode=args.mode,
-            current_phase=progress_state["current_phase"],
-            phase_state=progress_state["phase_state"],
-            phase_started_at=progress_state["phase_started_at"],
-            phase_finished_at=progress_state["phase_finished_at"],
-            last_heartbeat_at=progress_state["last_heartbeat_at"],
-        )
+        try:
+            _write_progress(
+                paths,
+                run_id=args.run_id,
+                mode=args.mode,
+                current_phase=progress_state["current_phase"],
+                phase_state=progress_state["phase_state"],
+                phase_started_at=progress_state["phase_started_at"],
+                phase_finished_at=progress_state["phase_finished_at"],
+                last_heartbeat_at=progress_state["last_heartbeat_at"],
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(
+                f"Warning: failed to update progress heartbeat metadata after lock heartbeat write: {exc}",
+                file=sys.stderr,
+            )
         return True
 
     def run_phase_with_progress(phase_name: str, runner: Callable[[], None]) -> None:
