@@ -55,7 +55,7 @@ LOCK_FILE_FIELDS = (
 # for arbitrary language flows without using presets.
 PIPELINE_PRESETS: dict[str, dict[str, str | None]] = {
     "tamazight_two_pass": {"pass1_language": "Tamazight", "pass2_language": "Tifinagh"},
-    "standard_single_pass": {"pass1_language": "Tamazight", "pass2_language": None},
+    "standard_single_pass": {"pass1_language": None, "pass2_language": None},
 }
 
 EXIT_ACTIVE_LOCK = 2
@@ -2553,7 +2553,11 @@ def parse_args() -> argparse.Namespace:
         "--pipeline-profile",
         "--pipeline-preset",
         dest="pipeline_profile",
-        help="Optional preset defaults for --mode full; explicit language args can be used without a preset.",
+        help=(
+            "Optional pipeline profile for --mode full. "
+            "tamazight_two_pass sets defaults for pass1/pass2; standard_single_pass disables pass2 "
+            "but still requires pass1 via --pass1-language or existing run manifest metadata."
+        ),
     )
     parser.add_argument(
         "--pass1-language",
@@ -2678,6 +2682,23 @@ def _raise_usage_error(message: str) -> None:
     print(message, file=sys.stderr)
     raise SystemExit(EXIT_USAGE_ERROR)
 
+def _resolve_manifest_pass_languages(run_id: str) -> tuple[str | None, str | None]:
+    paths = _run_paths(run_id)
+    manifest_path = paths["manifest"]
+    if not manifest_path.exists():
+        return None, None
+    try:
+        manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None, None
+    if not isinstance(manifest_payload, dict):
+        return None, None
+    return (
+        _normalize_optional_language(manifest_payload.get("pass1_language")),
+        _normalize_optional_language(manifest_payload.get("pass2_language")),
+    )
+
+
 def _resolve_pipeline_languages(args: argparse.Namespace) -> tuple[str, str | None]:
     preset_defaults: dict[str, str | None] = {}
     if args.pipeline_profile:
@@ -2685,16 +2706,29 @@ def _resolve_pipeline_languages(args: argparse.Namespace) -> tuple[str, str | No
             _raise_usage_error(f"Unknown pipeline preset: {args.pipeline_profile}")
         preset_defaults = PIPELINE_PRESETS[args.pipeline_profile]
 
+    manifest_pass1_language: str | None = None
+    manifest_pass2_language: str | None = None
+    run_id = getattr(args, "run_id", None)
+    if isinstance(run_id, str) and run_id.strip():
+        manifest_pass1_language, manifest_pass2_language = _resolve_manifest_pass_languages(run_id.strip())
+
     resolved_pass1_language = _normalize_optional_language(args.pass1_language)
     if resolved_pass1_language is None:
         resolved_pass1_language = _normalize_optional_language(preset_defaults.get("pass1_language"))
+    if resolved_pass1_language is None:
+        resolved_pass1_language = manifest_pass1_language
 
     resolved_pass2_language = _normalize_optional_language(args.pass2_language)
     if args.pass2_language is None:
         resolved_pass2_language = _normalize_optional_language(preset_defaults.get("pass2_language"))
+        if resolved_pass2_language is None:
+            resolved_pass2_language = manifest_pass2_language
 
     if resolved_pass1_language is None:
-        _raise_usage_error("pass1 language is required; provide --pass1-language or a known preset with pass1 language")
+        _raise_usage_error(
+            "pass1 language is required; provide --pass1-language or configure manifest pass1_language "
+            "for the run (standard_single_pass does not set a default pass1 language)."
+        )
 
     return resolved_pass1_language, resolved_pass2_language
 

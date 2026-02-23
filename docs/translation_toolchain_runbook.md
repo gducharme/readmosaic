@@ -22,6 +22,37 @@ For normative lifecycle/attempt rules and machine-checkable guarantees, see:
 - **Identifier, attempt, and lineage semantics**
 - **Enforced invariants (single source of truth)**
 
+
+## CLI profile and language resolution
+
+For `scripts/translation_toolchain.py --mode full`:
+
+- `--pipeline-profile tamazight_two_pass` provides default `pass1_language=Tamazight` and `pass2_language=Tifinagh` when explicit language flags are omitted.
+- `--pipeline-profile standard_single_pass` only disables pass2; it does **not** provide a default `pass1_language`.
+- For `standard_single_pass`, pass1 must come from `--pass1-language` or existing `runs/<run_id>/manifest.json` metadata (`pass1_language`).
+- If no pass1 language can be resolved, the CLI exits with usage error code `5` and a remediation message.
+
+Examples:
+
+```bash
+# Explicit single-pass language
+python scripts/translation_toolchain.py \
+  --mode full \
+  --run-id tx_single_explicit \
+  --pipeline-profile standard_single_pass \
+  --pass1-language Kabyle \
+  --source manuscript/source.md \
+  --model <MODEL_ID>
+
+# Two-pass profile defaults (pass1/pass2 inferred from profile)
+python scripts/translation_toolchain.py \
+  --mode full \
+  --run-id tx_two_pass \
+  --pipeline-profile tamazight_two_pass \
+  --source manuscript/source.md \
+  --model <MODEL_ID>
+```
+
 ## Canonical paragraph lifecycle statuses
 
 `status` must be one of:

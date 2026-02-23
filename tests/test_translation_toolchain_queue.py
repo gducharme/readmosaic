@@ -29,6 +29,7 @@ from scripts.translation_toolchain import (
     _run_rework_only,
     _is_stale,
     _resolve_pipeline_languages,
+    _resolve_rework_runtime_config,
     _resolve_subset_paragraph_ids,
     run_rework_translation_stage,
 )
@@ -1768,6 +1769,38 @@ class TranslationToolchainQueueTests(unittest.TestCase):
         self.assertEqual(pass1, "Tamazight")
         self.assertEqual(pass2, "Tifinagh")
 
+
+    def test_resolve_pipeline_languages_uses_manifest_languages_when_available(self) -> None:
+        from argparse import Namespace
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_id = "run_manifest_defaults"
+            manifest = root / "runs" / run_id / "manifest.json"
+            manifest.parent.mkdir(parents=True, exist_ok=True)
+            manifest.write_text(
+                json.dumps({"pass1_language": "Kabyle", "pass2_language": "none"}),
+                encoding="utf-8",
+            )
+            cwd = Path.cwd()
+            try:
+                import os
+
+                os.chdir(root)
+                pass1, pass2 = _resolve_pipeline_languages(
+                    Namespace(
+                        run_id=run_id,
+                        pipeline_profile="standard_single_pass",
+                        pass1_language=None,
+                        pass2_language=None,
+                    )
+                )
+            finally:
+                os.chdir(cwd)
+
+        self.assertEqual(pass1, "Kabyle")
+        self.assertIsNone(pass2)
+
     def test_resolve_pipeline_languages_rejects_unknown_profile(self) -> None:
         from argparse import Namespace
 
@@ -1782,9 +1815,30 @@ class TranslationToolchainQueueTests(unittest.TestCase):
 
         with self.assertRaises(SystemExit) as exc:
             _resolve_pipeline_languages(
-                Namespace(pipeline_profile=None, pass1_language=None, pass2_language=None)
+                Namespace(run_id="run_missing", pipeline_profile="standard_single_pass", pass1_language=None, pass2_language=None)
             )
         self.assertEqual(exc.exception.code, 5)
+
+    def test_resolve_rework_runtime_config_uses_manifest_pass1_language(self) -> None:
+        from argparse import Namespace
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = {"manifest": root / "manifest.json"}
+            paths["manifest"].parent.mkdir(parents=True, exist_ok=True)
+            paths["manifest"].write_text(
+                json.dumps({"pass1_language": "Kabyle", "pass2_language": None, "model": "stub-model"}),
+                encoding="utf-8",
+            )
+
+            pass1, pass2, model = _resolve_rework_runtime_config(
+                paths,
+                Namespace(run_id="run_rework_manifest", pass1_language=None, pass2_language=None, model=None),
+            )
+
+        self.assertEqual(pass1, "Kabyle")
+        self.assertIsNone(pass2)
+        self.assertEqual(model, "stub-model")
 
 
 if __name__ == "__main__":
