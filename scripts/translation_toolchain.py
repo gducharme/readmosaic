@@ -1221,7 +1221,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run-id", required=True, help="Run identifier under runs/<run_id>.")
     parser.add_argument(
         "--pipeline-profile",
-        help="Pipeline profile for --mode full.",
+        help="Optional profile defaults for --mode full; explicit language args can be used without a profile.",
     )
     parser.add_argument(
         "--pass1-language",
@@ -1253,6 +1253,39 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+
+
+def _normalize_optional_language(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    if not cleaned or cleaned.lower() == "none":
+        return None
+    return cleaned
+
+
+def _resolve_pipeline_languages(args: argparse.Namespace) -> tuple[str, str | None]:
+    profile_defaults: dict[str, str | None] = {}
+    if args.pipeline_profile:
+        if args.pipeline_profile not in PIPELINE_PROFILE_CONFIG:
+            raise SystemExit(f"Unknown --pipeline-profile: {args.pipeline_profile}")
+        profile_defaults = PIPELINE_PROFILE_CONFIG[args.pipeline_profile]
+
+    resolved_pass1_language = _normalize_optional_language(args.pass1_language)
+    if resolved_pass1_language is None:
+        resolved_pass1_language = _normalize_optional_language(profile_defaults.get("pass1_language"))
+
+    resolved_pass2_language = _normalize_optional_language(args.pass2_language)
+    if args.pass2_language is None:
+        resolved_pass2_language = _normalize_optional_language(profile_defaults.get("pass2_language"))
+
+    if resolved_pass1_language is None:
+        raise SystemExit(
+            "pass1 language is required; provide --pass1-language or a known --pipeline-profile with pass1 language"
+        )
+
+    return resolved_pass1_language, resolved_pass2_language
+
 def main() -> None:
     args = parse_args()
     if args.max_paragraph_attempts <= 0:
@@ -1263,34 +1296,12 @@ def main() -> None:
         raise SystemExit("--run-id may contain only letters, numbers, dot, underscore, and hyphen")
 
     if args.mode == "full":
-        if not args.pipeline_profile:
-            raise SystemExit("--pipeline-profile is required for --mode full")
         if not args.source:
             raise SystemExit("--source is required for --mode full")
         if not args.model:
             raise SystemExit("--model is required for --mode full")
 
-        profile_defaults = PIPELINE_PROFILE_CONFIG.get(args.pipeline_profile, {})
-
-        def _normalize_optional_language(value: str | None) -> str | None:
-            if value is None:
-                return None
-            cleaned = value.strip()
-            if not cleaned or cleaned.lower() == "none":
-                return None
-            return cleaned
-
-        resolved_pass1_language = _normalize_optional_language(args.pass1_language)
-        if resolved_pass1_language is None:
-            resolved_pass1_language = _normalize_optional_language(profile_defaults.get("pass1_language"))
-
-        resolved_pass2_language = _normalize_optional_language(args.pass2_language)
-        if args.pass2_language is None:
-            resolved_pass2_language = _normalize_optional_language(profile_defaults.get("pass2_language"))
-
-        if resolved_pass1_language is None:
-            raise SystemExit("pass1 language is required; provide --pass1-language or a profile with pass1 language")
-
+        resolved_pass1_language, resolved_pass2_language = _resolve_pipeline_languages(args)
         args.pass1_language = resolved_pass1_language
         args.pass2_language = resolved_pass2_language
     paths = _run_paths(args.run_id)

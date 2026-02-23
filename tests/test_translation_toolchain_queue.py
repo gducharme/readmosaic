@@ -20,6 +20,7 @@ from scripts.translation_toolchain import (
     resolve_paragraph_review_state,
     _run_rework_only,
     _is_stale,
+    _resolve_pipeline_languages,
 )
 
 
@@ -491,6 +492,32 @@ class TranslationToolchainQueueTests(unittest.TestCase):
         future = time.time() + 3600
         payload = {"last_heartbeat_at": __import__("datetime").datetime.fromtimestamp(future, __import__("datetime").timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")}
         self.assertFalse(_is_stale(payload))
+
+    def test_resolve_pipeline_languages_allows_explicit_languages_without_profile(self) -> None:
+        from argparse import Namespace
+
+        pass1, pass2 = _resolve_pipeline_languages(
+            Namespace(pipeline_profile=None, pass1_language="French", pass2_language="none")
+        )
+        self.assertEqual(pass1, "French")
+        self.assertIsNone(pass2)
+
+    def test_resolve_pipeline_languages_uses_profile_defaults_when_present(self) -> None:
+        from argparse import Namespace
+
+        pass1, pass2 = _resolve_pipeline_languages(
+            Namespace(pipeline_profile="tamazight_two_pass", pass1_language=None, pass2_language=None)
+        )
+        self.assertEqual(pass1, "Tamazight")
+        self.assertEqual(pass2, "Tifinagh")
+
+    def test_resolve_pipeline_languages_rejects_unknown_profile(self) -> None:
+        from argparse import Namespace
+
+        with self.assertRaises(SystemExit):
+            _resolve_pipeline_languages(
+                Namespace(pipeline_profile="unknown_profile", pass1_language=None, pass2_language=None)
+            )
 
 
 if __name__ == "__main__":
