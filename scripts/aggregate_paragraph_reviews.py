@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -17,6 +16,11 @@ from lib.paragraph_state_machine import (
     assert_pipeline_state_allowed,
     resolve_review_transition,
 )
+from scripts.translation_toolchain import (
+    atomic_write_jsonl,
+    build_rework_queue_rows,
+    read_jsonl,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -29,24 +33,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    if not path.exists():
-        return rows
-    with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if not line:
-                continue
-            rows.append(json.loads(line))
-    return rows
-
-
-def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        for row in rows:
-            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
 def _merge_reviews(review_rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -76,12 +62,11 @@ def main() -> None:
     args = parse_args()
     policy = ParagraphPolicyConfig(max_attempts=args.max_attempts)
 
-    state_rows = _read_jsonl(args.state)
-    review_rows = _read_jsonl(args.review_rows)
+    state_rows = read_jsonl(args.state)
+    review_rows = read_jsonl(args.review_rows)
     merged_reviews = _merge_reviews(review_rows)
 
     score_rows: list[dict[str, Any]] = []
-    rework_queue_rows: list[dict[str, Any]] = []
     updated_state_rows: list[dict[str, Any]] = []
 
     seen_paragraph_ids: set[str] = set()
@@ -119,16 +104,6 @@ def main() -> None:
             }
         )
 
-        if next_row["status"] == "rework_queued":
-            rework_queue_rows.append(
-                {
-                    "paragraph_id": paragraph_id,
-                    "content_hash": next_row.get("content_hash"),
-                    "attempt": next_row.get("attempt", 0),
-                    "failure_history": next_row.get("failure_history", []),
-                    "failure_reasons": next_row.get("blocking_issues", []),
-                }
-            )
 
     unknown_review_rows = sorted(set(merged_reviews) - seen_paragraph_ids)
     for paragraph_id in unknown_review_rows:
@@ -137,9 +112,12 @@ def main() -> None:
             file=sys.stderr,
         )
 
-    _write_jsonl(args.state, updated_state_rows)
-    _write_jsonl(args.scores_out, score_rows)
-    _write_jsonl(args.queue_out, rework_queue_rows)
+    existing_queue_rows = read_jsonl(args.queue_out, strict=False)
+    rework_queue_rows = build_rework_queue_rows(updated_state_rows, existing_queue_rows)
+
+    atomic_write_jsonl(args.state, updated_state_rows)
+    atomic_write_jsonl(args.scores_out, score_rows)
+    atomic_write_jsonl(args.queue_out, rework_queue_rows)
 
 
 if __name__ == "__main__":

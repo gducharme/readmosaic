@@ -177,3 +177,38 @@ Release:
 Operationally, stale-lock archival emits an audit message to stderr of the form:
 
 - `Archived stale lock to <path>/RUNNING.stale.<timestamp>.lock (...)`.
+
+
+## Resume semantics (`--mode full` vs `--mode rework-only`)
+
+Use modes based on paragraph state, not on whether a previous process crashed.
+
+### `--mode full`
+- Initializes run artifacts when they do not exist and then executes all phases.
+- On rerun for an existing run, successful paragraphs (`ready_to_merge` / `merged`) remain out of the rework queue because queue generation only emits `rework_queued` rows.
+- `state/paragraph_state.jsonl` updates are persisted atomically, so interruptions yield either the pre-update snapshot or fully written next snapshot.
+
+Example:
+```bash
+python scripts/translation_toolchain.py \
+  --mode full \
+  --run-id tx_001 \
+  --pipeline-profile tamazight_two_pass \
+  --source manuscript/source.md \
+  --model <MODEL_ID> \
+  --max-paragraph-attempts 4
+```
+
+### `--mode rework-only`
+- Processes only paragraphs currently marked `rework_queued` in `state/paragraph_state.jsonl`.
+- Skips successful paragraphs by construction; they are not re-enqueued unless state transitions back to `rework_queued` with changed failure metadata.
+- Re-running `rework-only` without paragraph state changes is idempotent for `state/rework_queue.jsonl` (no duplicate rows for unchanged packets).
+- `state/rework_queue.jsonl` is regenerated as a projection of current `state/paragraph_state.jsonl` (`rework_queued` rows only), not as an append-only work log.
+
+Example resume loop:
+```bash
+python scripts/translation_toolchain.py \
+  --mode rework-only \
+  --run-id tx_001 \
+  --max-paragraph-attempts 4
+```
