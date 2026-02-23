@@ -802,6 +802,15 @@ class TranslationToolchainQueueTests(unittest.TestCase):
                         encoding="utf-8",
                     )
                     return
+                if any("typographic_precision_review.py" in part for part in command):
+                    return
+                if any("critics_runner.py" in part for part in command):
+                    return
+                if any("map_review_to_paragraphs.py" in part for part in command):
+                    mapped_output = Path(command[command.index("--output") + 1])
+                    mapped_output.parent.mkdir(parents=True, exist_ok=True)
+                    mapped_output.write_text("", encoding="utf-8")
+                    return
                 if any("normalize_review_output.py" in part for part in command) or any("aggregate_paragraph_reviews.py" in part for part in command):
                     subprocess.run(command, check=True)
                     return

@@ -1873,22 +1873,84 @@ def run_phase_d(
         )
     grammar_input = grammar_artifacts[-1]
 
-    mapped_inputs: list[Path] = []
+    review_typography_dir = paths.get("review_typography", paths["run_root"] / "review" / "typography")
+    review_critics_dir = paths.get("review_critics", paths["run_root"] / "review" / "critics")
+    review_typography_dir.mkdir(parents=True, exist_ok=True)
+    review_critics_dir.mkdir(parents=True, exist_ok=True)
+
+    typography_review_output = review_typography_dir / "typography_review.json"
+    critics_review_output = review_critics_dir / "critics_review.json"
+
+    _exec_phase_command(
+        [
+            sys.executable,
+            "scripts/typographic_precision_review.py",
+            "--manuscript",
+            str(paths["final_candidate"]),
+            "--output-dir",
+            str(review_typography_dir),
+            "--output",
+            str(typography_review_output),
+        ],
+        timeout_seconds=timeout_seconds,
+        should_abort=should_abort,
+    )
+
+    _exec_phase_command(
+        [
+            sys.executable,
+            "scripts/critics_runner.py",
+            "--manuscript",
+            str(paths["final_candidate"]),
+            "--model",
+            manifest_model.strip(),
+            "--output",
+            str(critics_review_output),
+        ],
+        timeout_seconds=timeout_seconds,
+        should_abort=should_abort,
+    )
+
     normalized_review_dir = paths["run_root"] / "review" / "normalized"
-    mapped_candidates = [
-        paths.get("review_typography_mapped"),
-        paths.get("review_critics_mapped"),
-        normalized_review_dir / "typography_paragraph_rows.jsonl",
-        normalized_review_dir / "critics_paragraph_rows.jsonl",
-    ]
-    seen_inputs: set[Path] = set()
-    for mapped_path in mapped_candidates:
-        if mapped_path is None:
-            continue
-        resolved_path = Path(mapped_path)
-        if resolved_path.exists() and resolved_path not in seen_inputs:
-            mapped_inputs.append(resolved_path)
-            seen_inputs.add(resolved_path)
+    normalized_review_dir.mkdir(parents=True, exist_ok=True)
+    typography_mapped_output = paths.get("review_typography_mapped", normalized_review_dir / "typography_paragraph_rows.jsonl")
+    critics_mapped_output = paths.get("review_critics_mapped", normalized_review_dir / "critics_paragraph_rows.jsonl")
+
+    _exec_phase_command(
+        [
+            sys.executable,
+            "scripts/map_review_to_paragraphs.py",
+            "--run-id",
+            run_id,
+            "--reviewer",
+            "typography",
+            "--review-input",
+            str(typography_review_output),
+            "--output",
+            str(typography_mapped_output),
+        ],
+        timeout_seconds=timeout_seconds,
+        should_abort=should_abort,
+    )
+
+    _exec_phase_command(
+        [
+            sys.executable,
+            "scripts/map_review_to_paragraphs.py",
+            "--run-id",
+            run_id,
+            "--reviewer",
+            "critics",
+            "--review-input",
+            str(critics_review_output),
+            "--output",
+            str(critics_mapped_output),
+        ],
+        timeout_seconds=timeout_seconds,
+        should_abort=should_abort,
+    )
+
+    mapped_inputs: list[Path] = [Path(typography_mapped_output), Path(critics_mapped_output)]
 
     normalize_command = [
         sys.executable,
