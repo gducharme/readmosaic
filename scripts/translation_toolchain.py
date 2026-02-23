@@ -23,17 +23,15 @@ from typing import Any, Callable
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from lib.paragraph_state_machine import (
-    ParagraphPolicyConfig,
-    ParagraphReviewAggregate,
-    assert_pipeline_state_allowed,
-    resolve_review_transition,
-)
+from lib.paragraph_state_machine import assert_pipeline_state_allowed
 
 LOCK_FILE_NAME = "RUNNING.lock"
 LOCK_HEARTBEAT_WRITE_INTERVAL_SECONDS = 10
 LOCK_STALE_TTL_SECONDS = 120
 LOCK_STALE_RETRY_BASE_SLEEP_SECONDS = 0.05
+LOCK_READ_RETRY_ATTEMPTS = 3
+LOCK_READ_RETRY_SLEEP_SECONDS = 0.05
+LOCK_TIMESTAMP_SKEW_ALLOWANCE_SECONDS = 300
 LOCK_HEARTBEAT_MAX_CONSECUTIVE_FAILURES = 3
 LOCK_HEARTBEAT_STALE_ABORT_SECONDS = max(30, LOCK_STALE_TTL_SECONDS - 30)
 LOCK_FILE_FIELDS = (
@@ -51,7 +49,6 @@ PIPELINE_PRESET_CONFIG: dict[str, dict[str, str | None]] = {
     "standard_single_pass": {"pass1_language": "Tamazight", "pass2_language": None},
 }
 
-EXIT_OK = 0
 EXIT_ACTIVE_LOCK = 2
 EXIT_INVALID_LOCK = 3
 EXIT_LOCK_RACE = 4
@@ -60,7 +57,7 @@ EXIT_CORRUPT_STATE = 6
 EXIT_PHASE_FAILURE = 7
 
 LockIdentity = tuple[int, int]
-RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
+RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
 class ActiveRunLockError(RuntimeError):
@@ -111,10 +108,18 @@ def _validate_lock_payload(payload: dict[str, Any], lock_path: Path) -> dict[str
             raise InvalidRunLockError(f"{lock_path} field '{key}' must be a non-empty string")
 
     try:
-        _parse_iso8601(payload["started_at"])
-        _parse_iso8601(payload["last_heartbeat_at"])
+        started_at = _parse_iso8601(payload["started_at"])
+        last_heartbeat_at = _parse_iso8601(payload["last_heartbeat_at"])
     except ValueError as exc:
         raise InvalidRunLockError(f"{lock_path} contains invalid timestamp: {exc}") from exc
+
+    if last_heartbeat_at < started_at:
+        raise InvalidRunLockError(f"{lock_path} last_heartbeat_at must be >= started_at")
+    if last_heartbeat_at > time.time() + LOCK_TIMESTAMP_SKEW_ALLOWANCE_SECONDS:
+        raise InvalidRunLockError(
+            f"{lock_path} last_heartbeat_at is too far in the future "
+            f"(>{LOCK_TIMESTAMP_SKEW_ALLOWANCE_SECONDS}s skew allowance)"
+        )
 
     return payload
 
@@ -358,19 +363,18 @@ def build_rework_queue_rows(
     return sorted(queue_rows, key=lambda row: row["paragraph_id"])
 
 
-def _cleanup_stale_temp_lock_files(run_dir: Path) -> None:
-    """Best-effort cleanup for abandoned atomic-write temp files."""
-    prefix = f".{LOCK_FILE_NAME}.tmp."
+def _cleanup_stale_temp_files(run_dir: Path) -> None:
+    """Best-effort cleanup for abandoned atomic-write temp files under a run directory."""
     now = time.time()
     max_age = LOCK_STALE_TTL_SECONDS * 2
 
     try:
-        candidates = list(run_dir.iterdir())
+        candidates = list(run_dir.rglob(".*.tmp.*"))
     except OSError:
         return
 
     for candidate in candidates:
-        if not candidate.is_file() or not candidate.name.startswith(prefix):
+        if not candidate.is_file():
             continue
         try:
             age = now - candidate.stat().st_mtime
@@ -390,7 +394,12 @@ def _is_stale(payload: dict[str, Any]) -> bool:
     return age_seconds > LOCK_STALE_TTL_SECONDS
 
 
-def _archive_stale_lock(lock_path: Path, payload: dict[str, Any]) -> Path | None:
+def _archive_stale_lock(
+    lock_path: Path,
+    payload: dict[str, Any],
+    *,
+    expected_identity: LockIdentity,
+) -> Path | None:
     heartbeat_ts = int(_parse_iso8601(payload["last_heartbeat_at"]))
     suffix = 0
 
@@ -406,6 +415,8 @@ def _archive_stale_lock(lock_path: Path, payload: dict[str, Any]) -> Path | None
             continue
 
         try:
+            if _lock_identity(lock_path) != expected_identity:
+                return None
             lock_path.replace(stale_path)
             _fsync_directory(lock_path.parent)
             return stale_path
@@ -425,7 +436,7 @@ def _archive_stale_lock(lock_path: Path, payload: dict[str, Any]) -> Path | None
 
 def acquire_run_lock(run_dir: Path, run_id: str) -> tuple[Path, dict[str, Any], LockIdentity]:
     run_dir.mkdir(parents=True, exist_ok=True)
-    _cleanup_stale_temp_lock_files(run_dir)
+    _cleanup_stale_temp_files(run_dir)
     lock_path = run_dir / LOCK_FILE_NAME
 
     while True:
@@ -433,15 +444,35 @@ def acquire_run_lock(run_dir: Path, run_id: str) -> tuple[Path, dict[str, Any], 
             fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         except FileExistsError:
             try:
+                existing_identity = _lock_identity(lock_path)
+            except FileNotFoundError:
+                time.sleep(LOCK_STALE_RETRY_BASE_SLEEP_SECONDS + random.uniform(0, 0.05))
+                continue
+            try:
                 existing = _read_lock(lock_path)
             except InvalidRunLockError as exc:
-                raise InvalidRunLockError(f"Invalid active lock file at {lock_path}: {exc}") from exc
+                if not lock_path.exists():
+                    time.sleep(LOCK_STALE_RETRY_BASE_SLEEP_SECONDS + random.uniform(0, 0.05))
+                    continue
+                existing = None
+                last_read_exc: InvalidRunLockError = exc
+                for _ in range(LOCK_READ_RETRY_ATTEMPTS):
+                    time.sleep(LOCK_READ_RETRY_SLEEP_SECONDS)
+                    try:
+                        existing = _read_lock(lock_path)
+                        break
+                    except InvalidRunLockError as retry_exc:
+                        last_read_exc = retry_exc
+                        if not lock_path.exists():
+                            break
+                if existing is None:
+                    raise InvalidRunLockError(f"Invalid active lock file at {lock_path}: {last_read_exc}") from last_read_exc
             if not _is_stale(existing):
                 raise ActiveRunLockError(
                     "Run already active: fresh RUNNING.lock exists "
                     f"(run_id={existing['run_id']}, host={existing['host']}, pid={existing['pid']})."
                 )
-            stale_path = _archive_stale_lock(lock_path, existing)
+            stale_path = _archive_stale_lock(lock_path, existing, expected_identity=existing_identity)
             if stale_path is not None:
                 print(
                     "Archived stale lock to "
@@ -520,49 +551,6 @@ def release_run_lock(lock_path: Path, run_id: str) -> bool:
     return True
 
 
-def resolve_paragraph_review_state(
-    prior_state: dict[str, Any],
-    review_aggregate: dict[str, Any],
-    max_attempts: int,
-) -> dict[str, Any]:
-    """Apply canonical paragraph review transition policy.
-
-    This helper keeps toolchain callers on the same state machine used by
-    aggregate_paragraph_reviews.py.
-    """
-
-    raw_blocking_issues = review_aggregate.get("blocking_issues", [])
-    if raw_blocking_issues is None:
-        raw_blocking_issues = []
-    if not isinstance(raw_blocking_issues, list):
-        raise ValueError("review_aggregate.blocking_issues must be a list of strings when provided")
-    if any(not isinstance(issue, str) for issue in raw_blocking_issues):
-        raise ValueError("review_aggregate.blocking_issues must contain only strings")
-
-    raw_scores = review_aggregate.get("scores", {})
-    if raw_scores is None:
-        raw_scores = {}
-    if not isinstance(raw_scores, dict):
-        raise ValueError("review_aggregate.scores must be an object mapping metric names to numeric values")
-    if any(not isinstance(metric, str) for metric in raw_scores.keys()):
-        raise ValueError("review_aggregate.scores keys must be strings")
-    if any((isinstance(value, bool) or not isinstance(value, (int, float))) for value in raw_scores.values()):
-        raise ValueError("review_aggregate.scores values must be numeric")
-
-    review = ParagraphReviewAggregate(
-        hard_fail=bool(review_aggregate.get("hard_fail", False)),
-        blocking_issues=tuple(raw_blocking_issues),
-        scores=dict(raw_scores),
-    )
-    policy = ParagraphPolicyConfig(max_attempts=max_attempts)
-    transition = resolve_review_transition(prior_state, review, policy)
-    next_state = dict(prior_state)
-    next_state["status"] = transition.next_state
-    next_state.update(transition.metadata_updates)
-    assert_pipeline_state_allowed(next_state["status"], bool(next_state.get("excluded_by_policy", False)))
-    return next_state
-
-
 def _coerce_attempt(value: Any, *, paragraph_id: str) -> int:
     if isinstance(value, bool):
         raise ValueError(f"paragraph '{paragraph_id}' has invalid boolean attempt value")
@@ -573,12 +561,8 @@ def _coerce_attempt(value: Any, *, paragraph_id: str) -> int:
     raise ValueError(f"paragraph '{paragraph_id}' has non-integer attempt value: {value!r}")
 
 
-def _run_root(run_id: str) -> Path:
-    return Path("runs") / run_id
-
-
 def _run_paths(run_id: str) -> dict[str, Path]:
-    run_root = _run_root(run_id)
+    run_root = Path("runs") / run_id
     return {
         "run_root": run_root,
         "manifest": run_root / "manifest.json",
@@ -1302,7 +1286,7 @@ def main() -> None:
     if args.phase_timeout_seconds < 0:
         raise SystemExit("--phase-timeout-seconds must be >= 0")
     if not RUN_ID_PATTERN.match(args.run_id):
-        raise SystemExit("--run-id may contain only letters, numbers, dot, underscore, and hyphen")
+        raise SystemExit("--run-id must start with a letter/number, use only letters, numbers, dot, underscore, or hyphen, and be at most 64 chars")
 
     if args.mode == "full":
         if not args.source:
@@ -1377,25 +1361,32 @@ def main() -> None:
             return None
         return current_phase_abort_checker()
 
-    def maybe_heartbeat() -> None:
+    def maybe_heartbeat() -> bool:
         nonlocal payload, lock_identity, last_heartbeat, progress_state
         assert lock_path is not None and payload is not None and lock_identity is not None
         now = time.monotonic()
         if now - last_heartbeat < LOCK_HEARTBEAT_WRITE_INTERVAL_SECONDS:
-            return
+            return False
         payload, lock_identity = write_lock_heartbeat(lock_path, payload, args.run_id, lock_identity)
         last_heartbeat = now
         progress_state["last_heartbeat_at"] = payload["last_heartbeat_at"]
-        _write_progress(
-            paths,
-            run_id=args.run_id,
-            mode=args.mode,
-            current_phase=progress_state["current_phase"],
-            phase_state=progress_state["phase_state"],
-            phase_started_at=progress_state["phase_started_at"],
-            phase_finished_at=progress_state["phase_finished_at"],
-            last_heartbeat_at=progress_state["last_heartbeat_at"],
-        )
+        try:
+            _write_progress(
+                paths,
+                run_id=args.run_id,
+                mode=args.mode,
+                current_phase=progress_state["current_phase"],
+                phase_state=progress_state["phase_state"],
+                phase_started_at=progress_state["phase_started_at"],
+                phase_finished_at=progress_state["phase_finished_at"],
+                last_heartbeat_at=progress_state["last_heartbeat_at"],
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(
+                f"Warning: failed to update progress heartbeat metadata after lock heartbeat write: {exc}",
+                file=sys.stderr,
+            )
+        return True
 
     def run_phase_with_progress(phase_name: str, runner: Callable[[], None]) -> None:
         nonlocal progress_state, current_phase_abort_checker
@@ -1422,14 +1413,15 @@ def main() -> None:
         warning_heartbeat_error: Exception | None = None
         warning_heartbeat_consecutive_failures = 0
         heartbeat_degraded = False
-        last_heartbeat_success_monotonic = time.monotonic()
+        last_heartbeat_write_monotonic = time.monotonic() - LOCK_HEARTBEAT_STALE_ABORT_SECONDS
 
         def _safe_maybe_heartbeat() -> None:
-            nonlocal fatal_heartbeat_error, warning_heartbeat_error, warning_heartbeat_consecutive_failures, heartbeat_degraded, last_heartbeat_success_monotonic
+            nonlocal fatal_heartbeat_error, warning_heartbeat_error, warning_heartbeat_consecutive_failures, heartbeat_degraded, last_heartbeat_write_monotonic
             try:
-                maybe_heartbeat()
-                warning_heartbeat_consecutive_failures = 0
-                last_heartbeat_success_monotonic = time.monotonic()
+                wrote_heartbeat = maybe_heartbeat()
+                if wrote_heartbeat:
+                    warning_heartbeat_consecutive_failures = 0
+                    last_heartbeat_write_monotonic = time.monotonic()
             except InvalidRunLockError as exc:
                 fatal_heartbeat_error = exc
                 raise
@@ -1444,7 +1436,7 @@ def main() -> None:
         def _heartbeat_loop() -> None:
             nonlocal fatal_heartbeat_error, warning_heartbeat_error
             while not heartbeat_stop.wait(1):
-                if time.monotonic() - last_heartbeat_success_monotonic > LOCK_HEARTBEAT_STALE_ABORT_SECONDS:
+                if time.monotonic() - last_heartbeat_write_monotonic > LOCK_HEARTBEAT_STALE_ABORT_SECONDS:
                     fatal_heartbeat_error = RuntimeError("Heartbeat stalled near stale-lock threshold; aborting to preserve lock authority")
                     heartbeat_stop.set()
                     break
@@ -1464,8 +1456,6 @@ def main() -> None:
         def _phase_abort_error() -> Exception | None:
             if fatal_heartbeat_error is not None:
                 return fatal_heartbeat_error
-            if time.monotonic() - last_heartbeat_success_monotonic > LOCK_HEARTBEAT_STALE_ABORT_SECONDS:
-                return RuntimeError("Heartbeat stalled near stale-lock threshold; aborting to preserve lock authority")
             return None
 
         phase_succeeded = False
@@ -1572,8 +1562,6 @@ def main() -> None:
                 _run_full_pipeline(paths, args, run_phase_with_progress, current_abort_error)
             elif args.mode == "rework-only":
                 _run_rework_only(paths, args, run_phase_with_progress, current_abort_error)
-            else:
-                raise SystemExit(EXIT_USAGE_ERROR)
         except (subprocess.CalledProcessError, TimeoutError, ValueError, FileNotFoundError) as exc:
             print(f"status=phase_failed error={exc}", file=sys.stderr)
             raise SystemExit(EXIT_PHASE_FAILURE) from exc
