@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""Interactive reviewer for typographic/grammar auditor issue outputs.
+"""Typography reviewer CLI.
 
-Loads auditor JSON output and pre-processing sentence artifacts, then walks issues in
-sentence order. For each issue, displays before/after sentence previews, captures
-accept/reject/edit decisions, and writes a final merged sentence output.
+Supports two execution modes:
+1) Interactive audit review mode (legacy): consumes ``--audit`` and ``--preprocessed``
+   artifacts and records accept/reject/edit decisions.
+2) Non-interactive manuscript review mode: consumes ``--manuscript`` and emits a
+   JSON issue payload with anchor fields suitable for
+   ``scripts/map_review_to_paragraphs.py``.
 """
 from __future__ import annotations
 
@@ -17,27 +20,42 @@ from typing import Any
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Review auditor issues against preprocessed sentence lines, in ascending "
-            "sentence order, with interactive accept/reject decisions."
+            "Run typography review either interactively from audit artifacts or "
+            "non-interactively from manuscript text."
         )
     )
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument(
         "--audit",
         type=Path,
-        required=True,
         help="Path to auditor JSON output (object with an 'issues' array).",
     )
+    mode.add_argument(
+        "--manuscript",
+        type=Path,
+        help="Path to assembled manuscript for non-interactive phase-D typography review.",
+    )
+
     parser.add_argument(
         "--preprocessed",
         type=Path,
-        required=True,
-        help="Pre-processing directory containing sentences.jsonl.",
+        help="Pre-processing directory containing sentences.jsonl (required with --audit).",
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        help="Optional model identifier for manuscript review mode.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        help="Optional output directory for manuscript mode when --output is omitted.",
     )
     parser.add_argument(
         "--output",
         type=Path,
         default=Path("typographic_review_decisions.json"),
-        help="Where to write review decisions JSON (default: typographic_review_decisions.json).",
+        help="Output JSON path.",
     )
     parser.add_argument(
         "--final-output",
@@ -48,7 +66,82 @@ def parse_args() -> argparse.Namespace:
             "(default: typographic_review_final_sentences.jsonl)."
         ),
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.audit and not args.preprocessed:
+        parser.error("--preprocessed is required when --audit is provided.")
+    return args
+
+
+def _issue_from_line(line_number: int, text: str) -> list[dict[str, Any]]:
+    issues: list[dict[str, Any]] = []
+    stripped = text.strip()
+    if not stripped:
+        return issues
+
+    if "  " in text:
+        issues.append(
+            {
+                "issue_id": f"typography_line_{line_number:04d}_double_space",
+                "issue_type": "typography",
+                "classification": "spacing",
+                "severity": "minor",
+                "line": line_number,
+                "quote": "  ",
+                "explanation": "Detected repeated spaces.",
+                "minimal_correction": "Use a single space between words.",
+            }
+        )
+
+    if stripped.endswith(" ,") or stripped.endswith(" ."):
+        issues.append(
+            {
+                "issue_id": f"typography_line_{line_number:04d}_space_before_punctuation",
+                "issue_type": "typography",
+                "classification": "punctuation_spacing",
+                "severity": "minor",
+                "line": line_number,
+                "quote": stripped[-2:],
+                "explanation": "Detected a space before terminal punctuation.",
+                "minimal_correction": stripped.replace(" ,", ",").replace(" .", "."),
+            }
+        )
+
+    return issues
+
+
+def run_manuscript_review(args: argparse.Namespace) -> int:
+    manuscript_path = args.manuscript
+    if manuscript_path is None:
+        print("Missing manuscript path.", file=sys.stderr)
+        return 1
+    if not manuscript_path.exists():
+        print(f"Manuscript not found: {manuscript_path}", file=sys.stderr)
+        return 1
+
+    output_path: Path = args.output
+    if args.output_dir is not None and output_path == Path("typographic_review_decisions.json"):
+        output_path = args.output_dir / "typography_review.json"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    issues: list[dict[str, Any]] = []
+    lines = manuscript_path.read_text(encoding="utf-8").splitlines()
+    for line_number, text in enumerate(lines, start=1):
+        issues.extend(_issue_from_line(line_number, text))
+
+    payload = {
+        "reviewer": "typography",
+        "mode": "manuscript",
+        "manuscript": str(manuscript_path),
+        "model": args.model,
+        "issues": issues,
+        "summary": {
+            "line_count": len(lines),
+            "issue_count": len(issues),
+        },
+    }
+    output_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    print(f"Wrote manuscript review to {output_path}")
+    return 0
 
 
 def load_sentences(preprocessed_dir: Path) -> list[dict[str, Any]]:
@@ -151,7 +244,12 @@ def write_sentences_jsonl(path: Path, sentences: list[dict[str, Any]], final_tex
 def main() -> int:
     args = parse_args()
 
+    if args.manuscript is not None:
+        return run_manuscript_review(args)
+
     try:
+        if args.preprocessed is None or args.audit is None:
+            raise RuntimeError("Interactive mode requires --audit and --preprocessed.")
         sentences = load_sentences(args.preprocessed)
         issues, metadata = load_issues(args.audit)
     except RuntimeError as error:
