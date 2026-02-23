@@ -57,8 +57,14 @@ class ParagraphReviewAggregate:
 
 @dataclass(frozen=True)
 class ParagraphTransitionResult:
-    next_state: str
+    immediate_state: str
+    follow_up_state: str | None
     metadata_updates: dict[str, Any]
+
+    @property
+    def next_state(self) -> str:
+        """Compatibility view of the durable routed status (never transient-only events)."""
+        return self.follow_up_state or self.immediate_state
 
 
 def utc_now_iso() -> str:
@@ -72,8 +78,10 @@ def _validate_state(state: str) -> None:
 
 def _normalize_failure_history_entry(entry: Any) -> dict[str, Any]:
     if isinstance(entry, dict):
-        return dict(entry)
-    return {"issues": [str(entry)], "attempt": None, "timestamp": None}
+        normalized = dict(entry)
+        normalized.setdefault("state", None)
+        return normalized
+    return {"issues": [str(entry)], "attempt": None, "timestamp": None, "state": None}
 
 
 def _resolve_excluded_state(prior_status: str) -> str:
@@ -99,7 +107,8 @@ def resolve_review_transition(
 
     if excluded:
         return ParagraphTransitionResult(
-            next_state=_resolve_excluded_state(prior_status),
+            immediate_state=_resolve_excluded_state(prior_status),
+            follow_up_state=None,
             metadata_updates={
                 "attempt": prior_attempt,
                 "failure_history": prior_failure_history,
@@ -130,10 +139,14 @@ def resolve_review_transition(
                 "last_success_at": timestamp,
             }
         )
-        return ParagraphTransitionResult(next_state="ready_to_merge", metadata_updates=metadata_updates)
+        return ParagraphTransitionResult(
+            immediate_state="ready_to_merge",
+            follow_up_state=None,
+            metadata_updates=metadata_updates,
+        )
 
     failure_history = prior_failure_history + [
-        {"attempt": next_attempt, "issues": blocking_issues, "timestamp": timestamp}
+        {"attempt": next_attempt, "issues": blocking_issues, "timestamp": timestamp, "state": "review_failed"}
     ]
 
     requires_manual = (
@@ -150,7 +163,8 @@ def resolve_review_transition(
     )
 
     return ParagraphTransitionResult(
-        next_state="manual_review_required" if requires_manual else "rework_queued",
+        immediate_state="review_failed",
+        follow_up_state="manual_review_required" if requires_manual else "rework_queued",
         metadata_updates=metadata_updates,
     )
 

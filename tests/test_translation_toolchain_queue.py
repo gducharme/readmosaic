@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import io
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stderr
@@ -112,6 +114,73 @@ class TranslationToolchainQueueTests(unittest.TestCase):
             rows = read_jsonl(path)
             self.assertEqual(rows, [{"paragraph_id": "p_1", "status": "rework_queued"}])
 
+
+
+    def test_aggregate_reviews_records_review_failed_before_routing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state_path = root / "paragraph_state.jsonl"
+            review_rows_path = root / "review_rows.jsonl"
+            scores_out = root / "paragraph_scores.jsonl"
+            queue_out = root / "rework_queue.jsonl"
+
+            atomic_write_jsonl(
+                state_path,
+                [
+                    {
+                        "paragraph_id": "p_0001",
+                        "status": "review_in_progress",
+                        "excluded_by_policy": False,
+                        "attempt": 1,
+                        "content_hash": "sha256:" + "1" * 64,
+                        "failure_history": [],
+                    }
+                ],
+            )
+            atomic_write_jsonl(
+                review_rows_path,
+                [
+                    {
+                        "paragraph_id": "p_0001",
+                        "hard_fail": True,
+                        "blocking_issues": ["critical_grammar"],
+                        "scores": {"semantic": 0.42},
+                    }
+                ],
+            )
+
+            subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/aggregate_paragraph_reviews.py",
+                    "--state",
+                    str(state_path),
+                    "--review-rows",
+                    str(review_rows_path),
+                    "--scores-out",
+                    str(scores_out),
+                    "--queue-out",
+                    str(queue_out),
+                    "--max-attempts",
+                    "4",
+                ],
+                cwd=Path(__file__).resolve().parents[1],
+                check=True,
+            )
+
+            state_rows = read_jsonl(state_path)
+            self.assertEqual(state_rows[0]["status"], "rework_queued")
+            self.assertEqual(state_rows[0]["failure_history"][0]["state"], "review_failed")
+            self.assertEqual(state_rows[0]["review_state"], "review_failed")
+            self.assertEqual(state_rows[0]["routing_state"], "rework_queued")
+            self.assertEqual(state_rows[0]["review_transition_trace"], ["review_failed", "rework_queued"])
+
+            score_rows = read_jsonl(scores_out)
+            self.assertEqual(score_rows[0]["status"], "rework_queued")
+            self.assertEqual(score_rows[0]["review_state"], "review_failed")
+            self.assertEqual(score_rows[0]["routing_state"], "rework_queued")
+            self.assertEqual(score_rows[0]["transition_trace"], ["review_failed", "rework_queued"])
+            self.assertEqual(score_rows[0]["scores"], {"semantic": 0.42})
 
     def test_packet_raises_for_missing_identity_fields(self) -> None:
         with self.assertRaises(ValueError):
@@ -275,6 +344,18 @@ class TranslationToolchainQueueTests(unittest.TestCase):
 
 
 
+
+    def test_resolve_paragraph_review_state_exposes_review_trace_fields(self) -> None:
+        result = resolve_paragraph_review_state(
+            {"paragraph_id": "p_1", "status": "review_in_progress", "attempt": 0, "excluded_by_policy": False, "failure_history": []},
+            {"blocking_issues": ["critical_grammar"], "scores": {"semantic": 0.5}, "hard_fail": True},
+            max_attempts=4,
+        )
+        self.assertEqual(result["status"], "rework_queued")
+        self.assertEqual(result["review_state"], "review_failed")
+        self.assertEqual(result["routing_state"], "rework_queued")
+        self.assertEqual(result["review_transition_trace"], ["review_failed", "rework_queued"])
+
     def test_resolve_paragraph_review_state_rejects_non_list_blocking_issues(self) -> None:
         with self.assertRaises(ValueError):
             resolve_paragraph_review_state(
@@ -304,6 +385,14 @@ class TranslationToolchainQueueTests(unittest.TestCase):
             resolve_paragraph_review_state(
                 {"paragraph_id": "p_1", "status": "ingested", "attempt": 0, "excluded_by_policy": False},
                 {"blocking_issues": [], "scores": {"semantic": "high"}, "hard_fail": False},
+                max_attempts=4,
+            )
+
+    def test_resolve_paragraph_review_state_rejects_boolean_score_values(self) -> None:
+        with self.assertRaises(ValueError):
+            resolve_paragraph_review_state(
+                {"paragraph_id": "p_1", "status": "ingested", "attempt": 0, "excluded_by_policy": False},
+                {"blocking_issues": [], "scores": {"semantic": True}, "hard_fail": False},
                 max_attempts=4,
             )
 
