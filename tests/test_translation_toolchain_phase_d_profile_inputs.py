@@ -271,5 +271,58 @@ class TranslationToolchainPhaseDProfileInputsTests(unittest.TestCase):
             self.assertIn("missing_anchor", blockers_payload)
 
 
+    def test_phase_d_typography_command_matches_cli_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = self._build_paths(Path(tmp), "tamazight_two_pass")
+            commands: list[list[str]] = []
+
+            def _stub_exec(command: list[str], **_: object) -> None:
+                commands.append(command)
+                if any("grammar_auditor.py" in part for part in command):
+                    out_dir = paths["run_root"] / "review" / "grammar"
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    (out_dir / "grammar_audit_issues_20260101T000000Z.json").write_text("[]", encoding="utf-8")
+                    return
+                if any("typographic_precision_review.py" in part for part in command):
+                    output_path = Path(command[command.index("--output") + 1])
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    output_path.write_text('{"issues":[]}', encoding="utf-8")
+                    return
+                if any("critics_runner.py" in part for part in command):
+                    output_path = Path(command[command.index("--output") + 1])
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    output_path.write_text('{"issues":[]}', encoding="utf-8")
+                    return
+                if any("map_review_to_paragraphs.py" in part for part in command):
+                    mapped_output = Path(command[command.index("--output") + 1])
+                    mapped_output.parent.mkdir(parents=True, exist_ok=True)
+                    mapped_output.write_text("", encoding="utf-8")
+                    return
+                if any("normalize_review_output.py" in part for part in command) or any("aggregate_paragraph_reviews.py" in part for part in command):
+                    import subprocess
+
+                    subprocess.run(command, check=True)
+                    return
+                raise AssertionError(f"Unexpected command: {command}")
+
+            with patch("scripts.translation_toolchain._exec_phase_command", side_effect=_stub_exec):
+                run_phase_d(paths, run_id="tx_001", max_paragraph_attempts=4, phase_timeout_seconds=0, should_abort=lambda: None)
+
+            typography_cmd = next(command for command in commands if any("typographic_precision_review.py" in part for part in command))
+            self.assertEqual(
+                typography_cmd,
+                [
+                    typography_cmd[0],
+                    "scripts/typographic_precision_review.py",
+                    "--manuscript",
+                    str(paths["final_candidate"]),
+                    "--output-dir",
+                    str(paths["run_root"] / "review" / "typography"),
+                    "--output",
+                    str(paths["run_root"] / "review" / "typography" / "typography_review.json"),
+                ],
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
