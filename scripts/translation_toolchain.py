@@ -746,6 +746,7 @@ def _ensure_manifest(
     pass2_language: str | None,
     max_paragraph_attempts: int,
     exclusion_policy: dict[str, Any] | None,
+    merge_require_approval: bool,
 ) -> None:
     semantic_language = pass2_language or pass1_language
     script_mode = "two_pass" if pass2_language else "single_pass"
@@ -775,6 +776,15 @@ def _ensure_manifest(
         },
         "canonical_state_counts": state_counts,
         "exclusion_policy": exclusion_policy,
+        "status_metadata": {
+            "merge": {
+                "require_approval": merge_require_approval,
+                "approval_present": False,
+                "merge_eligible": False,
+                "decision": "not_evaluated",
+                "updated_at": _utc_now_iso(),
+            }
+        },
     }
     immutable_fields = {
         "run_id",
@@ -817,13 +827,37 @@ def _update_manifest_status_checkpoint(
     run_id: str,
     phase_name: str,
     phase_state: str,
+    merge_require_approval: bool | None = None,
+    merge_approval_present: bool | None = None,
+    merge_eligible: bool | None = None,
+    merge_decision: str | None = None,
 ) -> None:
-    if not paths["manifest"].exists():
+    manifest_path = paths.get("manifest")
+    if not isinstance(manifest_path, Path) or not manifest_path.exists():
         return
 
     manifest = _read_manifest(paths, run_id=run_id)
     review_pre_dir = _resolve_review_pre_dir(manifest)
     counts = _compute_status_report(read_jsonl(paths["paragraph_state"], strict=False))
+    status_metadata = manifest.get("status_metadata")
+    if not isinstance(status_metadata, dict):
+        status_metadata = {}
+    merge_metadata = status_metadata.get("merge")
+    if not isinstance(merge_metadata, dict):
+        merge_metadata = {}
+
+    if merge_require_approval is not None:
+        merge_metadata["require_approval"] = merge_require_approval
+    if merge_approval_present is not None:
+        merge_metadata["approval_present"] = merge_approval_present
+    if merge_eligible is not None:
+        merge_metadata["merge_eligible"] = merge_eligible
+    if merge_decision is not None:
+        merge_metadata["decision"] = merge_decision
+    if merge_metadata:
+        merge_metadata["updated_at"] = _utc_now_iso()
+        status_metadata["merge"] = merge_metadata
+
     payload = {
         **manifest,
         "source_pre": str(paths["source_pre"]),
@@ -838,9 +872,31 @@ def _update_manifest_status_checkpoint(
             "phase_state": phase_state,
             "updated_at": _utc_now_iso(),
         },
+        "status_metadata": status_metadata,
         "updated_at": _utc_now_iso(),
     }
     _atomic_write_json(paths["manifest"], payload)
+
+
+def _update_manifest_merge_status(
+    paths: dict[str, Path],
+    *,
+    run_id: str,
+    merge_require_approval: bool,
+    merge_approval_present: bool,
+    merge_eligible: bool,
+    merge_decision: str,
+) -> None:
+    _update_manifest_status_checkpoint(
+        paths,
+        run_id=run_id,
+        phase_name="F",
+        phase_state="done",
+        merge_require_approval=merge_require_approval,
+        merge_approval_present=merge_approval_present,
+        merge_eligible=merge_eligible,
+        merge_decision=merge_decision,
+    )
 
 
 def _match_exclusion_policy(
@@ -1716,6 +1772,7 @@ def run_phase_a(
     allow_exclusion_policy_reauthorization: bool,
     phase_timeout_seconds: int,
     max_paragraph_attempts: int,
+    merge_require_approval: bool,
     should_abort: Callable[[], Exception | None],
 ) -> None:
     paths["source_pre"].mkdir(parents=True, exist_ok=True)
@@ -1730,6 +1787,7 @@ def run_phase_a(
         pass2_language=pass2_language,
         max_paragraph_attempts=max_paragraph_attempts,
         exclusion_policy=exclusion_policy,
+        merge_require_approval=merge_require_approval,
     )
 
     _exec_phase_command(
@@ -2296,6 +2354,8 @@ def run_phase_f(
     paths: dict[str, Path],
     *,
     run_id: str,
+    merge_require_approval: bool = False,
+    merge_approval_present: bool = False,
     should_abort: Callable[[], Exception | None] | None = None,
 ) -> None:
     if should_abort is not None:
@@ -2407,6 +2467,29 @@ def run_phase_f(
     _atomic_write_json(paths["gate_report"], gate_report)
 
     if not can_merge:
+        _update_manifest_merge_status(
+            paths,
+            run_id=run_id,
+            merge_require_approval=merge_require_approval,
+            merge_approval_present=merge_approval_present,
+            merge_eligible=False,
+            merge_decision="blocked",
+        )
+        return
+
+    if merge_require_approval and not merge_approval_present:
+        print(
+            "status=merge_eligible_waiting_for_approval "
+            f"run_id={run_id} require_merge_approval={merge_require_approval} approve_merge={merge_approval_present}"
+        )
+        _update_manifest_merge_status(
+            paths,
+            run_id=run_id,
+            merge_require_approval=merge_require_approval,
+            merge_approval_present=merge_approval_present,
+            merge_eligible=True,
+            merge_decision="awaiting_approval",
+        )
         return
 
     paths["final_dir"].mkdir(parents=True, exist_ok=True)
@@ -2431,6 +2514,14 @@ def run_phase_f(
         else:
             updated_rows.append(row)
     atomic_write_jsonl(paths["paragraph_state"], updated_rows)
+    _update_manifest_merge_status(
+        paths,
+        run_id=run_id,
+        merge_require_approval=merge_require_approval,
+        merge_approval_present=merge_approval_present,
+        merge_eligible=True,
+        merge_decision="merged",
+    )
 
 
 def _run_full_pipeline(
@@ -2459,6 +2550,7 @@ def _run_full_pipeline(
             allow_exclusion_policy_reauthorization=args.allow_exclusion_policy_reauthorization,
             phase_timeout_seconds=args.phase_timeout_seconds,
             max_paragraph_attempts=args.max_paragraph_attempts,
+            merge_require_approval=args.require_merge_approval,
             should_abort=should_abort,
         ),
     )
@@ -2504,7 +2596,16 @@ def _run_full_pipeline(
             should_abort=should_abort,
         ),
     )
-    run_phase("F", lambda: run_phase_f(paths, run_id=args.run_id, should_abort=should_abort))
+    run_phase(
+        "F",
+        lambda: run_phase_f(
+            paths,
+            run_id=args.run_id,
+            merge_require_approval=args.require_merge_approval,
+            merge_approval_present=args.approve_merge,
+            should_abort=should_abort,
+        ),
+    )
 
 
 def _run_rework_only(
@@ -2548,7 +2649,16 @@ def _run_rework_only(
         ),
     )
     if args.rework_run_phase_f:
-        run_phase("F", lambda: run_phase_f(paths, run_id=args.run_id, should_abort=should_abort))
+        run_phase(
+            "F",
+            lambda: run_phase_f(
+                paths,
+                run_id=args.run_id,
+                merge_require_approval=args.require_merge_approval,
+                merge_approval_present=args.approve_merge,
+                should_abort=should_abort,
+            ),
+        )
 
 
 def parse_args() -> argparse.Namespace:
@@ -2642,6 +2752,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--subset-paragraph-ids",
         help="Optional comma-separated paragraph_id list for subset translation in Phases B/C.",
+    )
+    parser.add_argument(
+        "--require-merge-approval",
+        action="store_true",
+        help="Require explicit --approve-merge before phase F writes final/final.md.",
+    )
+    parser.add_argument(
+        "--approve-merge",
+        action="store_true",
+        help="Explicitly approve merge/finalization when --require-merge-approval is enabled.",
     )
     return parser.parse_args()
 
