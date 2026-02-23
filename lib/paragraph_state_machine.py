@@ -1,0 +1,161 @@
+#!/usr/bin/env python3
+"""Canonical paragraph review state transitions."""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any
+
+KNOWN_STATES = {
+    "ingested",
+    "translated_pass1",
+    "translated_pass2",
+    "candidate_assembled",
+    "review_in_progress",
+    "review_failed",
+    "rework_queued",
+    "reworked",
+    "ready_to_merge",
+    "manual_review_required",
+    "merged",
+}
+
+EXCLUSION_DISALLOWED_STATES = {
+    "translated_pass1",
+    "translated_pass2",
+    "candidate_assembled",
+    "review_in_progress",
+    "review_failed",
+    "rework_queued",
+    "reworked",
+    "ready_to_merge",
+    "manual_review_required",
+}
+
+PRESERVED_EXCLUDED_STATES = {"merged"}
+
+
+@dataclass(frozen=True)
+class ParagraphPolicyConfig:
+    max_attempts: int = 4
+    immediate_manual_review_reasons: frozenset[str] = frozenset(
+        {
+            "mapping_error",
+            "semantic_fidelity_hard_floor",
+            "content_hash_mismatch",
+            "artifact_corrupt",
+        }
+    )
+
+
+@dataclass(frozen=True)
+class ParagraphReviewAggregate:
+    hard_fail: bool
+    blocking_issues: tuple[str, ...]
+    scores: dict[str, float]
+
+
+@dataclass(frozen=True)
+class ParagraphTransitionResult:
+    next_state: str
+    metadata_updates: dict[str, Any]
+
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _validate_state(state: str) -> None:
+    if state not in KNOWN_STATES:
+        raise ValueError(f"Unknown paragraph state '{state}'.")
+
+
+def _normalize_failure_history_entry(entry: Any) -> dict[str, Any]:
+    if isinstance(entry, dict):
+        return dict(entry)
+    return {"issues": [str(entry)], "attempt": None, "timestamp": None}
+
+
+def _resolve_excluded_state(prior_status: str) -> str:
+    if prior_status in PRESERVED_EXCLUDED_STATES:
+        return prior_status
+    return "ingested"
+
+
+def resolve_review_transition(
+    prior_state: dict[str, Any],
+    review: ParagraphReviewAggregate,
+    policy: ParagraphPolicyConfig,
+    now_iso: str | None = None,
+) -> ParagraphTransitionResult:
+    timestamp = now_iso or utc_now_iso()
+    excluded = bool(prior_state.get("excluded_by_policy", False))
+    prior_status = str(prior_state.get("status", "ingested"))
+    _validate_state(prior_status)
+    prior_attempt = int(prior_state.get("attempt", 0))
+    prior_failure_history = [
+        _normalize_failure_history_entry(entry) for entry in (prior_state.get("failure_history") or [])
+    ]
+
+    if excluded:
+        return ParagraphTransitionResult(
+            next_state=_resolve_excluded_state(prior_status),
+            metadata_updates={
+                "attempt": prior_attempt,
+                "failure_history": prior_failure_history,
+                "scores": {},
+                "blocking_issues": [],
+                "reviewed_at": None,
+                "last_failed_at": None,
+                "last_success_at": None,
+                "updated_at": prior_state.get("updated_at"),
+            },
+        )
+
+    next_attempt = prior_attempt + 1
+    blocking_issues = list(dict.fromkeys(review.blocking_issues))
+    metadata_updates: dict[str, Any] = {
+        "attempt": next_attempt,
+        "scores": dict(review.scores),
+        "blocking_issues": blocking_issues,
+        "reviewed_at": timestamp,
+        "updated_at": timestamp,
+    }
+
+    if not review.hard_fail and not blocking_issues:
+        metadata_updates.update(
+            {
+                "failure_history": prior_failure_history,
+                "last_failed_at": None,
+                "last_success_at": timestamp,
+            }
+        )
+        return ParagraphTransitionResult(next_state="ready_to_merge", metadata_updates=metadata_updates)
+
+    failure_history = prior_failure_history + [
+        {"attempt": next_attempt, "issues": blocking_issues, "timestamp": timestamp}
+    ]
+
+    requires_manual = (
+        next_attempt >= policy.max_attempts
+        or any(issue in policy.immediate_manual_review_reasons for issue in blocking_issues)
+    )
+
+    metadata_updates.update(
+        {
+            "failure_history": failure_history,
+            "last_failed_at": timestamp,
+            "last_success_at": None,
+        }
+    )
+
+    return ParagraphTransitionResult(
+        next_state="manual_review_required" if requires_manual else "rework_queued",
+        metadata_updates=metadata_updates,
+    )
+
+
+def assert_pipeline_state_allowed(state: str, excluded_by_policy: bool) -> None:
+    _validate_state(state)
+    if excluded_by_policy and state in EXCLUSION_DISALLOWED_STATES:
+        raise ValueError(f"Excluded paragraph cannot transition into active pipeline state '{state}'.")
