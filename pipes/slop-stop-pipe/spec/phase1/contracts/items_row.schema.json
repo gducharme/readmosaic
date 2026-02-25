@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "seedpipe://spec/phase1/contracts/items_row.schema.json",
+  "title": "ItemsRow",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["item_id"],
+  "properties": {
+    "item_id": { "type": "string", "minLength": 1 }
+  }
+}

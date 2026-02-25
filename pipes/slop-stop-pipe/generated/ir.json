@@ -1,0 +1,79 @@
+{
+  "artifact_producers": {
+    "items.jsonl": "ingest",
+    "manifest.json": "publish",
+    "preprocessed.json": "preprocessing",
+    "reviewed.jsonl": "future_review",
+    "transformed.jsonl": "transform",
+    "word_frequency_report.json": "word_frequency_benchmark"
+  },
+  "determinism_policy": "strict",
+  "item_unit": "item",
+  "pipeline_id": "example-pipeline",
+  "stages": [
+    {
+      "inputs": [],
+      "mode": "whole_run",
+      "outputs": [
+        "preprocessed.json"
+      ],
+      "placeholder": false,
+      "stage_id": "preprocessing"
+    },
+    {
+      "inputs": [
+        "preprocessed.json"
+      ],
+      "mode": "whole_run",
+      "outputs": [
+        "word_frequency_report.json"
+      ],
+      "placeholder": false,
+      "stage_id": "word_frequency_benchmark"
+    },
+    {
+      "inputs": [
+        "word_frequency_report.json"
+      ],
+      "mode": "whole_run",
+      "outputs": [
+        "items.jsonl"
+      ],
+      "placeholder": false,
+      "stage_id": "ingest"
+    },
+    {
+      "inputs": [
+        "items.jsonl"
+      ],
+      "mode": "per_item",
+      "outputs": [
+        "transformed.jsonl"
+      ],
+      "placeholder": false,
+      "stage_id": "transform"
+    },
+    {
+      "inputs": [
+        "transformed.jsonl"
+      ],
+      "mode": "whole_run",
+      "outputs": [
+        "reviewed.jsonl"
+      ],
+      "placeholder": true,
+      "stage_id": "future_review"
+    },
+    {
+      "inputs": [
+        "reviewed.jsonl"
+      ],
+      "mode": "whole_run",
+      "outputs": [
+        "manifest.json"
+      ],
+      "placeholder": false,
+      "stage_id": "publish"
+    }
+  ]
+}

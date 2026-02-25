@@ -1,0 +1,40 @@
+pipeline_id: example-pipeline
+item_unit: item
+determinism_policy: strict
+stages:
+  - id: preprocessing
+    mode: whole_run
+    inputs: []
+    outputs:
+      - preprocessed.json
+  - id: word_frequency_benchmark
+    mode: whole_run
+    inputs:
+      - preprocessed.json
+    outputs:
+      - word_frequency_report.json
+  - id: ingest
+    mode: whole_run
+    inputs:
+      - word_frequency_report.json
+    outputs:
+      - items.jsonl
+  - id: transform
+    mode: per_item
+    inputs:
+      - items.jsonl
+    outputs:
+      - transformed.jsonl
+  - id: future_review
+    mode: whole_run
+    placeholder: true
+    inputs:
+      - transformed.jsonl
+    outputs:
+      - reviewed.jsonl
+  - id: publish
+    mode: whole_run
+    inputs:
+      - reviewed.jsonl
+    outputs:
+      - manifest.json
