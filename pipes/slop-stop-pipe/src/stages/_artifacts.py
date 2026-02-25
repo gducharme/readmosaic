@@ -96,3 +96,31 @@ def append_jsonl_artifact(ctx: Any, name: str, row: dict[str, Any]) -> Path:
     with out_path.open('a', encoding='utf-8') as f:
         f.write(json.dumps(row, ensure_ascii=False) + '\n')
     return out_path
+
+
+def stage_config(ctx: Any, stage_id: str) -> dict[str, Any]:
+    """Return per-stage configuration from run_config.rc.
+
+    Supported run_config shapes:
+    - {"rc": {"<stage_id>": {...}}}
+    - {"rc": {"stages": {"<stage_id>": {...}}}}
+    """
+    run_config = getattr(ctx, 'run_config', None)
+    if not isinstance(run_config, dict):
+        return {}
+
+    rc = run_config.get('rc')
+    if not isinstance(rc, dict):
+        return {}
+
+    candidate = rc.get(stage_id)
+    if isinstance(candidate, dict):
+        return candidate
+
+    stages = rc.get('stages')
+    if isinstance(stages, dict):
+        nested = stages.get(stage_id)
+        if isinstance(nested, dict):
+            return nested
+
+    return {}

@@ -4,9 +4,11 @@ import json
 import re
 from pathlib import Path
 
+from ._artifacts import output_artifact_dir, stage_config
+
 PARAGRAPH_SPLIT_RE = re.compile(r"\n\s*\n+")
 WORD_RE = re.compile(r"[A-Za-z']+")
-MANUSCRIPT_PATH = Path("artifacts/inputs/manuscript.md")
+DEFAULT_INPUT_MANUSCRIPT = Path("artifacts/inputs/manuscript.md")
 
 
 def _clean_markdown_line(line: str) -> str:
@@ -40,20 +42,26 @@ def _build_payload(normalized_text: str, manuscript_name: str) -> dict[str, obje
 
 
 def run_whole(ctx) -> None:
-    _ = ctx
-    manuscript_path = MANUSCRIPT_PATH
+    cfg = stage_config(ctx, 'preprocessing')
+
+    manuscript_path_raw = cfg.get('input_manuscript') or cfg.get('manuscript_path')
+    manuscript_path = Path(manuscript_path_raw) if manuscript_path_raw else DEFAULT_INPUT_MANUSCRIPT
+    if not manuscript_path.is_absolute():
+        manuscript_path = Path.cwd() / manuscript_path
+
     if not manuscript_path.exists():
         raise FileNotFoundError(
-            f"Expected hardcoded manuscript file '{MANUSCRIPT_PATH}' relative to the pipe root."
+            f"Expected manuscript file '{manuscript_path}'. Configure run_config.rc.preprocessing.input_manuscript if needed."
         )
 
-    output_dir = Path("artifacts")
+    output_name = str(cfg.get('output_name', 'preprocessed.json'))
+    output_dir = output_artifact_dir(ctx)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    normalized_text = _normalize_text(manuscript_path.read_text(encoding="utf-8"))
+    normalized_text = _normalize_text(manuscript_path.read_text(encoding='utf-8'))
     payload = _build_payload(normalized_text, manuscript_name=manuscript_path.name)
 
-    (output_dir / "preprocessed.json").write_text(
+    (output_dir / output_name).write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
-        encoding="utf-8",
+        encoding='utf-8',
     )
