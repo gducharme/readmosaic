@@ -9,12 +9,12 @@ from typing import Any
 
 from seedpipe.runtime.ctx import StageContext
 from seedpipe.generated.models import ItemResult
-from seedpipe.src.stages import ingest as impl
+from seedpipe.src.stages import preprocessing as impl
 
-STAGE_ID = 'ingest'
+STAGE_ID = 'preprocessing'
 MODE = 'whole_run'
-INPUTS = ['word_frequency_report.json']
-OUTPUTS = ['items.jsonl']
+INPUTS = []
+OUTPUTS = ['preprocessed.json']
 
 def run_whole(ctx: StageContext) -> None:
     ctx.validate_inputs(STAGE_ID, INPUTS)

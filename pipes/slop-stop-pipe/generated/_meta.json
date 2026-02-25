@@ -2,16 +2,18 @@
   "compiler_version": "phase1-mvp",
   "contracts_hash": "sha256:da7fb7e4e9d3ad66fdc6a9db71bdc78268e8206ab9df353348b332de77570731",
   "emitted_files": {
-    "generated/compile_report.json": "sha256:210e07c4bea3f5c9ff5e67e7ebf431140413252b8da618af85db3f4432f065f5",
-    "generated/flow.py": "sha256:573c79d069e80e13507a54279d8b8016c04ab192b3018d488ccc034a6ac8daeb",
-    "generated/ir.json": "sha256:5f93964f7874fba5769a6d3f0d8466305a2903957bfb561970955fcef6761a74",
-    "generated/models.py": "sha256:299a69c68e69b6bdda9727a7415903c1654b779754203ec1790a742ce0f856d7",
-    "generated/stages/__init__.py": "sha256:074f552600b11bc2ac97b5355c17905270ddf25dbf7a663e217112b783eb558c",
-    "generated/stages/future_review.py": "sha256:3cd32b777cbf997ce38633a19f1d4b9b4a9060a9c49ee5c9c8e9538e3d1fd0f4",
-    "generated/stages/ingest.py": "sha256:7050bb94d5bf4951cfb16dd0b1d12cdc7f1752d73aa3de48129282bf57123793",
-    "generated/stages/publish.py": "sha256:5060c22c0dc14deec81a018e75fd1aa770074a162528c9b623b7db48677c2e46",
-    "generated/stages/transform.py": "sha256:759621ebfb9a2944846e014016ab38116f32f7948e382d67faca95e775e8a714"
+    "generated/compile_report.json": "sha256:5a2e8330a81a471d81e937898e08b4c922288220c1dbf93e7de6993d525ae943",
+    "generated/flow.py": "sha256:6b43429a39cc3d5673be22734c6b8307dc044a86e11975df665314d7a446960c",
+    "generated/ir.json": "sha256:1ed6c345acaa056f47b74e052873d3ae156eb8dc1b739b618c8631c43ff1b00b",
+    "generated/models.py": "sha256:48c8c4f07585fc4090cc875de49b6c676cc52c7524bbd26c6d4141e30d0660b8",
+    "generated/stages/__init__.py": "sha256:28451d22e5edfd2f4536cabc84c5e1177726db2bbdef2c22c2b43e7cc136ca66",
+    "generated/stages/future_review.py": "sha256:d40064fa2f4358ea3836f209433027ec32e66dd640ada38a3744e39503f46bbe",
+    "generated/stages/ingest.py": "sha256:50e6099942191c4d74aac6d643a20f055d19ffcb3c6401bc694e5bf1b61826b1",
+    "generated/stages/preprocessing.py": "sha256:9c58a344865460dfa3f68f43047cb33987601f72f9b5b36dbe8ed93795a1bec3",
+    "generated/stages/publish.py": "sha256:cf5f24f1bd7a531f712b0a7ca45788ccc9464d084c6ff56c4327a75b43f0477a",
+    "generated/stages/transform.py": "sha256:5b7b8ddae28557af07c67b6c93bed225b79e513fa90998c58013c9eabbcba0a3",
+    "generated/stages/word_frequency_benchmark.py": "sha256:59751f1a681db9d2e775c57a0d9df951837f46b7308e45c8dd18281d3a172568"
   },
-  "generated_at": "2026-02-25T10:05:44.957552+00:00",
-  "pipeline_hash": "sha256:e5467ee644e6ad8fc6c2c5a1242bc347f79cda67d257370c5d529cd3b2c7c92a"
+  "generated_at": "2026-02-25T11:58:39.988685+00:00",
+  "pipeline_hash": "sha256:3ab64fe27278937d9cd9a7060142977cca79d1fb179e5fba7f29fa4971345b72"
 }
