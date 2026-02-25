@@ -1,0 +1,19 @@
+{
+  "artifact_producers": {
+    "manuscript.mp3": "voice"
+  },
+  "determinism_policy": "strict",
+  "item_unit": "item",
+  "pipeline_id": "voice-pipeline",
+  "stages": [
+    {
+      "inputs": [],
+      "mode": "whole_run",
+      "outputs": [
+        "manuscript.mp3"
+      ],
+      "placeholder": false,
+      "stage_id": "voice"
+    }
+  ]
+}

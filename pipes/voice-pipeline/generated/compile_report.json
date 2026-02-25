@@ -1,0 +1,15 @@
+{
+  "artifact_schema_map": {
+    "manuscript.mp3": "artifact_ref.schema.json"
+  },
+  "compiler_version": "phase1-mvp",
+  "emitted_files": {
+    "generated/flow.py": "sha256:6a132d3bca487873660ad3e34ad2855f4781f7036b9316be96ee16ea21ff0303",
+    "generated/ir.json": "sha256:5f353a49ae8b74329c6c7013729ad9f0edb25cf5b886b1c1e6a43ef2052bc204",
+    "generated/models.py": "sha256:c8642c813a214b50fa7afb8ad63bfcc342a99cb15809d321f254d830b6feed19",
+    "generated/stages/__init__.py": "sha256:11f6709ef1e70ab6737f371c68405ada42e02534d55fb02898784d6fc7ccfeb0",
+    "generated/stages/voice.py": "sha256:b7cc1652b82d4cfef95bb808aae7592c4af4ea59092ce1fbed8e7678b58af711"
+  },
+  "pipeline_id": "voice-pipeline",
+  "warnings": []
+}
