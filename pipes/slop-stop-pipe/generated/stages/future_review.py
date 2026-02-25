@@ -9,13 +9,15 @@ from typing import Any
 
 from seedpipe.runtime.ctx import StageContext
 from seedpipe.generated.models import ItemResult
+from seedpipe.src.stages import future_review as impl
 
 STAGE_ID = 'future_review'
 MODE = 'whole_run'
 INPUTS = ['transformed.jsonl']
 OUTPUTS = ['reviewed.jsonl']
 
+
 def run_whole(ctx: StageContext) -> None:
     ctx.validate_inputs(STAGE_ID, INPUTS)
-    None
+    impl.run_whole(ctx)
     ctx.validate_outputs(STAGE_ID, OUTPUTS)
