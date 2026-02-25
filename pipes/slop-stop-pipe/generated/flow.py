@@ -6,7 +6,9 @@
 from __future__ import annotations
 
 import argparse
+import json
 from datetime import datetime, timezone
+from pathlib import Path
 
 from seedpipe.generated.stages import preprocessing as stage_preprocessing
 from seedpipe.generated.stages import word_frequency_benchmark as stage_word_frequency_benchmark
@@ -77,8 +79,19 @@ def main() -> None:
     parser = argparse.ArgumentParser(description='Run generated Seedpipe flow')
     parser.add_argument('--run-id', required=True)
     parser.add_argument('--attempt', type=int, default=1)
+    parser.add_argument('--rc-json', default='{}', help='JSON object for run_config.rc')
+    parser.add_argument('--rc-file', help='Path to JSON file providing run_config.rc')
     args = parser.parse_args()
-    code = run(run_config={'run_id': args.run_id}, attempt=args.attempt)
+
+    if args.rc_file:
+        rc = json.loads(Path(args.rc_file).read_text(encoding='utf-8'))
+    else:
+        rc = json.loads(args.rc_json)
+
+    if not isinstance(rc, dict):
+        raise TypeError('rc must be a JSON object')
+
+    code = run(run_config={'run_id': args.run_id, 'rc': rc}, attempt=args.attempt)
     raise SystemExit(code)
 
 if __name__ == '__main__':
