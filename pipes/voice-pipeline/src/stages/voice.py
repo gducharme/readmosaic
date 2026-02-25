@@ -8,7 +8,7 @@ from pathlib import Path
 
 from ._artifacts import default_input_candidates, output_artifact_dir, stage_config
 
-DEFAULT_INPUT_MANUSCRIPT_NAME = 'manuscript.markdown'
+DEFAULT_INPUT_MANUSCRIPT_NAMES = ('manuscript.markdown', 'manuscript.md')
 PARAGRAPH_SPLIT_RE = re.compile(r"\n\s*\n+")
 
 
@@ -32,18 +32,23 @@ def _resolve_manuscript_path(ctx, manuscript_config: str | None) -> Path:
             return configured
         return Path.cwd() / configured
 
-    for candidate in default_input_candidates(ctx, DEFAULT_INPUT_MANUSCRIPT_NAME):
-        if candidate.exists():
-            return candidate
+    fallback_candidates: list[Path] = []
+    for manuscript_name in DEFAULT_INPUT_MANUSCRIPT_NAMES:
+        candidates = default_input_candidates(ctx, manuscript_name)
+        fallback_candidates.extend(candidates)
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
 
-    return default_input_candidates(ctx, DEFAULT_INPUT_MANUSCRIPT_NAME)[0]
+    return fallback_candidates[0]
 
 
 def _load_manuscript_text(manuscript_path: Path) -> str:
     if not manuscript_path.exists():
         raise FileNotFoundError(
             f"Expected manuscript markdown at '{manuscript_path}'. "
-            "Provide input artifact 'artifacts/inputs/manuscript.markdown' or set run_config.rc.voice.input_manuscript."
+            "Provide input artifact 'artifacts/inputs/manuscript.markdown' or 'artifacts/inputs/manuscript.md', "
+            "or set run_config.rc.voice.input_manuscript."
         )
 
     cleaned = _clean_markdown_text(manuscript_path.read_text(encoding='utf-8'))
