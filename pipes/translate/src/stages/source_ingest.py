@@ -1,20 +1,103 @@
 from __future__ import annotations
 
+import hashlib
 import json
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Iterable
+
+
+@dataclass(frozen=True)
+class Paragraph:
+    paragraph_id: str
+    text: str
+    content_hash: str
+
+
+def _sha256_bytes(payload: bytes) -> str:
+    return f"sha256:{hashlib.sha256(payload).hexdigest()}"
+
+
+def _sha256_text(payload: str) -> str:
+    return _sha256_bytes(payload.encode("utf-8"))
+
+
+def _split_markdown_paragraphs(markdown: str) -> Iterable[str]:
+    blocks = [part.strip() for part in markdown.replace("\r\n", "\n").split("\n\n")]
+    return [block for block in blocks if block]
+
+
+def _resolve_markdown_input(ctx) -> Path:
+    candidates = []
+
+    inputs_dir = getattr(ctx, "inputs_dir", None)
+    if inputs_dir:
+        inputs_path = Path(inputs_dir)
+        candidates.extend(
+            [
+                inputs_path / "markdown",
+                inputs_path / "markdown.md",
+                inputs_path / "markdown.markdown",
+                inputs_path / "input" / "markdown",
+                inputs_path / "input" / "markdown.md",
+            ]
+        )
+
+    candidates.extend(
+        [
+            Path("artifacts/inputs/markdown"),
+            Path("artifacts/inputs/markdown.md"),
+            Path("artifacts/input/markdown"),
+            Path("artifacts/input/markdown.md"),
+        ]
+    )
+
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+        if candidate.is_dir():
+            matches = sorted(
+                path
+                for pattern in ("*.md", "*.markdown", "*.txt")
+                for path in candidate.glob(pattern)
+                if path.is_file()
+            )
+            if matches:
+                return matches[0]
+
+    raise FileNotFoundError(
+        "Unable to locate input markdown. Expected one of: "
+        "<inputs_dir>/markdown(.md), artifacts/inputs/markdown(.md), "
+        "or artifacts/input/markdown(.md)."
+    )
+
+
+def _build_paragraph_rows(markdown_text: str) -> list[Paragraph]:
+    rows: list[Paragraph] = []
+    for index, paragraph_text in enumerate(_split_markdown_paragraphs(markdown_text), start=1):
+        paragraph_id = f"p-{index:04d}"
+        rows.append(
+            Paragraph(
+                paragraph_id=paragraph_id,
+                text=paragraph_text,
+                content_hash=_sha256_text(paragraph_text),
+            )
+        )
+    return rows
 
 
 def run_whole(ctx) -> None:
-    """Seed stage for the translate pipeline.
-
-    This stage intentionally emits minimal scaffold artifacts so downstream
-    placeholder stages have declared inputs available when needed.
-    """
+    """Ingest markdown source and materialize phase-1 seed artifacts."""
 
     run_id = getattr(ctx, "run_id", "local-run")
     pipeline_id = getattr(ctx, "pipeline_id", "translate-pipeline")
+    attempt = int(getattr(ctx, "attempt", 1))
     now = datetime.now(timezone.utc).isoformat()
+
+    markdown_path = _resolve_markdown_input(ctx)
+    markdown_text = markdown_path.read_text(encoding="utf-8")
+    paragraph_rows = _build_paragraph_rows(markdown_text)
 
     paragraphs_path = Path("source_pre/paragraphs.jsonl")
     state_path = Path("state/paragraph_state.jsonl")
@@ -23,30 +106,97 @@ def run_whole(ctx) -> None:
     paragraphs_path.parent.mkdir(parents=True, exist_ok=True)
     state_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Scaffold with a single starter paragraph row.
-    paragraph = {
-        "paragraph_id": "p-0001",
-        "text": "",
-    }
-    paragraphs_path.write_text(json.dumps(paragraph) + "\n", encoding="utf-8")
+    with paragraphs_path.open("w", encoding="utf-8") as paragraphs_file:
+        for row in paragraph_rows:
+            paragraphs_file.write(
+                json.dumps(
+                    {
+                        "paragraph_id": row.paragraph_id,
+                        "text": row.text,
+                        "content_hash": row.content_hash,
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
 
-    paragraph_state = {
-        "paragraph_id": "p-0001",
-        "state": "pending",
-        "updated_at": now,
+    with state_path.open("w", encoding="utf-8") as state_file:
+        for row in paragraph_rows:
+            state_file.write(
+                json.dumps(
+                    {
+                        "run_id": run_id,
+                        "item_id": row.paragraph_id,
+                        "paragraph_id": row.paragraph_id,
+                        "state": "pending",
+                        "status": "ingested",
+                        "updated_at": now,
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+
+    inputs_ref = {
+        "name": "input_markdown",
+        "path": str(markdown_path),
+        "hash": _sha256_bytes(markdown_path.read_bytes()),
+        "schema_version": "phase1-v0",
+        "produced_by": {
+            "run_id": run_id,
+            "stage_id": "external_input",
+            "attempt": attempt,
+        },
     }
-    state_path.write_text(json.dumps(paragraph_state) + "\n", encoding="utf-8")
+
+    outputs = []
+    for output_path, output_name in (
+        (paragraphs_path, "source_pre_paragraphs"),
+        (state_path, "paragraph_state"),
+    ):
+        outputs.append(
+            {
+                "name": output_name,
+                "path": str(output_path),
+                "hash": _sha256_bytes(output_path.read_bytes()),
+                "schema_version": "phase1-v0",
+                "produced_by": {
+                    "run_id": run_id,
+                    "stage_id": "source_ingest",
+                    "attempt": attempt,
+                },
+            }
+        )
 
     manifest = {
         "manifest_version": "phase1-v0",
         "run_id": run_id,
         "pipeline_id": pipeline_id,
+        "code_version": "source_ingest-v1",
+        "config_hash": _sha256_text("translate-pipeline:phase1")[:15],
         "created_at": now,
-        "stage_id": "source_ingest",
-        "outputs": [
-            "source_pre/paragraphs.jsonl",
-            "state/paragraph_state.jsonl",
-            "manifest.json",
+        "inputs": [inputs_ref],
+        "stage_outputs": [
+            {
+                "stage_id": "source_ingest",
+                "outputs": outputs,
+            }
         ],
     }
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest_data["stage_outputs"][0]["outputs"].append(
+        {
+            "name": "run_manifest",
+            "path": str(manifest_path),
+            "hash": _sha256_bytes(manifest_path.read_bytes()),
+            "schema_version": "phase1-v0",
+            "produced_by": {
+                "run_id": run_id,
+                "stage_id": "source_ingest",
+                "attempt": attempt,
+            },
+        }
+    )
+    manifest_path.write_text(json.dumps(manifest_data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
