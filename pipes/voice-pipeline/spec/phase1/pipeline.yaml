@@ -1,0 +1,9 @@
+pipeline_id: voice-pipeline
+item_unit: item
+determinism_policy: strict
+stages:
+  - id: voice
+    mode: whole_run
+    inputs: []
+    outputs:
+      - manuscript.mp3

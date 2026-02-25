@@ -1,0 +1,14 @@
+{
+  "compiler_version": "phase1-mvp",
+  "contracts_hash": "sha256:da7fb7e4e9d3ad66fdc6a9db71bdc78268e8206ab9df353348b332de77570731",
+  "emitted_files": {
+    "generated/compile_report.json": "sha256:62c92b410bd7ec3ba3f92d8abc58ffea3c3ac8444675877919c83e7f06611480",
+    "generated/flow.py": "sha256:6a132d3bca487873660ad3e34ad2855f4781f7036b9316be96ee16ea21ff0303",
+    "generated/ir.json": "sha256:5f353a49ae8b74329c6c7013729ad9f0edb25cf5b886b1c1e6a43ef2052bc204",
+    "generated/models.py": "sha256:c8642c813a214b50fa7afb8ad63bfcc342a99cb15809d321f254d830b6feed19",
+    "generated/stages/__init__.py": "sha256:11f6709ef1e70ab6737f371c68405ada42e02534d55fb02898784d6fc7ccfeb0",
+    "generated/stages/voice.py": "sha256:b7cc1652b82d4cfef95bb808aae7592c4af4ea59092ce1fbed8e7678b58af711"
+  },
+  "generated_at": "2026-02-25T13:06:52.471813+00:00",
+  "pipeline_hash": "sha256:d15b74f5b0b0db308b62308e9447fd7d1eaa5f5b2be685610fa86ee7b7221ad1"
+}
