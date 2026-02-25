@@ -12,8 +12,8 @@ stages:
       - manifest.json
 
   - id: translate_pass1
-    placeholder: true
-    mode: whole_run
+    placeholder: false
+    mode: per_item
     inputs:
       - source_pre/paragraphs.jsonl
     outputs:

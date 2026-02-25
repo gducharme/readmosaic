@@ -111,6 +111,7 @@ def run_whole(ctx) -> None:
             paragraphs_file.write(
                 json.dumps(
                     {
+                        "item_id": row.paragraph_id,
                         "paragraph_id": row.paragraph_id,
                         "text": row.text,
                         "content_hash": row.content_hash,
