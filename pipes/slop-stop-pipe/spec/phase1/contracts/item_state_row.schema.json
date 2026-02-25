@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "seedpipe://spec/phase1/contracts/item_state_row.schema.json",
+  "title": "ItemStateRow",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["run_id", "item_id", "state", "updated_at"],
+  "properties": {
+    "run_id": { "type": "string", "minLength": 1 },
+    "item_id": { "type": "string", "minLength": 1 },
+    "state": {
+      "type": "string",
+      "enum": ["pending", "in_progress", "succeeded", "failed", "skipped", "quarantined"]
+    },
+    "updated_at": { "type": "string", "format": "date-time" }
+  }
+}
