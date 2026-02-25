@@ -3,6 +3,7 @@ item_unit: paragraph
 determinism_policy: strict
 stages:
   - id: source_ingest
+    placeholder: false
     mode: whole_run
     inputs: []
     outputs:
@@ -11,6 +12,7 @@ stages:
       - manifest.json
 
   - id: translate_pass1
+    placeholder: true
     mode: whole_run
     inputs:
       - source_pre/paragraphs.jsonl
@@ -18,6 +20,7 @@ stages:
       - pass1_pre/paragraphs.jsonl
 
   - id: translate_pass2
+    placeholder: true
     mode: whole_run
     inputs:
       - pass1_pre/paragraphs.jsonl
@@ -25,6 +28,7 @@ stages:
       - pass2_pre/paragraphs.jsonl
 
   - id: candidate_assembly
+    placeholder: true
     mode: whole_run
     inputs:
       - pass2_pre/paragraphs.jsonl
@@ -33,6 +37,7 @@ stages:
       - final/candidate_map.jsonl
 
   - id: review_grammar
+    placeholder: true
     mode: whole_run
     inputs:
       - pass2_pre/paragraphs.jsonl
@@ -40,6 +45,7 @@ stages:
       - review/grammar/review.json
 
   - id: review_typography
+    placeholder: true
     mode: whole_run
     inputs:
       - final/candidate.md
@@ -47,6 +53,7 @@ stages:
       - review/typography/review.json
 
   - id: review_critics
+    placeholder: true
     mode: whole_run
     inputs:
       - final/candidate.md
@@ -54,6 +61,7 @@ stages:
       - review/critics/review.json
 
   - id: map_review_to_paragraphs
+    placeholder: true
     mode: whole_run
     inputs:
       - review/typography/review.json
@@ -64,6 +72,7 @@ stages:
       - review/normalized/critics_paragraph_rows.jsonl
 
   - id: aggregate_paragraph_reviews
+    placeholder: true
     mode: whole_run
     inputs:
       - review/grammar/review.json
@@ -76,6 +85,7 @@ stages:
       - state/paragraph_state.jsonl
 
   - id: final_assembly_and_publish_gate
+    placeholder: true
     mode: whole_run
     inputs:
       - state/paragraph_state.jsonl
