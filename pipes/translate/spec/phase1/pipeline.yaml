@@ -3,19 +3,16 @@ item_unit: paragraph
 determinism_policy: strict
 stages:
   - id: source_ingest
-    placeholder: false
     mode: whole_run
     inputs: []
     outputs:
-      - source_pre/paragraphs.jsonl
-      - state/paragraph_state.jsonl
+      - paragraphs.jsonl
       - manifest.json
 
   - id: translate_pass1
-    placeholder: false
     mode: per_item
     inputs:
-      - source_pre/paragraphs.jsonl
+      - paragraphs.jsonl
     outputs:
       - pass1_pre/paragraphs.jsonl
 
@@ -78,19 +75,16 @@ stages:
       - review/grammar/review.json
       - review/normalized/typography_paragraph_rows.jsonl
       - review/normalized/critics_paragraph_rows.jsonl
-      - state/paragraph_state.jsonl
     outputs:
       - state/paragraph_scores.jsonl
       - state/rework_queue.jsonl
-      - state/paragraph_state.jsonl
 
   - id: final_assembly_and_publish_gate
     placeholder: true
     mode: whole_run
     inputs:
-      - state/paragraph_state.jsonl
       - pass2_pre/paragraphs.jsonl
-      - source_pre/paragraphs.jsonl
+      - paragraphs.jsonl
     outputs:
       - final/final.md
       - final/final_pre/paragraphs.jsonl

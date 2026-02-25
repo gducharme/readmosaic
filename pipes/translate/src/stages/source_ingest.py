@@ -99,12 +99,10 @@ def run_whole(ctx) -> None:
     markdown_text = markdown_path.read_text(encoding="utf-8")
     paragraph_rows = _build_paragraph_rows(markdown_text)
 
-    paragraphs_path = Path("source_pre/paragraphs.jsonl")
-    state_path = Path("state/paragraph_state.jsonl")
+    paragraphs_path = Path("paragraphs.jsonl")
     manifest_path = Path("manifest.json")
 
     paragraphs_path.parent.mkdir(parents=True, exist_ok=True)
-    state_path.parent.mkdir(parents=True, exist_ok=True)
 
     with paragraphs_path.open("w", encoding="utf-8") as paragraphs_file:
         for row in paragraph_rows:
@@ -115,23 +113,6 @@ def run_whole(ctx) -> None:
                         "paragraph_id": row.paragraph_id,
                         "text": row.text,
                         "content_hash": row.content_hash,
-                    },
-                    ensure_ascii=False,
-                )
-                + "\n"
-            )
-
-    with state_path.open("w", encoding="utf-8") as state_file:
-        for row in paragraph_rows:
-            state_file.write(
-                json.dumps(
-                    {
-                        "run_id": run_id,
-                        "item_id": row.paragraph_id,
-                        "paragraph_id": row.paragraph_id,
-                        "state": "pending",
-                        "status": "ingested",
-                        "updated_at": now,
                     },
                     ensure_ascii=False,
                 )
@@ -151,10 +132,7 @@ def run_whole(ctx) -> None:
     }
 
     outputs = []
-    for output_path, output_name in (
-        (paragraphs_path, "source_pre_paragraphs"),
-        (state_path, "paragraph_state"),
-    ):
+    for output_path, output_name in ((paragraphs_path, "paragraphs"),):
         outputs.append(
             {
                 "name": output_name,
