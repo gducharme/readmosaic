@@ -1,0 +1,28 @@
+pipeline_id: example-pipeline
+item_unit: item
+determinism_policy: strict
+stages:
+  - id: ingest
+    mode: whole_run
+    inputs: []
+    outputs:
+      - items.jsonl
+  - id: transform
+    mode: per_item
+    inputs:
+      - items.jsonl
+    outputs:
+      - transformed.jsonl
+  - id: future_review
+    mode: whole_run
+    placeholder: true
+    inputs:
+      - transformed.jsonl
+    outputs:
+      - reviewed.jsonl
+  - id: publish
+    mode: whole_run
+    inputs:
+      - reviewed.jsonl
+    outputs:
+      - manifest.json
