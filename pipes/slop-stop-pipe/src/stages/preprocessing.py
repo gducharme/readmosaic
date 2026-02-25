@@ -6,7 +6,7 @@ from pathlib import Path
 
 PARAGRAPH_SPLIT_RE = re.compile(r"\n\s*\n+")
 WORD_RE = re.compile(r"[A-Za-z']+")
-MANUSCRIPT_FILENAME = "manuscript.md"
+MANUSCRIPT_PATH = Path("artifacts/inputs/manuscript.md")
 
 
 def _clean_markdown_line(line: str) -> str:
@@ -41,10 +41,10 @@ def _build_payload(normalized_text: str, manuscript_name: str) -> dict[str, obje
 
 def run_whole(ctx) -> None:
     _ = ctx
-    manuscript_path = Path(MANUSCRIPT_FILENAME)
+    manuscript_path = MANUSCRIPT_PATH
     if not manuscript_path.exists():
         raise FileNotFoundError(
-            f"Expected hardcoded manuscript file '{MANUSCRIPT_FILENAME}' in the working directory."
+            f"Expected hardcoded manuscript file '{MANUSCRIPT_PATH}' relative to the pipe root."
         )
 
     output_dir = Path("artifacts")
