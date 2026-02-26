@@ -29,10 +29,7 @@ stages:
     mode: whole_run
     inputs:
       - family: pass1_translations
-        foreach: params.targets.languages
-        as: lang
-        pattern: pass1_pre/{lang}/paragraphs.jsonl
-        schema: paragraphs.schema.json
+        bind: lang
     outputs:
       - family: pass2_translations
         foreach: params.targets.languages
@@ -44,10 +41,7 @@ stages:
     mode: whole_run
     inputs:
       - family: pass2_translations
-        foreach: params.targets.languages
-        as: lang
-        pattern: pass2_pre/{lang}/paragraphs.jsonl
-        schema: paragraphs.schema.json
+        bind: lang
     outputs:
       - family: candidate_manuscripts
         foreach: params.targets.languages
@@ -71,9 +65,7 @@ stages:
     mode: whole_run
     inputs:
       - family: candidate_manuscripts
-        foreach: params.targets.languages
-        as: lang
-        pattern: final/{lang}/candidate.md
+        bind: lang
     outputs:
       - family: typography_reviews
         foreach: params.targets.languages
@@ -85,9 +77,7 @@ stages:
     mode: whole_run
     inputs:
       - family: candidate_manuscripts
-        foreach: params.targets.languages
-        as: lang
-        pattern: final/{lang}/candidate.md
+        bind: lang
     outputs:
       - family: critics_reviews
         foreach: params.targets.languages
@@ -99,17 +89,11 @@ stages:
     mode: whole_run
     inputs:
       - family: typography_reviews
-        foreach: params.targets.languages
-        as: lang
-        pattern: review/{lang}/typography/review.json
+        bind: lang
       - family: critics_reviews
-        foreach: params.targets.languages
-        as: lang
-        pattern: review/{lang}/critics/review.json
+        bind: lang
       - family: candidate_paragraph_maps
-        foreach: params.targets.languages
-        as: lang
-        pattern: final/{lang}/candidate_map.jsonl
+        bind: lang
     outputs:
       - family: typography_paragraph_rows
         foreach: params.targets.languages
@@ -126,13 +110,9 @@ stages:
     inputs:
       - review/grammar/review.json
       - family: typography_paragraph_rows
-        foreach: params.targets.languages
-        as: lang
-        pattern: review/{lang}/normalized/typography_paragraph_rows.jsonl
+        bind: lang
       - family: critics_paragraph_rows
-        foreach: params.targets.languages
-        as: lang
-        pattern: review/{lang}/normalized/critics_paragraph_rows.jsonl
+        bind: lang
     outputs:
       - state/paragraph_scores.jsonl
       - state/rework_queue.jsonl
