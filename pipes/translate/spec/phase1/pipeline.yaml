@@ -10,7 +10,7 @@ stages:
       - manifest.json
 
   - id: translate_pass1
-    mode: per_item
+    mode: whole_run
     inputs:
       - paragraphs.jsonl
     outputs:
