@@ -26,12 +26,19 @@ stages:
         schema: paragraphs.schema.json
 
   - id: translate_pass2
-    placeholder: true
     mode: whole_run
     inputs:
-      - pass1_pre/paragraphs.jsonl
+      - family: pass1_translations
+        foreach: params.targets.languages
+        as: lang
+        pattern: pass1_pre/{lang}/paragraphs.jsonl
+        schema: paragraphs.schema.json
     outputs:
-      - pass2_pre/paragraphs.jsonl
+      - family: pass2_translations
+        foreach: params.targets.languages
+        as: lang
+        pattern: pass2_pre/{lang}/paragraphs.jsonl
+        schema: paragraphs.schema.json
 
   - id: candidate_assembly
     placeholder: true

@@ -13,8 +13,8 @@
 The canonical pipeline spec is `spec/phase1/pipeline.yaml` with these stage IDs, in order:
 
 1. `source_ingest` *(active; `placeholder: false`)*
-2. `translate_pass1` *(placeholder)*
-3. `translate_pass2` *(placeholder)*
+2. `translate_pass1` *(active; `placeholder: false`)*
+3. `translate_pass2` *(active; `placeholder: false`)*
 4. `candidate_assembly` *(placeholder)*
 5. `review_grammar` *(placeholder)*
 6. `review_typography` *(placeholder)*
@@ -25,6 +25,5 @@ The canonical pipeline spec is `spec/phase1/pipeline.yaml` with these stage IDs,
 
 Implementation expectations:
 - Only non-placeholder stages must have runnable implementations in `src/stages/`.
-- For the current phase, `src/stages/source_ingest.py` is the only stage module required by the spec.
-- Placeholder stages are kept in the spec for dependency wiring and future implementation.
-
+- For the current phase, `src/stages/source_ingest.py`, `src/stages/translate_pass1.py`, and `src/stages/translate_pass2.py` are required by the spec.
+- Remaining placeholder stages are kept in the spec for dependency wiring and future implementation.
