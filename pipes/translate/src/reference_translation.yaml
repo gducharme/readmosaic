@@ -1,0 +1,186 @@
+targets:
+
+  - code: zh
+    name: Mandarin Chinese
+    l1_millions: 990
+    primary_script: Han (Simplified/Traditional)
+    other_scripts: []
+    writing_direction: LTR
+    script_direction: LTR
+    segmentation: no_whitespace_between_words
+    morphology: analytic
+    honorifics: minimal
+    standard_mt_variant: Modern Standard Mandarin
+    notes: "Use locale to choose Simplified vs Traditional."
+
+  - code: es
+    name: Spanish
+    l1_millions: 484
+    primary_script: Latin
+    writing_direction: LTR
+    segmentation: whitespace
+    morphology: fusional
+    honorifics: T-V distinction
+    notes: ""
+
+  - code: en
+    name: English
+    l1_millions: 390
+    primary_script: Latin
+    writing_direction: LTR
+    segmentation: whitespace
+    morphology: analytic
+    honorifics: none
+
+  - code: hi
+    name: Hindi
+    l1_millions: 345
+    primary_script: Devanagari
+    writing_direction: LTR
+    segmentation: whitespace
+    morphology: fusional
+    honorifics: strong
+
+  - code: ar
+    name: Arabic (MSA for MT)
+    l1_millions: 362
+    primary_script: Arabic
+    other_scripts: [Latin (informal)]
+    writing_direction: RTL
+    script_direction: RTL
+    segmentation: whitespace
+    morphology: templatic
+    honorifics: strong
+    notes: "Bidirectional text handling required."
+
+  - code: bn
+    name: Bengali
+    l1_millions: 234
+    primary_script: Bengali
+    writing_direction: LTR
+    segmentation: whitespace
+    morphology: fusional
+    honorifics: strong
+
+  - code: pt
+    name: Portuguese
+    l1_millions: 221
+    primary_script: Latin
+    writing_direction: LTR
+    segmentation: whitespace
+    morphology: fusional
+    honorifics: moderate
+    notes: "Brazil vs EU lexical divergence."
+
+  - code: ru
+    name: Russian
+    l1_millions: 148
+    primary_script: Cyrillic
+    writing_direction: LTR
+    segmentation: whitespace
+    morphology: fusional
+    honorifics: T-V distinction
+
+  - code: ja
+    name: Japanese
+    l1_millions: 123
+    primary_script: Japanese (Kanji + Kana)
+    other_scripts: [Latin (romaji, limited)]
+    writing_direction: LTR
+    script_direction: mixed
+    segmentation: no_whitespace_between_words
+    morphology: agglutinative
+    honorifics: extremely_strong
+    notes: "Vertical layout possible in publishing."
+
+  - code: pa
+    name: Western Punjabi
+    l1_millions: 93
+    primary_script: Shahmukhi
+    other_scripts: [Gurmukhi]
+    writing_direction: RTL
+    morphology: fusional
+    honorifics: moderate
+
+  - code: mr
+    name: Marathi
+    l1_millions: 83
+    primary_script: Devanagari
+    writing_direction: LTR
+    morphology: fusional
+    honorifics: strong
+
+  - code: te
+    name: Telugu
+    l1_millions: 82
+    primary_script: Telugu
+    writing_direction: LTR
+    morphology: agglutinative
+    honorifics: strong
+
+  - code: ta
+    name: Tamil
+    l1_millions: 79
+    primary_script: Tamil
+    writing_direction: LTR
+    morphology: agglutinative
+    honorifics: strong
+
+  - code: gu
+    name: Gujarati
+    l1_millions: 58
+    primary_script: Gujarati
+    writing_direction: LTR
+    morphology: fusional
+
+  - code: ko
+    name: Korean
+    l1_millions: 81
+    primary_script: Hangul
+    other_scripts: [Hanja (rare)]
+    writing_direction: LTR
+    segmentation: whitespace
+    morphology: agglutinative
+    honorifics: extremely_strong
+
+  - code: vi
+    name: Vietnamese
+    l1_millions: 76
+    primary_script: Latin (Quốc Ngữ)
+    writing_direction: LTR
+    segmentation: whitespace_between_syllables_not_words
+    morphology: analytic
+    honorifics: kinship_based
+    notes: "Tokenization must be word-aware."
+
+  - code: fa
+    name: Persian (Farsi)
+    l1_millions: 65
+    primary_script: Arabic-derived
+    writing_direction: RTL
+    morphology: fusional
+    honorifics: moderate
+
+  - code: tr
+    name: Turkish
+    l1_millions: 84
+    primary_script: Latin
+    writing_direction: LTR
+    morphology: agglutinative
+    honorifics: minimal
+
+  - code: fr
+    name: French
+    l1_millions: 80
+    primary_script: Latin
+    writing_direction: LTR
+    morphology: fusional
+    honorifics: T-V distinction
+
+  - code: it
+    name: Italian
+    l1_millions: 64
+    primary_script: Latin
+    writing_direction: LTR
+    morphology: fusional
+    honorifics: T-V distinction
