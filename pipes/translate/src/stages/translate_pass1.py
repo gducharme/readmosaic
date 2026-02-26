@@ -182,7 +182,8 @@ def _translate_row(
     return {
         "item_id": str(row.get("item_id") or row.get("paragraph_id") or ""),
         "paragraph_id": str(row.get("paragraph_id") or row.get("item_id") or ""),
-        "text": source_text,
+        "text": translation,
+        "source_text": source_text,
         "translation": translation,
         "language": language,
         "model": model,
