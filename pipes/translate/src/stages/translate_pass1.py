@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from typing import Any
 
 sys.path.append(str(Path(__file__).resolve().parents[4]))
 
@@ -13,6 +15,8 @@ from libs.local_llm import (  # noqa: E402
 
 DEFAULT_PROMPT_ROOTS = [Path("prompt/translate"), Path("prompts/translate")]
 STAGE_CONFIG_PATH = Path(__file__).with_name("translate_pass1_config.json")
+SOURCE_ARTIFACT_PATH = Path("paragraphs.jsonl")
+OUTPUT_ARTIFACT_PATH = Path("pass1_pre/paragraphs.jsonl")
 
 
 class TranslationLengthExceededError(RuntimeError):
@@ -116,27 +120,35 @@ def _call_lm(
     )
 
 
-def run_item(ctx, item: dict[str, object]) -> None:
-    cfg = _stage_config(ctx)
+def _load_paragraph_rows(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        raise FileNotFoundError(f"translate_pass1 input artifact missing: {path}")
 
-    language = _normalize_language(str(cfg.get("language", "")))
-    if not language:
-        raise ValueError("translate_pass1 config is missing required 'language'.")
+    rows: list[dict[str, Any]] = []
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        payload = json.loads(line)
+        if not isinstance(payload, dict):
+            continue
+        rows.append(payload)
+    return rows
 
-    model = str(cfg.get("model", "")).strip()
-    if not model:
-        raise ValueError("translate_pass1 config is missing required 'model'.")
 
-    prompt_path = _resolve_prompt_path(language, cfg.get("prompt_root") and str(cfg.get("prompt_root")))
-    system_prompt = prompt_path.read_text(encoding="utf-8")
-
-    base_url = str(cfg.get("base_url", DEFAULT_LM_STUDIO_CHAT_COMPLETIONS_URL))
-    timeout = int(cfg.get("timeout", 180))
-    retry = int(cfg.get("retry", 1))
-    max_length_ratio = float(cfg.get("max_length_ratio", 3.0))
-    temperature = float(cfg.get("temperature", 0.2))
-
-    source_text = str(item.get("text", "")).strip()
+def _translate_row(
+    row: dict[str, Any],
+    *,
+    base_url: str,
+    model: str,
+    system_prompt: str,
+    language: str,
+    timeout: int,
+    retry: int,
+    max_length_ratio: float,
+    temperature: float,
+) -> dict[str, Any]:
+    source_text = str(row.get("text", "")).strip()
     if not source_text:
         raise ValueError("translate_pass1 item is missing non-empty 'text'.")
 
@@ -161,18 +173,76 @@ def run_item(ctx, item: dict[str, object]) -> None:
             if attempt >= retry:
                 break
 
-    row = {
-        "item_id": str(item.get("item_id") or item.get("paragraph_id") or ""),
-        "paragraph_id": str(item.get("paragraph_id") or item.get("item_id") or ""),
+    return {
+        "item_id": str(row.get("item_id") or row.get("paragraph_id") or ""),
+        "paragraph_id": str(row.get("paragraph_id") or row.get("item_id") or ""),
         "text": source_text,
         "translation": translation,
         "language": language,
         "model": model,
-        "prompt": str(prompt_path),
+        "prompt": str(row.get("prompt") or ""),
         "error": error,
+        "content_hash": row.get("content_hash"),
     }
 
-    out_path = Path("pass1_pre/paragraphs.jsonl")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with out_path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+def run_whole(ctx) -> None:
+    cfg = _stage_config(ctx)
+
+    language = _normalize_language(str(cfg.get("language", "")))
+    if not language:
+        raise ValueError("translate_pass1 config is missing required 'language'.")
+
+    model = str(cfg.get("model", "")).strip()
+    if not model:
+        raise ValueError("translate_pass1 config is missing required 'model'.")
+
+    prompt_path = _resolve_prompt_path(language, cfg.get("prompt_root") and str(cfg.get("prompt_root")))
+    system_prompt = prompt_path.read_text(encoding="utf-8")
+
+    base_url = str(cfg.get("base_url", DEFAULT_LM_STUDIO_CHAT_COMPLETIONS_URL))
+    timeout = int(cfg.get("timeout", 180))
+    retry = int(cfg.get("retry", 1))
+    max_length_ratio = float(cfg.get("max_length_ratio", 3.0))
+    temperature = float(cfg.get("temperature", 0.2))
+    concurrency = max(1, int(cfg.get("concurrency", 1)))
+
+    input_rows = _load_paragraph_rows(SOURCE_ARTIFACT_PATH)
+    results: list[dict[str, Any]] = []
+
+    def process_row(row: dict[str, Any]) -> dict[str, Any]:
+        translated = _translate_row(
+            row,
+            base_url=base_url,
+            model=model,
+            system_prompt=system_prompt,
+            language=language,
+            timeout=timeout,
+            retry=retry,
+            max_length_ratio=max_length_ratio,
+            temperature=temperature,
+        )
+        translated["prompt"] = str(prompt_path)
+        return translated
+
+    if concurrency == 1:
+        for row in input_rows:
+            results.append(process_row(row))
+    else:
+        with ThreadPoolExecutor(max_workers=concurrency) as pool:
+            futures = [pool.submit(process_row, row) for row in input_rows]
+            for future in as_completed(futures):
+                results.append(future.result())
+        order = {str(row.get("paragraph_id") or row.get("item_id") or ""): idx for idx, row in enumerate(input_rows)}
+        results.sort(key=lambda row: order.get(str(row.get("paragraph_id") or row.get("item_id") or ""), 10**9))
+
+    OUTPUT_ARTIFACT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with OUTPUT_ARTIFACT_PATH.open("w", encoding="utf-8") as output_file:
+        for row in results:
+            output_file.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def run_item(ctx, item: dict[str, object]) -> None:
+    """Compatibility shim for older per-item mode; delegates to whole-run processing."""
+    _ = item
+    run_whole(ctx)
