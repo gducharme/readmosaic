@@ -67,14 +67,20 @@ def _candidate_prompt_paths(prompt_root: Path, language: str) -> list[Path]:
 
 def _resolve_prompt_path(language: str, prompt_root: str | None) -> Path:
     roots = [Path(prompt_root)] if prompt_root else DEFAULT_PROMPT_ROOTS
-    for root in roots:
-        if not root.exists() or not root.is_dir():
-            continue
-        for candidate in _candidate_prompt_paths(root, language):
-            if candidate.exists() and candidate.is_file():
-                return candidate
+    scope_roots = [Path.cwd(), Path(__file__).resolve().parents[3], Path(__file__).resolve().parents[4]]
 
-    roots_display = ", ".join(str(root) for root in roots)
+    checked_roots: list[Path] = []
+    for root in roots:
+        expanded_roots = [root] if root.is_absolute() else [scope_root / root for scope_root in scope_roots]
+        for expanded_root in expanded_roots:
+            checked_roots.append(expanded_root)
+            if not expanded_root.exists() or not expanded_root.is_dir():
+                continue
+            for candidate in _candidate_prompt_paths(expanded_root, language):
+                if candidate.exists() and candidate.is_file():
+                    return candidate
+
+    roots_display = ", ".join(str(root) for root in checked_roots)
     raise FileNotFoundError(
         f"No translation prompt found for language '{language}'. Checked: {roots_display}."
     )
