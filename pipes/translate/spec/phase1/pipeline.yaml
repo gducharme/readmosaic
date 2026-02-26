@@ -1,0 +1,134 @@
+pipeline_id: translate-pipeline
+item_unit: paragraph
+determinism_policy: strict
+
+params:
+  targets:
+    languages: ["french", "deutch", "arabic"]
+
+stages:
+  - id: source_ingest
+    mode: whole_run
+    inputs: []
+    outputs:
+      - paragraphs.jsonl
+      - manifest.json
+
+  - id: translate_pass1
+    mode: whole_run
+    inputs:
+      - paragraphs.jsonl
+    outputs:
+      - family: pass1_translations
+        foreach: params.targets.languages
+        as: lang
+        pattern: pass1_pre/{lang}/paragraphs.jsonl
+        schema: paragraphs.schema.json
+
+  - id: translate_pass2
+    foreach: params.targets.languages
+    as: lang
+    mode: whole_run
+    inputs:
+      - paragraphs.jsonl
+      - family: pass1_translations
+        bind: lang
+    outputs:
+      - family: pass2_translations
+        foreach: params.targets.languages
+        as: lang
+        pattern: pass2_pre/{lang}/paragraphs.jsonl
+        schema: paragraphs.schema.json
+
+  - id: candidate_assembly
+    foreach: params.targets.languages
+    as: lang
+    mode: whole_run
+    inputs:
+      - family: pass2_translations
+        bind: lang
+    outputs:
+      - family: candidate_manuscripts
+        foreach: params.targets.languages
+        as: lang
+        pattern: final/{lang}/candidate.md
+      - family: candidate_paragraph_maps
+        foreach: params.targets.languages
+        as: lang
+        pattern: final/{lang}/candidate_map.jsonl
+
+  - id: review_grammar
+    placeholder: true
+    mode: whole_run
+    inputs:
+      - pass2_pre/paragraphs.jsonl
+    outputs:
+      - review/grammar/review.json
+
+  - id: review_typography
+    placeholder: true
+    mode: whole_run
+    inputs:
+      - family: candidate_manuscripts
+        bind: lang
+    outputs:
+      - family: typography_reviews
+        foreach: params.targets.languages
+        as: lang
+        pattern: review/{lang}/typography/review.json
+
+  - id: review_critics
+    placeholder: true
+    mode: whole_run
+    inputs:
+      - family: candidate_manuscripts
+        bind: lang
+    outputs:
+      - family: critics_reviews
+        foreach: params.targets.languages
+        as: lang
+        pattern: review/{lang}/critics/review.json
+
+  - id: map_review_to_paragraphs
+    placeholder: true
+    mode: whole_run
+    inputs:
+      - family: typography_reviews
+        bind: lang
+      - family: critics_reviews
+        bind: lang
+      - family: candidate_paragraph_maps
+        bind: lang
+    outputs:
+      - family: typography_paragraph_rows
+        foreach: params.targets.languages
+        as: lang
+        pattern: review/{lang}/normalized/typography_paragraph_rows.jsonl
+      - family: critics_paragraph_rows
+        foreach: params.targets.languages
+        as: lang
+        pattern: review/{lang}/normalized/critics_paragraph_rows.jsonl
+
+  - id: aggregate_paragraph_reviews
+    placeholder: true
+    mode: whole_run
+    inputs:
+      - review/grammar/review.json
+      - family: typography_paragraph_rows
+        bind: lang
+      - family: critics_paragraph_rows
+        bind: lang
+    outputs:
+      - state/paragraph_scores.jsonl
+      - state/rework_queue.jsonl
+
+  - id: final_assembly_and_publish_gate
+    placeholder: true
+    mode: whole_run
+    inputs:
+      - pass2_pre/paragraphs.jsonl
+      - paragraphs.jsonl
+    outputs:
+      - final/final.md
+      - final/final_pre/paragraphs.jsonl
+      - gate/gate_report.json
