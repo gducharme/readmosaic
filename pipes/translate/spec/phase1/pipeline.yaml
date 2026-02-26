@@ -1,6 +1,11 @@
 pipeline_id: translate-pipeline
 item_unit: paragraph
 determinism_policy: strict
+
+params:
+  targets:
+    languages: ["french", "deutch", "arabic"]
+
 stages:
   - id: source_ingest
     mode: whole_run
@@ -14,7 +19,11 @@ stages:
     inputs:
       - paragraphs.jsonl
     outputs:
-      - pass1_pre/paragraphs.jsonl
+      - family: pass1_translations
+        foreach: params.targets.languages
+        as: lang
+        pattern: pass1_pre/{lang}/paragraphs.jsonl
+        schema: paragraphs.schema.json
 
   - id: translate_pass2
     placeholder: true
