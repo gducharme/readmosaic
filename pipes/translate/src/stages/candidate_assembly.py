@@ -9,11 +9,16 @@ CANDIDATE_PATTERN = "final/{lang}/candidate.md"
 MAP_PATTERN = "final/{lang}/candidate_map.jsonl"
 
 
+def _context_keys(ctx) -> dict[str, str]:
+    for attr in ("keys", "bindings"):
+        key_map = getattr(ctx, attr, None)
+        if isinstance(key_map, dict):
+            return {str(key): str(value) for key, value in key_map.items()}
+    return {}
+
+
 def _binding_value(ctx, key: str) -> str | None:
-    bindings = getattr(ctx, "bindings", None)
-    if not isinstance(bindings, dict):
-        return None
-    value = bindings.get(key)
+    value = _context_keys(ctx).get(key)
     if value is None:
         return None
     return str(value)
@@ -34,7 +39,7 @@ def _resolve_input_artifact_path(ctx, language: str) -> Path:
         concrete_path = candidate.get("path")
         if not isinstance(concrete_path, str) or not concrete_path.strip():
             continue
-        candidate_bindings = candidate.get("bindings")
+        candidate_bindings = candidate.get("keys") or candidate.get("bindings")
         if isinstance(candidate_bindings, dict):
             lang_value = candidate_bindings.get("lang") or candidate_bindings.get("language")
             if language and lang_value and str(lang_value) != language:
@@ -57,7 +62,7 @@ def _resolve_output_artifact_path(ctx, language: str, default_pattern: str, *, f
             continue
         if file_suffix and not concrete_path.endswith(file_suffix):
             continue
-        candidate_bindings = candidate.get("bindings")
+        candidate_bindings = candidate.get("keys") or candidate.get("bindings")
         if isinstance(candidate_bindings, dict):
             lang_value = candidate_bindings.get("lang") or candidate_bindings.get("language")
             if language and lang_value and str(lang_value) != language:
