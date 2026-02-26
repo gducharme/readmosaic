@@ -26,8 +26,11 @@ stages:
         schema: paragraphs.schema.json
 
   - id: translate_pass2
+    foreach: params.targets.languages
+    as: lang
     mode: whole_run
     inputs:
+      - paragraphs.jsonl
       - family: pass1_translations
         bind: lang
     outputs:
@@ -38,6 +41,8 @@ stages:
         schema: paragraphs.schema.json
 
   - id: candidate_assembly
+    foreach: params.targets.languages
+    as: lang
     mode: whole_run
     inputs:
       - family: pass2_translations
