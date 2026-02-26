@@ -16,7 +16,6 @@ from libs.local_llm import (  # noqa: E402
 DEFAULT_PROMPT_ROOTS = [Path("prompt/translate"), Path("prompts/translate")]
 STAGE_CONFIG_PATH = Path(__file__).with_name("translate_pass1_config.json")
 SOURCE_ARTIFACT_PATH = Path("paragraphs.jsonl")
-OUTPUT_ARTIFACT_PATH = Path("pass1_pre/paragraphs.jsonl")
 
 
 class TranslationLengthExceededError(RuntimeError):
@@ -49,6 +48,67 @@ def _stage_config(ctx) -> dict[str, object]:
                     config.update(stage_cfg)
 
     return config
+
+
+def _binding_value(ctx, key: str) -> str | None:
+    bindings = getattr(ctx, "bindings", None)
+    if not isinstance(bindings, dict):
+        return None
+
+    value = bindings.get(key)
+    if value is None:
+        return None
+    return str(value)
+
+
+
+
+def _binding_map(ctx) -> dict[str, str]:
+    bindings = getattr(ctx, "bindings", None)
+    if not isinstance(bindings, dict):
+        return {}
+    return {str(key): str(value) for key, value in bindings.items()}
+
+
+def _resolve_output_artifact_path(ctx, language: str) -> Path:
+    bindings = _binding_map(ctx)
+    if language:
+        bindings.setdefault("lang", language)
+        bindings.setdefault("language", language)
+
+    output_candidates: list[dict[str, object]] = []
+    for attr in ("outputs", "output_artifacts", "stage_outputs", "artifacts"):
+        value = getattr(ctx, attr, None)
+        if isinstance(value, list):
+            output_candidates.extend(candidate for candidate in value if isinstance(candidate, dict))
+
+    for candidate in output_candidates:
+        pattern_entry = candidate.get("pattern")
+        concrete_path = candidate.get("path")
+        if not isinstance(pattern_entry, str) or not isinstance(concrete_path, str):
+            continue
+        if not concrete_path.strip():
+            continue
+
+        candidate_bindings = candidate.get("bindings")
+        if isinstance(candidate_bindings, dict):
+            normalized = {str(key): str(value) for key, value in candidate_bindings.items()}
+            if bindings and normalized and normalized != bindings:
+                continue
+            lang_value = normalized.get("lang") or normalized.get("language")
+            if language and lang_value and lang_value != language:
+                continue
+
+        if "{lang}" in pattern_entry and language and f"/{language}/" not in concrete_path.replace('\\', '/'):
+            continue
+
+        return Path(concrete_path)
+
+    pattern = "pass1_pre/{lang}/paragraphs.jsonl"
+    try:
+        return Path(pattern.format(**bindings))
+    except KeyError:
+        return Path("pass1_pre") / language / "paragraphs.jsonl"
 
 
 def _normalize_language(language: str) -> str:
@@ -196,9 +256,10 @@ def _translate_row(
 def run_whole(ctx) -> None:
     cfg = _stage_config(ctx)
 
-    language = _normalize_language(str(cfg.get("language", "")))
+    language_binding = _binding_value(ctx, "lang") or _binding_value(ctx, "language")
+    language = _normalize_language(language_binding or "")
     if not language:
-        raise ValueError("translate_pass1 config is missing required 'language'.")
+        raise ValueError("translate_pass1 is missing required language binding ('lang').")
 
     model = str(cfg.get("model", "")).strip()
     if not model:
@@ -243,8 +304,9 @@ def run_whole(ctx) -> None:
         order = {str(row.get("paragraph_id") or row.get("item_id") or ""): idx for idx, row in enumerate(input_rows)}
         results.sort(key=lambda row: order.get(str(row.get("paragraph_id") or row.get("item_id") or ""), 10**9))
 
-    OUTPUT_ARTIFACT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with OUTPUT_ARTIFACT_PATH.open("w", encoding="utf-8") as output_file:
+    output_artifact_path = _resolve_output_artifact_path(ctx, language)
+    output_artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_artifact_path.open("w", encoding="utf-8") as output_file:
         for row in results:
             output_file.write(json.dumps(row, ensure_ascii=False) + "\n")
 
