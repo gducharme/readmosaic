@@ -41,13 +41,22 @@ stages:
         schema: paragraphs.schema.json
 
   - id: candidate_assembly
-    placeholder: true
     mode: whole_run
     inputs:
-      - pass2_pre/paragraphs.jsonl
+      - family: pass2_translations
+        foreach: params.targets.languages
+        as: lang
+        pattern: pass2_pre/{lang}/paragraphs.jsonl
+        schema: paragraphs.schema.json
     outputs:
-      - final/candidate.md
-      - final/candidate_map.jsonl
+      - family: candidate_manuscripts
+        foreach: params.targets.languages
+        as: lang
+        pattern: final/{lang}/candidate.md
+      - family: candidate_paragraph_maps
+        foreach: params.targets.languages
+        as: lang
+        pattern: final/{lang}/candidate_map.jsonl
 
   - id: review_grammar
     placeholder: true
@@ -61,36 +70,69 @@ stages:
     placeholder: true
     mode: whole_run
     inputs:
-      - final/candidate.md
+      - family: candidate_manuscripts
+        foreach: params.targets.languages
+        as: lang
+        pattern: final/{lang}/candidate.md
     outputs:
-      - review/typography/review.json
+      - family: typography_reviews
+        foreach: params.targets.languages
+        as: lang
+        pattern: review/{lang}/typography/review.json
 
   - id: review_critics
     placeholder: true
     mode: whole_run
     inputs:
-      - final/candidate.md
+      - family: candidate_manuscripts
+        foreach: params.targets.languages
+        as: lang
+        pattern: final/{lang}/candidate.md
     outputs:
-      - review/critics/review.json
+      - family: critics_reviews
+        foreach: params.targets.languages
+        as: lang
+        pattern: review/{lang}/critics/review.json
 
   - id: map_review_to_paragraphs
     placeholder: true
     mode: whole_run
     inputs:
-      - review/typography/review.json
-      - review/critics/review.json
-      - final/candidate_map.jsonl
+      - family: typography_reviews
+        foreach: params.targets.languages
+        as: lang
+        pattern: review/{lang}/typography/review.json
+      - family: critics_reviews
+        foreach: params.targets.languages
+        as: lang
+        pattern: review/{lang}/critics/review.json
+      - family: candidate_paragraph_maps
+        foreach: params.targets.languages
+        as: lang
+        pattern: final/{lang}/candidate_map.jsonl
     outputs:
-      - review/normalized/typography_paragraph_rows.jsonl
-      - review/normalized/critics_paragraph_rows.jsonl
+      - family: typography_paragraph_rows
+        foreach: params.targets.languages
+        as: lang
+        pattern: review/{lang}/normalized/typography_paragraph_rows.jsonl
+      - family: critics_paragraph_rows
+        foreach: params.targets.languages
+        as: lang
+        pattern: review/{lang}/normalized/critics_paragraph_rows.jsonl
 
   - id: aggregate_paragraph_reviews
     placeholder: true
     mode: whole_run
     inputs:
       - review/grammar/review.json
-      - review/normalized/typography_paragraph_rows.jsonl
-      - review/normalized/critics_paragraph_rows.jsonl
+      - family: typography_paragraph_rows
+        foreach: params.targets.languages
+        as: lang
+        pattern: review/{lang}/normalized/typography_paragraph_rows.jsonl
+      - family: critics_paragraph_rows
+        foreach: params.targets.languages
+        as: lang
+        pattern: review/{lang}/normalized/critics_paragraph_rows.jsonl
     outputs:
       - state/paragraph_scores.jsonl
       - state/rework_queue.jsonl
