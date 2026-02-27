@@ -5,28 +5,7 @@ determinism_policy: strict
 params:
   targets:
     languages:
-      - Arabic
-      - Bengali
-      - English
       - French
-      - Gujarati
-      - Hindi
-      - Italian
-      - Japanese
-      - Korean
-      - Mandarin_Chinese
-      - Marathi
-      - Norwegian
-      - Persian
-      - Portuguese
-      - Russian
-      - Spanish
-      - Tamazight
-      - Tamil
-      - Telugu
-      - Turkish
-      - Vietnamese
-      - Western_Punjabi
 
 stages:
   - id: source_ingest
@@ -69,13 +48,29 @@ stages:
         pattern: pass2_pre/{lang}/paragraphs.jsonl
         schema: paragraphs.schema.json
 
+  - id: qa_review
+    foreach: params.targets.languages
+    key: lang
+    mode: whole_run
+    inputs:
+      - family: paragraphs
+        pattern: paragraphs.jsonl
+        schema: paragraphs.schema.json
+      - family: pass2_translations
+        pattern: pass2_pre/{lang}/paragraphs.jsonl
+        schema: paragraphs.schema.json
+    outputs:
+      - family: qa_reviewed_translations
+        pattern: qa_review/{lang}/paragraphs.jsonl
+        schema: paragraphs.schema.json
+
   - id: candidate_assembly
     foreach: params.targets.languages
     key: lang
     mode: whole_run
     inputs:
-      - family: pass2_translations
-        pattern: pass2_pre/{lang}/paragraphs.jsonl
+      - family: qa_reviewed_translations
+        pattern: qa_review/{lang}/paragraphs.jsonl
         schema: paragraphs.schema.json
     outputs:
       - family: candidate_manuscripts
