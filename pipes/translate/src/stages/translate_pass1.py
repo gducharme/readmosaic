@@ -1,17 +1,15 @@
 from __future__ import annotations
 
 import json
-import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
-sys.path.append(str(Path(__file__).resolve().parents[4]))
-
-from libs.local_llm import (  # noqa: E402
-    DEFAULT_LM_STUDIO_CHAT_COMPLETIONS_URL,
-    request_chat_completion_content_streaming,
+from ..lib.local_llm_client import (
+    DEFAULT_CHAT_COMPLETIONS_URL,
+    chat_completion_streaming,
 )
+from ..lib.progress import ProgressBar
 
 DEFAULT_PROMPT_ROOTS = [Path("prompt/translate"), Path("prompts/translate")]
 STAGE_CONFIG_PATH = Path(__file__).with_name("translate_pass1_config.json")
@@ -176,12 +174,12 @@ def _call_lm(
                 f"({streamed_len}>{max_streamed_len})."
             )
 
-    return request_chat_completion_content_streaming(
-        base_url,
-        model,
-        system_prompt,
-        user_prompt,
-        timeout,
+    return chat_completion_streaming(
+        base_url=base_url,
+        model=model,
+        system_prompt=system_prompt,
+        user_content=user_prompt,
+        timeout=timeout,
         temperature=temperature,
         chunk_callback=check_chunk,
     )
@@ -269,7 +267,7 @@ def run_whole(ctx) -> None:
     prompt_path = _resolve_prompt_path(language, cfg.get("prompt_root") and str(cfg.get("prompt_root")))
     system_prompt = prompt_path.read_text(encoding="utf-8")
 
-    base_url = str(cfg.get("base_url", DEFAULT_LM_STUDIO_CHAT_COMPLETIONS_URL))
+    base_url = str(cfg.get("base_url", DEFAULT_CHAT_COMPLETIONS_URL))
     timeout = int(cfg.get("timeout", 180))
     retry = int(cfg.get("retry", 1))
     max_length_ratio = float(cfg.get("max_length_ratio", 3.0))
@@ -277,7 +275,13 @@ def run_whole(ctx) -> None:
     concurrency = max(1, int(cfg.get("concurrency", 1)))
 
     input_rows = _load_paragraph_rows(SOURCE_ARTIFACT_PATH)
-    results: list[dict[str, Any]] = []
+    progress = ProgressBar(
+        len(input_rows),
+        label=f"translate_pass1:{language}",
+        color=True,
+    )
+    progress.print(0, failed=0)
+    failed_count = 0
 
     def process_row(row: dict[str, Any]) -> dict[str, Any]:
         translated = _translate_row(
@@ -294,22 +298,41 @@ def run_whole(ctx) -> None:
         translated["prompt"] = str(prompt_path)
         return translated
 
-    if concurrency == 1:
-        for row in input_rows:
-            results.append(process_row(row))
-    else:
-        with ThreadPoolExecutor(max_workers=concurrency) as pool:
-            futures = [pool.submit(process_row, row) for row in input_rows]
-            for future in as_completed(futures):
-                results.append(future.result())
-        order = {str(row.get("paragraph_id") or row.get("item_id") or ""): idx for idx, row in enumerate(input_rows)}
-        results.sort(key=lambda row: order.get(str(row.get("paragraph_id") or row.get("item_id") or ""), 10**9))
-
     output_artifact_path = _resolve_output_artifact_path(ctx, language)
     output_artifact_path.parent.mkdir(parents=True, exist_ok=True)
     with output_artifact_path.open("w", encoding="utf-8") as output_file:
-        for row in results:
-            output_file.write(json.dumps(row, ensure_ascii=False) + "\n")
+        if concurrency == 1:
+            completed = 0
+            for row in input_rows:
+                result = process_row(row)
+                output_file.write(json.dumps(result, ensure_ascii=False) + "\n")
+                output_file.flush()
+                completed += 1
+                if result.get("error"):
+                    failed_count += 1
+                progress.print(completed, failed=failed_count)
+        else:
+            with ThreadPoolExecutor(max_workers=concurrency) as pool:
+                future_to_idx = {
+                    pool.submit(process_row, row): idx
+                    for idx, row in enumerate(input_rows)
+                }
+                buffered: dict[int, dict[str, Any]] = {}
+                next_idx = 0
+                completed = 0
+                for future in as_completed(future_to_idx):
+                    idx = future_to_idx[future]
+                    buffered[idx] = future.result()
+                    while next_idx in buffered:
+                        ordered_result = buffered.pop(next_idx)
+                        output_file.write(json.dumps(ordered_result, ensure_ascii=False) + "\n")
+                        output_file.flush()
+                        completed += 1
+                        if ordered_result.get("error"):
+                            failed_count += 1
+                        progress.print(completed, failed=failed_count)
+                        next_idx += 1
+    progress.done(len(input_rows), failed=failed_count)
 
 
 def run_item(ctx, item: dict[str, object]) -> None:
