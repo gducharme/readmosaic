@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "seedpipe://spec/stages/publish/manifest.schema.json",
+  "title": "SlopStopPublishManifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "run_id",
+    "pipeline_id",
+    "created_at",
+    "artifacts_dir",
+    "reviewed_item_count",
+    "approved_item_count",
+    "rejected_item_count",
+    "summary_artifact"
+  ],
+  "properties": {
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "pipeline_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "artifacts_dir": {
+      "type": "string"
+    },
+    "reviewed_item_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "approved_item_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "rejected_item_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "summary_artifact": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

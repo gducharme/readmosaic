@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "seedpipe://spec/stages/word_frequency_benchmark/word_frequency_report.schema.json",
+  "title": "SlopStopWordFrequencyReport",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "manuscript",
+    "token_count",
+    "unique_word_count",
+    "brown_total_tokens",
+    "stopwords_filtered",
+    "top_words",
+    "word_frequency"
+  ],
+  "properties": {
+    "manuscript": {
+      "type": "string",
+      "minLength": 1
+    },
+    "token_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "unique_word_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "brown_total_tokens": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "stopwords_filtered": {
+      "type": "boolean"
+    },
+    "top_words": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "rank",
+          "word",
+          "manuscript_count",
+          "manuscript_per_million",
+          "brown_count",
+          "brown_per_million"
+        ],
+        "properties": {
+          "rank": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "word": {
+            "type": "string",
+            "minLength": 1
+          },
+          "manuscript_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "manuscript_per_million": {
+            "type": "number",
+            "minimum": 0
+          },
+          "brown_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "brown_per_million": {
+            "type": "number",
+            "minimum": 0
+          },
+          "relative_to_humanity_avg": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "word_frequency": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0
+      }
+    }
+  }
+}

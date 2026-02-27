@@ -1,40 +1,82 @@
-pipeline_id: example-pipeline
-item_unit: item
+pipeline_id: slop-stop-pipeline
+item_unit: paragraph
 determinism_policy: strict
+
 stages:
   - id: preprocessing
     mode: whole_run
     inputs: []
     outputs:
-      - preprocessed.json
+      - family: preprocessed
+        pattern: preprocessed/preprocessed.json
+        schema: preprocessed.schema.json
+      - family: paragraphs
+        pattern: preprocessed/paragraphs.jsonl
+        schema: paragraphs.schema.json
+
   - id: word_frequency_benchmark
     mode: whole_run
     inputs:
-      - preprocessed.json
+      - family: preprocessed
+        pattern: preprocessed/preprocessed.json
+        schema: preprocessed.schema.json
     outputs:
-      - word_frequency_report.json
-  - id: ingest
+      - family: lexical_frequency
+        pattern: lexical/word_frequency_report.json
+        schema: word_frequency_report.schema.json
+
+  - id: style_slop_detectors
     mode: whole_run
     inputs:
-      - word_frequency_report.json
+      - family: preprocessed
+        pattern: preprocessed/preprocessed.json
+        schema: preprocessed.schema.json
+      - family: lexical_frequency
+        pattern: lexical/word_frequency_report.json
+        schema: word_frequency_report.schema.json
     outputs:
-      - items.jsonl
+      - family: style_slop_findings
+        pattern: diagnostics/style_slop_findings.json
+        schema: style_slop_findings.schema.json
+      - family: rewrite_candidates
+        pattern: diagnostics/rewrite_candidates.jsonl
+        schema: rewrite_candidates.schema.json
+
   - id: transform
-    mode: per_item
-    inputs:
-      - items.jsonl
-    outputs:
-      - transformed.jsonl
-  - id: future_review
     mode: whole_run
-    placeholder: true
     inputs:
-      - transformed.jsonl
+      - family: rewrite_candidates
+        pattern: diagnostics/rewrite_candidates.jsonl
+        schema: rewrite_candidates.schema.json
     outputs:
-      - reviewed.jsonl
+      - family: transformed_rewrites
+        pattern: transforms/transformed.jsonl
+        schema: transformed_rewrites.schema.json
+
+  - id: reviewer_pass
+    mode: whole_run
+    inputs:
+      - family: transformed_rewrites
+        pattern: transforms/transformed.jsonl
+        schema: transformed_rewrites.schema.json
+    outputs:
+      - family: reviewed_rewrites
+        pattern: review/reviewed.jsonl
+        schema: reviewed_rewrites.schema.json
+      - family: review_summary
+        pattern: review/review_summary.json
+        schema: review_summary.schema.json
+
   - id: publish
     mode: whole_run
     inputs:
-      - reviewed.jsonl
+      - family: reviewed_rewrites
+        pattern: review/reviewed.jsonl
+        schema: reviewed_rewrites.schema.json
+      - family: review_summary
+        pattern: review/review_summary.json
+        schema: review_summary.schema.json
     outputs:
-      - manifest.json
+      - family: manifest
+        pattern: manifest.json
+        schema: manifest.schema.json

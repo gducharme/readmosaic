@@ -3,33 +3,86 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 
 def _pipe_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+def _iter_artifact_specs(ctx: Any, kind: str) -> Iterable[dict[str, Any]]:
+    attrs = (
+        ("input", ("inputs", "input_artifacts", "stage_inputs", "expected_inputs", "artifacts")),
+        ("output", ("outputs", "output_artifacts", "stage_outputs", "expected_outputs", "artifacts")),
+    )
+    names: tuple[str, ...] = ()
+    for artifact_kind, candidates in attrs:
+        if artifact_kind == kind:
+            names = candidates
+            break
+
+    for attr in names:
+        value = getattr(ctx, attr, None)
+        if isinstance(value, list):
+            for row in value:
+                if isinstance(row, dict):
+                    yield row
+                elif isinstance(row, str) and row.strip():
+                    yield {"path": row.strip()}
+
+
+def _resolve_from_ctx(
+    ctx: Any,
+    *,
+    kind: str,
+    family: str | None = None,
+    suffix: str | None = None,
+) -> Path | None:
+    for spec in _iter_artifact_specs(ctx, kind):
+        spec_family = spec.get("family")
+        concrete_path = spec.get("path")
+        if not isinstance(concrete_path, str) or not concrete_path.strip():
+            continue
+        if family and spec_family and spec_family != family:
+            continue
+        if suffix and not concrete_path.endswith(suffix):
+            continue
+        return Path(concrete_path)
+    return None
+
+
 def output_artifact_dir(ctx: Any) -> Path:
-    run_id = str(getattr(ctx, 'run_id', '') or '').strip()
-    if run_id:
-        return _pipe_root() / 'artifacts' / 'outputs' / run_id / 'artifacts'
-    return _pipe_root() / 'artifacts'
+    _ = ctx
+    # Seedpipe executes stages from the run directory, so relative paths should
+    # resolve directly under artifacts/outputs/<run_id>/.
+    return Path.cwd()
 
 
 def input_artifact_dir(ctx: Any) -> Path:
-    run_id = str(getattr(ctx, 'run_id', '') or '').strip()
-    if run_id:
-        return _pipe_root() / 'artifacts' / 'outputs' / run_id / 'artifacts'
-    return _pipe_root() / 'artifacts'
+    _ = ctx
+    return Path.cwd()
 
 
-def read_json(ctx: Any, name: str) -> dict[str, Any]:
-    path = input_artifact_dir(ctx) / name
+def resolve_input_path(ctx: Any, *, default_name: str, family: str | None = None) -> Path:
+    resolved = _resolve_from_ctx(ctx, kind="input", family=family, suffix=default_name)
+    if resolved is not None:
+        return resolved
+    return input_artifact_dir(ctx) / default_name
+
+
+def resolve_output_path(ctx: Any, *, default_name: str, family: str | None = None) -> Path:
+    resolved = _resolve_from_ctx(ctx, kind="output", family=family, suffix=default_name)
+    if resolved is not None:
+        return resolved
+    return output_artifact_dir(ctx) / default_name
+
+
+def read_json(ctx: Any, name: str, *, family: str | None = None) -> dict[str, Any]:
+    path = resolve_input_path(ctx, default_name=name, family=family)
     if not path.exists():
         run_id = str(getattr(ctx, 'run_id', '') or '').strip() or '<none>'
         stage_id = str(getattr(ctx, 'stage_id', '') or '').strip() or '<unknown>'
-        artifact_dir = input_artifact_dir(ctx)
+        artifact_dir = path.parent
         pipe_root = _pipe_root()
 
         print(
@@ -71,9 +124,9 @@ def read_json(ctx: Any, name: str) -> dict[str, Any]:
 
         raise FileNotFoundError(
             f"Required artifact '{name}' was not found in '{artifact_dir}'. "
-            "This pipeline currently expects run-scoped artifacts "
-            "(artifacts/outputs/<run_id>/artifacts). If upstream stages wrote files to "
-            "the shared artifacts/ directory, they will not be visible to this run. "
+            "This pipeline expects run-scoped artifacts under "
+            "artifacts/outputs/<run_id>/. If upstream stages wrote files outside the run "
+            "directory, they will not be visible to this run. "
             "Also confirm that an upstream stage actually produces this artifact in "
             "generated/ir.json (artifact_producers)."
         )
@@ -81,20 +134,67 @@ def read_json(ctx: Any, name: str) -> dict[str, Any]:
     return json.loads(path.read_text(encoding='utf-8'))
 
 
-def write_text_artifact(ctx: Any, name: str, content: str) -> Path:
-    out_dir = output_artifact_dir(ctx)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / name
+def read_jsonl(ctx: Any, name: str, *, family: str | None = None) -> list[dict[str, Any]]:
+    path = resolve_input_path(ctx, default_name=name, family=family)
+    if not path.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        payload = json.loads(line)
+        if isinstance(payload, dict):
+            rows.append(payload)
+    return rows
+
+
+def write_text_artifact(ctx: Any, name: str, content: str, *, family: str | None = None) -> Path:
+    out_path = resolve_output_path(ctx, default_name=name, family=family)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(content, encoding='utf-8')
     return out_path
 
 
-def append_jsonl_artifact(ctx: Any, name: str, row: dict[str, Any]) -> Path:
-    out_dir = output_artifact_dir(ctx)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / name
+def write_json_artifact(
+    ctx: Any,
+    name: str,
+    payload: dict[str, Any],
+    *,
+    family: str | None = None,
+) -> Path:
+    out_path = resolve_output_path(ctx, default_name=name, family=family)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return out_path
+
+
+def append_jsonl_artifact(
+    ctx: Any,
+    name: str,
+    row: dict[str, Any],
+    *,
+    family: str | None = None,
+) -> Path:
+    out_path = resolve_output_path(ctx, default_name=name, family=family)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open('a', encoding='utf-8') as f:
         f.write(json.dumps(row, ensure_ascii=False) + '\n')
+    return out_path
+
+
+def write_jsonl_artifact(
+    ctx: Any,
+    name: str,
+    rows: list[dict[str, Any]],
+    *,
+    family: str | None = None,
+) -> Path:
+    out_path = resolve_output_path(ctx, default_name=name, family=family)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("w", encoding="utf-8") as out:
+        for row in rows:
+            out.write(json.dumps(row, ensure_ascii=False) + "\n")
     return out_path
 
 

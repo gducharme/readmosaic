@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "seedpipe://spec/stages/style_slop_detectors/style_slop_findings.schema.json",
+  "title": "SlopStopStyleSlopFindings",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "paragraph_count",
+    "flagged_paragraph_count",
+    "reason_counts",
+    "findings"
+  ],
+  "properties": {
+    "paragraph_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "flagged_paragraph_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "reason_counts": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "paragraph_id",
+          "reasons",
+          "low_signal_phrase_hits",
+          "hedge_hits",
+          "overused_word_hits"
+        ],
+        "properties": {
+          "paragraph_id": {
+            "type": "string",
+            "pattern": "^p-[0-9]{4,}$"
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "low_signal_phrase_hits": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "hedge_hits": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "overused_word_hits": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}

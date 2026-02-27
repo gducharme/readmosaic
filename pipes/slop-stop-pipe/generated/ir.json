@@ -1,73 +1,162 @@
 {
   "artifact_producers": {
-    "items.jsonl": "ingest",
+    "diagnostics/rewrite_candidates.jsonl": "style_slop_detectors",
+    "diagnostics/style_slop_findings.json": "style_slop_detectors",
+    "lexical/word_frequency_report.json": "word_frequency_benchmark",
     "manifest.json": "publish",
-    "preprocessed.json": "preprocessing",
-    "reviewed.jsonl": "future_review",
-    "transformed.jsonl": "transform",
-    "word_frequency_report.json": "word_frequency_benchmark"
+    "preprocessed/paragraphs.jsonl": "preprocessing",
+    "preprocessed/preprocessed.json": "preprocessing",
+    "review/review_summary.json": "reviewer_pass",
+    "review/reviewed.jsonl": "reviewer_pass",
+    "transforms/transformed.jsonl": "transform"
   },
   "determinism_policy": "strict",
-  "item_unit": "item",
-  "pipeline_id": "example-pipeline",
+  "item_unit": "paragraph",
+  "pipeline_id": "slop-stop-pipeline",
   "stages": [
     {
+      "expected_outputs": [
+        {
+          "family": "preprocessed",
+          "keys": {},
+          "path": "preprocessed/preprocessed.json",
+          "pattern": "preprocessed/preprocessed.json",
+          "schema": "preprocessed.schema.json"
+        },
+        {
+          "family": "paragraphs",
+          "keys": {},
+          "path": "preprocessed/paragraphs.jsonl",
+          "pattern": "preprocessed/paragraphs.jsonl",
+          "schema": "paragraphs.schema.json"
+        }
+      ],
       "inputs": [],
+      "keys": [],
       "mode": "whole_run",
       "outputs": [
-        "preprocessed.json"
+        "preprocessed/preprocessed.json",
+        "preprocessed/paragraphs.jsonl"
       ],
       "placeholder": false,
       "stage_id": "preprocessing"
     },
     {
-      "inputs": [
-        "preprocessed.json"
+      "expected_outputs": [
+        {
+          "family": "lexical_frequency",
+          "keys": {},
+          "path": "lexical/word_frequency_report.json",
+          "pattern": "lexical/word_frequency_report.json",
+          "schema": "word_frequency_report.schema.json"
+        }
       ],
+      "inputs": [
+        "preprocessed/preprocessed.json"
+      ],
+      "keys": [],
       "mode": "whole_run",
       "outputs": [
-        "word_frequency_report.json"
+        "lexical/word_frequency_report.json"
       ],
       "placeholder": false,
       "stage_id": "word_frequency_benchmark"
     },
     {
-      "inputs": [
-        "word_frequency_report.json"
+      "expected_outputs": [
+        {
+          "family": "style_slop_findings",
+          "keys": {},
+          "path": "diagnostics/style_slop_findings.json",
+          "pattern": "diagnostics/style_slop_findings.json",
+          "schema": "style_slop_findings.schema.json"
+        },
+        {
+          "family": "rewrite_candidates",
+          "keys": {},
+          "path": "diagnostics/rewrite_candidates.jsonl",
+          "pattern": "diagnostics/rewrite_candidates.jsonl",
+          "schema": "rewrite_candidates.schema.json"
+        }
       ],
+      "inputs": [
+        "preprocessed/preprocessed.json",
+        "lexical/word_frequency_report.json"
+      ],
+      "keys": [],
       "mode": "whole_run",
       "outputs": [
-        "items.jsonl"
+        "diagnostics/style_slop_findings.json",
+        "diagnostics/rewrite_candidates.jsonl"
       ],
       "placeholder": false,
-      "stage_id": "ingest"
+      "stage_id": "style_slop_detectors"
     },
     {
-      "inputs": [
-        "items.jsonl"
+      "expected_outputs": [
+        {
+          "family": "transformed_rewrites",
+          "keys": {},
+          "path": "transforms/transformed.jsonl",
+          "pattern": "transforms/transformed.jsonl",
+          "schema": "transformed_rewrites.schema.json"
+        }
       ],
-      "mode": "per_item",
+      "inputs": [
+        "diagnostics/rewrite_candidates.jsonl"
+      ],
+      "keys": [],
+      "mode": "whole_run",
       "outputs": [
-        "transformed.jsonl"
+        "transforms/transformed.jsonl"
       ],
       "placeholder": false,
       "stage_id": "transform"
     },
     {
-      "inputs": [
-        "transformed.jsonl"
+      "expected_outputs": [
+        {
+          "family": "reviewed_rewrites",
+          "keys": {},
+          "path": "review/reviewed.jsonl",
+          "pattern": "review/reviewed.jsonl",
+          "schema": "reviewed_rewrites.schema.json"
+        },
+        {
+          "family": "review_summary",
+          "keys": {},
+          "path": "review/review_summary.json",
+          "pattern": "review/review_summary.json",
+          "schema": "review_summary.schema.json"
+        }
       ],
+      "inputs": [
+        "transforms/transformed.jsonl"
+      ],
+      "keys": [],
       "mode": "whole_run",
       "outputs": [
-        "reviewed.jsonl"
+        "review/reviewed.jsonl",
+        "review/review_summary.json"
       ],
-      "placeholder": true,
-      "stage_id": "future_review"
+      "placeholder": false,
+      "stage_id": "reviewer_pass"
     },
     {
-      "inputs": [
-        "reviewed.jsonl"
+      "expected_outputs": [
+        {
+          "family": "manifest",
+          "keys": {},
+          "path": "manifest.json",
+          "pattern": "manifest.json",
+          "schema": "manifest.schema.json"
+        }
       ],
+      "inputs": [
+        "review/reviewed.jsonl",
+        "review/review_summary.json"
+      ],
+      "keys": [],
       "mode": "whole_run",
       "outputs": [
         "manifest.json"

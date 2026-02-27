@@ -3,25 +3,32 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
-from ._artifacts import input_artifact_dir, output_artifact_dir, write_text_artifact
-
-
-def _count_jsonl_rows(path) -> int:
-    if not path.exists():
-        return 0
-    return sum(1 for line in path.read_text(encoding='utf-8').splitlines() if line.strip())
+from ._artifacts import (
+    read_json,
+    read_jsonl,
+    resolve_output_path,
+    write_text_artifact,
+)
 
 
 def run_whole(ctx) -> None:
-    in_dir = input_artifact_dir(ctx)
-    out_dir = output_artifact_dir(ctx)
-    reviewed = in_dir / 'reviewed.jsonl'
+    reviewed_rows = read_jsonl(ctx, "review/reviewed.jsonl", family="reviewed_rewrites")
+    summary = read_json(ctx, "review/review_summary.json", family="review_summary")
+    manifest_path = resolve_output_path(ctx, default_name="manifest.json", family="manifest")
 
     manifest = {
         'run_id': str(getattr(ctx, 'run_id', '')),
-        'pipeline_id': 'example-pipeline',
+        'pipeline_id': 'slop-stop-pipeline',
         'created_at': datetime.now(timezone.utc).isoformat(),
-        'artifacts_dir': str(out_dir),
-        'reviewed_item_count': _count_jsonl_rows(reviewed),
+        'artifacts_dir': str(manifest_path.parent),
+        'reviewed_item_count': len(reviewed_rows),
+        'approved_item_count': int(summary.get("approved_item_count", len(reviewed_rows))),
+        'rejected_item_count': int(summary.get("rejected_item_count", 0)),
+        'summary_artifact': "review/review_summary.json",
     }
-    write_text_artifact(ctx, 'manifest.json', json.dumps(manifest, ensure_ascii=False, indent=2))
+    write_text_artifact(
+        ctx,
+        'manifest.json',
+        json.dumps(manifest, ensure_ascii=False, indent=2),
+        family="manifest",
+    )

@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "seedpipe://spec/stages/style_slop_detectors/rewrite_candidates.schema.json",
+  "title": "SlopStopRewriteCandidate",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "item_id",
+    "paragraph_id",
+    "text",
+    "reasons",
+    "instruction",
+    "overused_word_hits"
+  ],
+  "properties": {
+    "item_id": {
+      "type": "string",
+      "pattern": "^p-[0-9]{4,}$"
+    },
+    "paragraph_id": {
+      "type": "string",
+      "pattern": "^p-[0-9]{4,}$"
+    },
+    "text": {
+      "type": "string"
+    },
+    "reasons": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "instruction": {
+      "type": "string",
+      "minLength": 1
+    },
+    "overused_word_hits": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

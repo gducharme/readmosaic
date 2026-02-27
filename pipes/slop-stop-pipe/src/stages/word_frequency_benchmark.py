@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import json
 import re
 from collections import Counter
 
 import nltk
 from nltk.corpus import brown
 
-from ._artifacts import output_artifact_dir, read_json, stage_config
+from ._artifacts import read_json, stage_config, write_json_artifact
 
 TOKEN_PATTERN = re.compile(r"[A-Za-z']+")
 TOP_N = 10
@@ -44,8 +43,8 @@ def run_whole(ctx) -> None:
     cfg = stage_config(ctx, 'word_frequency_benchmark')
     _ensure_nltk_resources()
 
-    preprocessed_input_name = str(cfg.get('preprocessed_input', 'preprocessed.json'))
-    preprocessed_payload = read_json(ctx, preprocessed_input_name)
+    preprocessed_input_name = str(cfg.get('preprocessed_input', 'preprocessed/preprocessed.json'))
+    preprocessed_payload = read_json(ctx, preprocessed_input_name, family="preprocessed")
 
     tokens = preprocessed_payload.get('tokens')
     if not isinstance(tokens, list):
@@ -99,9 +98,9 @@ def run_whole(ctx) -> None:
     }
 
     output_name = str(cfg.get('output_name', 'word_frequency_report.json'))
-    output_dir = output_artifact_dir(ctx)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / output_name).write_text(
-        json.dumps(output, ensure_ascii=False, indent=2),
-        encoding='utf-8',
+    write_json_artifact(
+        ctx,
+        output_name,
+        output,
+        family="lexical_frequency",
     )
