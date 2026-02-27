@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "seedpipe://spec/stages/source_ingest/paragraphs.schema.json",
+  "title": "TranslateParagraphRow",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "item_id",
+    "paragraph_id",
+    "text"
+  ],
+  "properties": {
+    "item_id": {
+      "type": "string",
+      "pattern": "^p-[0-9]{4,}$"
+    },
+    "paragraph_id": {
+      "type": "string",
+      "pattern": "^p-[0-9]{4,}$"
+    },
+    "text": {
+      "type": "string"
+    },
+    "content_hash": {
+      "type": "string"
+    }
+  }
+}

@@ -5,5 +5,5 @@
   "timeout": 180,
   "retry": 1,
   "temperature": 0.1,
-  "concurrency": 2
+  "concurrency": 4
 }

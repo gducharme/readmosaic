@@ -81,6 +81,8 @@ def run_whole(ctx) -> None:
 
     output_path = _resolve_output_artifact_path(ctx, language)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    if output_path.exists():
+        return
     shutil.copyfile(input_path, output_path)
 
 

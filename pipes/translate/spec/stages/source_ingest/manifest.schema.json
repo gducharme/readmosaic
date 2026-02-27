@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "seedpipe://spec/stages/source_ingest/manifest.schema.json",
+  "title": "TranslateRunManifest",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "manifest_version",
+    "run_id",
+    "pipeline_id",
+    "code_version",
+    "config_hash",
+    "created_at",
+    "inputs",
+    "stage_outputs"
+  ],
+  "properties": {
+    "manifest_version": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "pipeline_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "code_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "config_hash": {
+      "type": "string",
+      "minLength": 1
+    },
+    "created_at": {
+      "type": "string"
+    },
+    "inputs": {
+      "type": "array"
+    },
+    "stage_outputs": {
+      "type": "array"
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "seedpipe://spec/stages/shared/rework_queue.schema.jsonl",
+  "title": "ReworkQueueRow",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["paragraph_id"],
+  "properties": {
+    "paragraph_id": { "type": "string", "pattern": "^p-[0-9]{4,}$" }
+  }
+}
