@@ -1,0 +1,4 @@
+interface:
+  display_name: "Novel Translation"
+  short_description: "Preserve novel voice, POV, and continuity."
+  default_prompt: "Translate this novel passage with strict fidelity to voice, POV, character idiolect, and continuity; run layered QA and keep naming/term consistency."
