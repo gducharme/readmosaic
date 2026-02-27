@@ -11,7 +11,11 @@ const state = {
   readerResizeHandler: null,
   i18nLang: 'en',
   i18nDict: {},
+  scheme: null,
 };
+const SCHEME_STORAGE_KEY = 'mosaic-scheme';
+const DAY_SCHEME = 'day';
+const NIGHT_SCHEME = 'night';
 
 const rtlLanguageKeys = new Set([
   'ar',
@@ -131,6 +135,53 @@ const escapeHtml = (value) =>
 
 
 const DEFAULT_I18N_LANG = 'en';
+
+function inferSchemeByTime(now = new Date()) {
+  const hour = now.getHours();
+  return hour >= 7 && hour < 19 ? DAY_SCHEME : NIGHT_SCHEME;
+}
+
+function resolveInitialScheme() {
+  try {
+    const saved = localStorage.getItem(SCHEME_STORAGE_KEY);
+    if (saved === DAY_SCHEME || saved === NIGHT_SCHEME) return saved;
+  } catch (_error) {
+    // Ignore localStorage read failures.
+  }
+  return inferSchemeByTime();
+}
+
+function applyScheme(scheme) {
+  const normalized = scheme === DAY_SCHEME ? DAY_SCHEME : NIGHT_SCHEME;
+  state.scheme = normalized;
+  document.documentElement.setAttribute('data-scheme', normalized);
+  const toggle = document.getElementById('scheme-toggle');
+  if (toggle) {
+    toggle.textContent = normalized === DAY_SCHEME ? '[ NIGHT ]' : '[ DAY ]';
+  }
+}
+
+function toggleScheme() {
+  const next = state.scheme === DAY_SCHEME ? NIGHT_SCHEME : DAY_SCHEME;
+  applyScheme(next);
+  try {
+    localStorage.setItem(SCHEME_STORAGE_KEY, next);
+  } catch (_error) {
+    // Ignore localStorage write failures.
+  }
+}
+
+function ensureSchemeToggle() {
+  let toggle = document.getElementById('scheme-toggle');
+  if (!toggle) {
+    toggle = document.createElement('button');
+    toggle.id = 'scheme-toggle';
+    toggle.className = 'scheme-toggle';
+    toggle.addEventListener('click', toggleScheme);
+    document.body.appendChild(toggle);
+  }
+  applyScheme(state.scheme || resolveInitialScheme());
+}
 
 function t(key, fallback = key) {
   return state.i18nDict[key] || fallback;
@@ -657,4 +708,5 @@ async function renderEditor() {
   }
 }
 
+ensureSchemeToggle();
 renderLogin().catch((error) => { app.innerHTML = `<p>${escapeHtml(error.message)}</p>`; });
