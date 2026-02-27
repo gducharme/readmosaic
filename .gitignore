@@ -29,6 +29,9 @@ env/
 pip-wheel-metadata/
 *.sqlite3
 
+**/.DS_Store
+.codex/
+
 node_modules/
 web/node_modules/
 
@@ -42,5 +45,7 @@ mre_outputs/
 preprocessed/
 preprocessing/
 quotation_audit_outputs/
+scripts/.script_menu_cache.json
 
 pipes/*/generated/**
+pipes/*/artifacts/**
