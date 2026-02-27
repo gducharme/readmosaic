@@ -22,15 +22,27 @@ app.use((req, res, next) => {
 });
 app.use(express.static(path.join(__dirname, 'public')));
 
-const SAFE_SEGMENT = /^[a-zA-Z0-9._-]+$/;
 const AUTH_WINDOW_MS = 60 * 1000;
 const AUTH_MAX_ATTEMPTS = 30;
 const authAttemptBuckets = new Map();
 
 function validateSegment(value, type) {
-  const isUnsafeReserved = value === '.' || value === '..' || value.startsWith('.');
+  if (typeof value !== 'string') {
+    const error = new Error(`Invalid ${type}.`);
+    error.status = 400;
+    throw error;
+  }
 
-  if (!SAFE_SEGMENT.test(value) || isUnsafeReserved) {
+  const normalized = value.trim();
+  const isUnsafeReserved =
+    normalized === '.' ||
+    normalized === '..' ||
+    normalized.startsWith('.') ||
+    normalized.includes('/') ||
+    normalized.includes('\\') ||
+    normalized.includes('\0');
+
+  if (!normalized || isUnsafeReserved) {
     const error = new Error(`Invalid ${type}.`);
     error.status = 400;
     throw error;
@@ -103,7 +115,7 @@ async function getChapters(lang) {
   const langDir = path.join(DATA_DIR, lang);
   const entries = await fs.readdir(langDir, { withFileTypes: true });
   return entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith('.md'))
+    .filter((entry) => entry.isFile() && !entry.name.startsWith('.'))
     .map((entry) => entry.name)
     .sort((a, b) => a.localeCompare(b));
 }
@@ -111,12 +123,6 @@ async function getChapters(lang) {
 function contentPath(lang, file) {
   validateSegment(lang, 'language');
   validateSegment(file, 'file');
-
-  if (!file.endsWith('.md')) {
-    const error = new Error('Only markdown files are allowed.');
-    error.status = 400;
-    throw error;
-  }
 
   return path.join(DATA_DIR, lang, file);
 }

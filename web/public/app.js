@@ -13,19 +13,111 @@ const state = {
   i18nDict: {},
 };
 
-const rtlLangPrefixes = ['ar', 'fa', 'he', 'ur'];
+const rtlLanguageKeys = new Set([
+  'ar',
+  'arabic',
+  'fa',
+  'farsi',
+  'persian',
+  'he',
+  'hebrew',
+  'ur',
+  'urdu',
+  'western_punjabi',
+]);
+
+const i18nLanguageAliases = {
+  en: 'en',
+  english: 'en',
+  ar: 'ar',
+  arabic: 'ar',
+  fr: 'fr',
+  french: 'fr',
+  bengali: 'bengali',
+  gujarati: 'gujarati',
+  hindi: 'hindi',
+  italian: 'italian',
+  japanese: 'japanese',
+  korean: 'korean',
+  mandarin_chinese: 'mandarin_chinese',
+  marathi: 'marathi',
+  norwegian: 'norwegian',
+  persian: 'persian',
+  portuguese: 'portuguese',
+  russian: 'russian',
+  spanish: 'spanish',
+  tamazight: 'tamazight',
+  tamil: 'tamil',
+  telugu: 'telugu',
+  turkish: 'turkish',
+  vietnamese: 'vietnamese',
+  western_punjabi: 'western_punjabi',
+};
+
+const htmlLanguageAliases = {
+  en: 'en',
+  english: 'en',
+  ar: 'ar',
+  arabic: 'ar',
+  fr: 'fr',
+  french: 'fr',
+  fa: 'fa',
+  farsi: 'fa',
+  persian: 'fa',
+  he: 'he',
+  hebrew: 'he',
+  ur: 'ur',
+  urdu: 'ur',
+  mandarin_chinese: 'zh',
+  japanese: 'ja',
+  korean: 'ko',
+  tamil: 'ta',
+  telugu: 'te',
+  russian: 'ru',
+  spanish: 'es',
+  portuguese: 'pt',
+  italian: 'it',
+  hindi: 'hi',
+  bengali: 'bn',
+  marathi: 'mr',
+  vietnamese: 'vi',
+  norwegian: 'no',
+  gujarati: 'gu',
+  turkish: 'tr',
+  western_punjabi: 'pa-Arab',
+  tamazight: 'tzm',
+};
+
+function normalizeLanguageKey(lang) {
+  return (lang || '')
+    .trim()
+    .toLowerCase()
+    .replaceAll('-', '_')
+    .replace(/\s+/g, '_');
+}
+
+function resolveI18nLang(lang) {
+  const normalized = normalizeLanguageKey(lang);
+  return i18nLanguageAliases[normalized] || normalized || DEFAULT_I18N_LANG;
+}
+
+function resolveHtmlLang(lang) {
+  const normalized = normalizeLanguageKey(lang);
+  return htmlLanguageAliases[normalized] || normalized || DEFAULT_I18N_LANG;
+}
 
 function isRtlLanguage(lang) {
-  if (!lang) return false;
-  const normalizedLang = lang.trim().toLowerCase();
+  const normalizedLang = normalizeLanguageKey(lang);
   if (!normalizedLang) return false;
 
-  return rtlLangPrefixes.some(
-    (prefix) =>
-      normalizedLang === prefix ||
-      normalizedLang.startsWith(`${prefix}-`) ||
-      normalizedLang.startsWith(`${prefix}_`) ||
-      normalizedLang.includes('arab')
+  if (rtlLanguageKeys.has(normalizedLang)) return true;
+
+  return (
+    normalizedLang.startsWith('ar_') ||
+    normalizedLang.startsWith('fa_') ||
+    normalizedLang.startsWith('he_') ||
+    normalizedLang.startsWith('ur_') ||
+    normalizedLang.includes('arab')
   );
 }
 
@@ -53,7 +145,7 @@ function tf(key, fallback, params = {}) {
 }
 
 async function loadI18n(lang) {
-  const normalizedLang = (lang || '').trim().toLowerCase() || DEFAULT_I18N_LANG;
+  const normalizedLang = resolveI18nLang(lang);
   const response = await fetch(`/i18n/${encodeURIComponent(normalizedLang)}`, { headers: authHeaders() });
 
   if (response.status === 404 && normalizedLang !== DEFAULT_I18N_LANG) {
@@ -162,7 +254,7 @@ function setDir(element) {
   }
   const isRtl = isRtlLanguage(state.lang);
   element.setAttribute('dir', isRtl ? 'rtl' : 'auto');
-  element.setAttribute('lang', state.lang);
+  element.setAttribute('lang', resolveHtmlLang(state.lang));
   element.classList.toggle('is-rtl', isRtl);
 }
 
