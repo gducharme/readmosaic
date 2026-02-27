@@ -11,21 +11,117 @@ const state = {
   readerResizeHandler: null,
   i18nLang: 'en',
   i18nDict: {},
+  scheme: null,
+};
+const SCHEME_STORAGE_KEY = 'mosaic-scheme';
+const DAY_SCHEME = 'day';
+const NIGHT_SCHEME = 'night';
+
+const rtlLanguageKeys = new Set([
+  'ar',
+  'arabic',
+  'fa',
+  'farsi',
+  'persian',
+  'he',
+  'hebrew',
+  'ur',
+  'urdu',
+  'western_punjabi',
+]);
+
+const i18nLanguageAliases = {
+  en: 'en',
+  english: 'en',
+  ar: 'ar',
+  arabic: 'ar',
+  fr: 'fr',
+  french: 'fr',
+  bengali: 'bengali',
+  gujarati: 'gujarati',
+  hindi: 'hindi',
+  italian: 'italian',
+  japanese: 'japanese',
+  korean: 'korean',
+  mandarin_chinese: 'mandarin_chinese',
+  marathi: 'marathi',
+  norwegian: 'norwegian',
+  persian: 'persian',
+  portuguese: 'portuguese',
+  russian: 'russian',
+  spanish: 'spanish',
+  tamazight: 'tamazight',
+  tamil: 'tamil',
+  telugu: 'telugu',
+  turkish: 'turkish',
+  vietnamese: 'vietnamese',
+  western_punjabi: 'western_punjabi',
 };
 
-const rtlLangPrefixes = ['ar', 'fa', 'he', 'ur'];
+const htmlLanguageAliases = {
+  en: 'en',
+  english: 'en',
+  ar: 'ar',
+  arabic: 'ar',
+  fr: 'fr',
+  french: 'fr',
+  fa: 'fa',
+  farsi: 'fa',
+  persian: 'fa',
+  he: 'he',
+  hebrew: 'he',
+  ur: 'ur',
+  urdu: 'ur',
+  mandarin_chinese: 'zh',
+  japanese: 'ja',
+  korean: 'ko',
+  tamil: 'ta',
+  telugu: 'te',
+  russian: 'ru',
+  spanish: 'es',
+  portuguese: 'pt',
+  italian: 'it',
+  hindi: 'hi',
+  bengali: 'bn',
+  marathi: 'mr',
+  vietnamese: 'vi',
+  norwegian: 'no',
+  gujarati: 'gu',
+  turkish: 'tr',
+  western_punjabi: 'pa-Arab',
+  tamazight: 'tzm',
+};
+
+function normalizeLanguageKey(lang) {
+  return (lang || '')
+    .trim()
+    .toLowerCase()
+    .replaceAll('-', '_')
+    .replace(/\s+/g, '_');
+}
+
+function resolveI18nLang(lang) {
+  const normalized = normalizeLanguageKey(lang);
+  return i18nLanguageAliases[normalized] || normalized || DEFAULT_I18N_LANG;
+}
+
+function resolveHtmlLang(lang) {
+  const normalized = normalizeLanguageKey(lang);
+  return htmlLanguageAliases[normalized] || normalized || DEFAULT_I18N_LANG;
+}
 
 function isRtlLanguage(lang) {
-  if (!lang) return false;
-  const normalizedLang = lang.trim().toLowerCase();
+  const normalizedLang = normalizeLanguageKey(lang);
   if (!normalizedLang) return false;
 
-  return rtlLangPrefixes.some(
-    (prefix) =>
-      normalizedLang === prefix ||
-      normalizedLang.startsWith(`${prefix}-`) ||
-      normalizedLang.startsWith(`${prefix}_`) ||
-      normalizedLang.includes('arab')
+  if (rtlLanguageKeys.has(normalizedLang)) return true;
+
+  return (
+    normalizedLang.startsWith('ar_') ||
+    normalizedLang.startsWith('fa_') ||
+    normalizedLang.startsWith('he_') ||
+    normalizedLang.startsWith('ur_') ||
+    normalizedLang.includes('arab')
   );
 }
 
@@ -40,6 +136,53 @@ const escapeHtml = (value) =>
 
 const DEFAULT_I18N_LANG = 'en';
 
+function inferSchemeByTime(now = new Date()) {
+  const hour = now.getHours();
+  return hour >= 7 && hour < 19 ? DAY_SCHEME : NIGHT_SCHEME;
+}
+
+function resolveInitialScheme() {
+  try {
+    const saved = localStorage.getItem(SCHEME_STORAGE_KEY);
+    if (saved === DAY_SCHEME || saved === NIGHT_SCHEME) return saved;
+  } catch (_error) {
+    // Ignore localStorage read failures.
+  }
+  return inferSchemeByTime();
+}
+
+function applyScheme(scheme) {
+  const normalized = scheme === DAY_SCHEME ? DAY_SCHEME : NIGHT_SCHEME;
+  state.scheme = normalized;
+  document.documentElement.setAttribute('data-scheme', normalized);
+  const toggle = document.getElementById('scheme-toggle');
+  if (toggle) {
+    toggle.textContent = normalized === DAY_SCHEME ? '[ NIGHT ]' : '[ DAY ]';
+  }
+}
+
+function toggleScheme() {
+  const next = state.scheme === DAY_SCHEME ? NIGHT_SCHEME : DAY_SCHEME;
+  applyScheme(next);
+  try {
+    localStorage.setItem(SCHEME_STORAGE_KEY, next);
+  } catch (_error) {
+    // Ignore localStorage write failures.
+  }
+}
+
+function ensureSchemeToggle() {
+  let toggle = document.getElementById('scheme-toggle');
+  if (!toggle) {
+    toggle = document.createElement('button');
+    toggle.id = 'scheme-toggle';
+    toggle.className = 'scheme-toggle';
+    toggle.addEventListener('click', toggleScheme);
+    document.body.appendChild(toggle);
+  }
+  applyScheme(state.scheme || resolveInitialScheme());
+}
+
 function t(key, fallback = key) {
   return state.i18nDict[key] || fallback;
 }
@@ -53,7 +196,7 @@ function tf(key, fallback, params = {}) {
 }
 
 async function loadI18n(lang) {
-  const normalizedLang = (lang || '').trim().toLowerCase() || DEFAULT_I18N_LANG;
+  const normalizedLang = resolveI18nLang(lang);
   const response = await fetch(`/i18n/${encodeURIComponent(normalizedLang)}`, { headers: authHeaders() });
 
   if (response.status === 404 && normalizedLang !== DEFAULT_I18N_LANG) {
@@ -162,7 +305,7 @@ function setDir(element) {
   }
   const isRtl = isRtlLanguage(state.lang);
   element.setAttribute('dir', isRtl ? 'rtl' : 'auto');
-  element.setAttribute('lang', state.lang);
+  element.setAttribute('lang', resolveHtmlLang(state.lang));
   element.classList.toggle('is-rtl', isRtl);
 }
 
@@ -565,4 +708,5 @@ async function renderEditor() {
   }
 }
 
+ensureSchemeToggle();
 renderLogin().catch((error) => { app.innerHTML = `<p>${escapeHtml(error.message)}</p>`; });

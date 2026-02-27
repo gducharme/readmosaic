@@ -201,6 +201,37 @@ def _load_paragraph_rows(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def _load_jsonl_prefix(path: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    if not path.exists():
+        return rows
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            break
+        if isinstance(payload, dict):
+            rows.append(payload)
+    return rows
+
+
+def _row_identity(row: dict[str, Any], index: int) -> str:
+    value = row.get("paragraph_id") or row.get("item_id")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return f"row-{index:05d}"
+
+
+def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as output_file:
+        for row in rows:
+            output_file.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
 def _translate_row(
     row: dict[str, Any],
     *,
@@ -280,8 +311,6 @@ def run_whole(ctx) -> None:
         label=f"translate_pass1:{language}",
         color=True,
     )
-    progress.print(0, failed=0)
-    failed_count = 0
 
     def process_row(row: dict[str, Any]) -> dict[str, Any]:
         translated = _translate_row(
@@ -300,10 +329,30 @@ def run_whole(ctx) -> None:
 
     output_artifact_path = _resolve_output_artifact_path(ctx, language)
     output_artifact_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_artifact_path.open("w", encoding="utf-8") as output_file:
+    existing_rows = _load_jsonl_prefix(output_artifact_path)
+    resumable_count = min(len(existing_rows), len(input_rows))
+    resume_from = 0
+    for idx in range(resumable_count):
+        existing_id = _row_identity(existing_rows[idx], idx)
+        input_id = _row_identity(input_rows[idx], idx)
+        if existing_id != input_id:
+            break
+        resume_from += 1
+    if resume_from != len(existing_rows):
+        _write_jsonl(output_artifact_path, existing_rows[:resume_from])
+        existing_rows = existing_rows[:resume_from]
+
+    failed_count = sum(1 for row in existing_rows if row.get("error"))
+    progress.print(resume_from, failed=failed_count)
+    if resume_from >= len(input_rows):
+        progress.done(len(input_rows), failed=failed_count)
+        return
+
+    rows_to_process = input_rows[resume_from:]
+    with output_artifact_path.open("a" if resume_from else "w", encoding="utf-8") as output_file:
         if concurrency == 1:
-            completed = 0
-            for row in input_rows:
+            completed = resume_from
+            for row in rows_to_process:
                 result = process_row(row)
                 output_file.write(json.dumps(result, ensure_ascii=False) + "\n")
                 output_file.flush()
@@ -315,11 +364,11 @@ def run_whole(ctx) -> None:
             with ThreadPoolExecutor(max_workers=concurrency) as pool:
                 future_to_idx = {
                     pool.submit(process_row, row): idx
-                    for idx, row in enumerate(input_rows)
+                    for idx, row in enumerate(rows_to_process, start=resume_from)
                 }
                 buffered: dict[int, dict[str, Any]] = {}
-                next_idx = 0
-                completed = 0
+                next_idx = resume_from
+                completed = resume_from
                 for future in as_completed(future_to_idx):
                     idx = future_to_idx[future]
                     buffered[idx] = future.result()

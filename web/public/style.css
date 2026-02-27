@@ -3,6 +3,21 @@
   --text: #1199ff;
   --glow: rgba(17, 153, 255, 0.55);
   --border: rgba(17, 153, 255, 0.58);
+  --hover-bg: rgba(0, 136, 255, 0.08);
+  --scroll-thumb: rgba(0, 136, 255, 0.4);
+  --shadow-a: 0 0 8px var(--glow);
+  --shadow-b: 0 0 18px rgba(17, 153, 255, 0.35);
+}
+
+:root[data-scheme='day'] {
+  --bg: #f3f7ff;
+  --text: #0a3f8a;
+  --glow: rgba(10, 63, 138, 0.16);
+  --border: rgba(10, 63, 138, 0.36);
+  --hover-bg: rgba(10, 63, 138, 0.08);
+  --scroll-thumb: rgba(10, 63, 138, 0.35);
+  --shadow-a: 0 0 2px var(--glow);
+  --shadow-b: 0 0 6px rgba(10, 63, 138, 0.09);
 }
 
 * {
@@ -18,7 +33,7 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: 'Courier New', Consolas, Menlo, Monaco, monospace;
-  text-shadow: 0 0 8px var(--glow), 0 0 18px rgba(17, 153, 255, 0.35);
+  text-shadow: var(--shadow-a), var(--shadow-b);
 }
 
 body {
@@ -98,7 +113,7 @@ button:disabled {
 button:hover,
 .option:hover,
 .nav-link:hover {
-  background: rgba(0, 136, 255, 0.08);
+  background: var(--hover-bg);
 }
 
 .selection-grid {
@@ -173,11 +188,19 @@ button:hover,
 }
 
 .EasyMDEContainer .CodeMirror::-webkit-scrollbar-thumb {
-  background: rgba(0, 136, 255, 0.4);
+  background: var(--scroll-thumb);
 }
 
 .EasyMDEContainer .editor-toolbar button {
   color: var(--text) !important;
+}
+
+.scheme-toggle {
+  position: fixed;
+  top: 10px;
+  right: 10px;
+  z-index: 30;
+  min-width: 88px;
 }
 
 

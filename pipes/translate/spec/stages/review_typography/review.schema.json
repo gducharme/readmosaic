@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "seedpipe://spec/stages/shared/review.schema.json",
+  "title": "ReviewPayload",
+  "type": "object",
+  "additionalProperties": true
+}

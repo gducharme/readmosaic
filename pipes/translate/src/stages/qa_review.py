@@ -179,6 +179,30 @@ def _load_rows(path: Path, *, label: str) -> list[dict[str, Any]]:
     return rows
 
 
+def _load_jsonl_prefix(path: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    if not path.exists():
+        return rows
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            break
+        if isinstance(payload, dict):
+            rows.append(payload)
+    return rows
+
+
+def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as output_file:
+        for row in rows:
+            output_file.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
 def _row_id(row: dict[str, Any], index: int) -> str:
     for key in ("paragraph_id", "item_id"):
         value = row.get(key)
@@ -412,14 +436,45 @@ def run_whole(ctx) -> None:
         label=f"qa_review:{language}",
         color=True,
     )
-    progress.print(0, failed=0)
-    failed_count = 0
     output_path.parent.mkdir(parents=True, exist_ok=True)
     scores_path = output_path.with_name("scores.jsonl")
-    with output_path.open("w", encoding="utf-8") as output_file, scores_path.open("w", encoding="utf-8") as scores_file:
+    existing_output_rows = _load_jsonl_prefix(output_path)
+    existing_score_rows = _load_jsonl_prefix(scores_path)
+    resumable_count = min(len(existing_output_rows), len(existing_score_rows), len(ordered_rows))
+    resume_from = 0
+    for idx in range(resumable_count):
+        expected_id = _row_id(translated_rows[idx], idx + 1)
+        output_id = _row_id(existing_output_rows[idx], idx + 1)
+        score_id = _row_id(existing_score_rows[idx], idx + 1)
+        if expected_id != output_id or expected_id != score_id:
+            break
+        resume_from += 1
+
+    if resume_from != len(existing_output_rows):
+        _write_jsonl(output_path, existing_output_rows[:resume_from])
+        existing_output_rows = existing_output_rows[:resume_from]
+    if resume_from != len(existing_score_rows):
+        _write_jsonl(scores_path, existing_score_rows[:resume_from])
+        existing_score_rows = existing_score_rows[:resume_from]
+
+    failed_count = 0
+    for review in existing_score_rows[:resume_from]:
+        issues = review.get("issues")
+        if isinstance(issues, list) and any(
+            isinstance(issue, str) and issue.startswith("qa_review_error:") for issue in issues
+        ):
+            failed_count += 1
+
+    progress.print(resume_from, failed=failed_count)
+    if resume_from >= len(ordered_rows):
+        progress.done(len(ordered_rows), failed=failed_count)
+        return
+
+    rows_to_process = ordered_rows[resume_from:]
+    with output_path.open("a" if resume_from else "w", encoding="utf-8") as output_file, scores_path.open("a" if resume_from else "w", encoding="utf-8") as scores_file:
         if concurrency == 1:
-            completed = 0
-            for entry in ordered_rows:
+            completed = resume_from
+            for entry in rows_to_process:
                 _, out_row, review = process_row(entry)
                 output_file.write(json.dumps(out_row, ensure_ascii=False) + "\n")
                 scores_file.write(json.dumps(review, ensure_ascii=False) + "\n")
@@ -434,10 +489,10 @@ def run_whole(ctx) -> None:
                 progress.print(completed, failed=failed_count)
         else:
             with ThreadPoolExecutor(max_workers=concurrency) as pool:
-                future_to_idx = {pool.submit(process_row, entry): entry[0] for entry in ordered_rows}
+                future_to_idx = {pool.submit(process_row, entry): entry[0] for entry in rows_to_process}
                 buffered: dict[int, tuple[dict[str, Any], dict[str, Any]]] = {}
-                next_idx = 1
-                completed = 0
+                next_idx = resume_from + 1
+                completed = resume_from
                 for future in as_completed(future_to_idx):
                     idx = future_to_idx[future]
                     _, out_row, review = future.result()

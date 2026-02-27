@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "seedpipe://spec/stages/shared/candidate_map.schema.json",
+  "title": "CandidateParagraphMapRow",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["paragraph_id", "paragraph_index", "start_line", "end_line"],
+  "properties": {
+    "paragraph_id": { "type": "string", "pattern": "^p-[0-9]{4,}$" },
+    "paragraph_index": { "type": "integer", "minimum": 1 },
+    "start_line": { "type": "integer", "minimum": 1 },
+    "end_line": { "type": "integer", "minimum": 1 }
+  }
+}
