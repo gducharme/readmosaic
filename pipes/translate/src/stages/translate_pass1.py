@@ -50,12 +50,16 @@ def _stage_config(ctx) -> dict[str, object]:
     return config
 
 
-def _binding_value(ctx, key: str) -> str | None:
-    bindings = getattr(ctx, "bindings", None)
-    if not isinstance(bindings, dict):
-        return None
+def _context_keys(ctx) -> dict[str, str]:
+    for attr in ("keys", "bindings"):
+        key_map = getattr(ctx, attr, None)
+        if isinstance(key_map, dict):
+            return {str(key): str(value) for key, value in key_map.items()}
+    return {}
 
-    value = bindings.get(key)
+
+def _binding_value(ctx, key: str) -> str | None:
+    value = _context_keys(ctx).get(key)
     if value is None:
         return None
     return str(value)
@@ -64,10 +68,7 @@ def _binding_value(ctx, key: str) -> str | None:
 
 
 def _binding_map(ctx) -> dict[str, str]:
-    bindings = getattr(ctx, "bindings", None)
-    if not isinstance(bindings, dict):
-        return {}
-    return {str(key): str(value) for key, value in bindings.items()}
+    return _context_keys(ctx)
 
 
 def _resolve_output_artifact_path(ctx, language: str) -> Path:
@@ -90,7 +91,7 @@ def _resolve_output_artifact_path(ctx, language: str) -> Path:
         if not concrete_path.strip():
             continue
 
-        candidate_bindings = candidate.get("bindings")
+        candidate_bindings = candidate.get("keys") or candidate.get("bindings")
         if isinstance(candidate_bindings, dict):
             normalized = {str(key): str(value) for key, value in candidate_bindings.items()}
             if bindings and normalized and normalized != bindings:
