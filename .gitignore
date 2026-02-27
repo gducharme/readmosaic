@@ -31,3 +31,16 @@ pip-wheel-metadata/
 
 node_modules/
 web/node_modules/
+
+
+outputs/
+output/
+grammar_outputs/
+mosaic_outputs/
+mosaic_work/
+mre_outputs/
+preprocessed/
+preprocessing/
+quotation_audit_outputs/
+
+pipes/*/generated/**
