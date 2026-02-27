@@ -4,7 +4,7 @@ import json
 import re
 from pathlib import Path
 
-from ._artifacts import output_artifact_dir, stage_config
+from ._artifacts import resolve_output_path, stage_config, write_jsonl_artifact
 
 PARAGRAPH_SPLIT_RE = re.compile(r"\n\s*\n+")
 WORD_RE = re.compile(r"[A-Za-z']+")
@@ -54,14 +54,33 @@ def run_whole(ctx) -> None:
             f"Expected manuscript file '{manuscript_path}'. Configure run_config.rc.preprocessing.input_manuscript if needed."
         )
 
-    output_name = str(cfg.get('output_name', 'preprocessed.json'))
-    output_dir = output_artifact_dir(ctx)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
     normalized_text = _normalize_text(manuscript_path.read_text(encoding='utf-8'))
     payload = _build_payload(normalized_text, manuscript_name=manuscript_path.name)
 
-    (output_dir / output_name).write_text(
+    output_name = str(cfg.get('output_name', 'preprocessed.json'))
+    preprocessed_path = resolve_output_path(
+        ctx,
+        default_name=output_name,
+        family="preprocessed",
+    )
+    preprocessed_path.parent.mkdir(parents=True, exist_ok=True)
+    preprocessed_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding='utf-8',
+    )
+
+    paragraph_rows = []
+    for index, paragraph in enumerate(payload["paragraphs"], start=1):
+        paragraph_rows.append(
+            {
+                "item_id": f"p-{index:04d}",
+                "paragraph_id": f"p-{index:04d}",
+                "text": paragraph,
+            }
+        )
+    write_jsonl_artifact(
+        ctx,
+        "paragraphs.jsonl",
+        paragraph_rows,
+        family="paragraphs",
     )

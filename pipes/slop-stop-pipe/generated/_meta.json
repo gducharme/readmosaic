@@ -2,18 +2,18 @@
   "compiler_version": "phase1-mvp",
   "contracts_hash": "sha256:da7fb7e4e9d3ad66fdc6a9db71bdc78268e8206ab9df353348b332de77570731",
   "emitted_files": {
-    "generated/compile_report.json": "sha256:5a2e8330a81a471d81e937898e08b4c922288220c1dbf93e7de6993d525ae943",
-    "generated/flow.py": "sha256:6b43429a39cc3d5673be22734c6b8307dc044a86e11975df665314d7a446960c",
-    "generated/ir.json": "sha256:1ed6c345acaa056f47b74e052873d3ae156eb8dc1b739b618c8631c43ff1b00b",
-    "generated/models.py": "sha256:48c8c4f07585fc4090cc875de49b6c676cc52c7524bbd26c6d4141e30d0660b8",
-    "generated/stages/__init__.py": "sha256:28451d22e5edfd2f4536cabc84c5e1177726db2bbdef2c22c2b43e7cc136ca66",
-    "generated/stages/future_review.py": "sha256:d40064fa2f4358ea3836f209433027ec32e66dd640ada38a3744e39503f46bbe",
-    "generated/stages/ingest.py": "sha256:50e6099942191c4d74aac6d643a20f055d19ffcb3c6401bc694e5bf1b61826b1",
-    "generated/stages/preprocessing.py": "sha256:9c58a344865460dfa3f68f43047cb33987601f72f9b5b36dbe8ed93795a1bec3",
-    "generated/stages/publish.py": "sha256:cf5f24f1bd7a531f712b0a7ca45788ccc9464d084c6ff56c4327a75b43f0477a",
-    "generated/stages/transform.py": "sha256:5b7b8ddae28557af07c67b6c93bed225b79e513fa90998c58013c9eabbcba0a3",
-    "generated/stages/word_frequency_benchmark.py": "sha256:59751f1a681db9d2e775c57a0d9df951837f46b7308e45c8dd18281d3a172568"
+    "generated/compile_report.json": "sha256:7f3a427946def3dd0ee91e29f5f3955348803816084e435d4811a584df82471b",
+    "generated/flow.py": "sha256:04b354609ce822c2da1110949ae0415edd2e672f26ca070dccec982d968c9b83",
+    "generated/ir.json": "sha256:985223ccddbe64845584c8ac88b4e098343cff2caae64c96a08f62daf1c9721d",
+    "generated/models.py": "sha256:c564ce83a25d503aa37de3ea69db6f3702d7ad106271369213dc23ddc4daed40",
+    "generated/stages/__init__.py": "sha256:a5fb99c53efca4cb1b738ca9e674ac9b346bbd5738a43f22d9a5bfef76ec7875",
+    "generated/stages/preprocessing.py": "sha256:88560c2a29591a4310f8ddcbf37a7990c57fecc32987531ad4ddad75b3c7183f",
+    "generated/stages/publish.py": "sha256:9b5d18072a3bbb0f93f9b33667c268682e884987cec5588d38f7d5bd89898100",
+    "generated/stages/reviewer_pass.py": "sha256:3744c3b27c14ed1dd7608eabe9922db625d7fc8e2e52a4fc5402e6665cd1b490",
+    "generated/stages/style_slop_detectors.py": "sha256:1b499004dee8867a713ba43c66e3d7cad432266f63f4290a19294bc563e4619e",
+    "generated/stages/transform.py": "sha256:e29b35bb76ed085596eb3806f1f434cebefef437d5b2eec1cbe13faf92fe32b6",
+    "generated/stages/word_frequency_benchmark.py": "sha256:579a68dfc0f01b2b2b55087375559d3fc4504eaae7226524103027f94dba7663"
   },
-  "generated_at": "2026-02-25T11:58:39.988685+00:00",
-  "pipeline_hash": "sha256:3ab64fe27278937d9cd9a7060142977cca79d1fb179e5fba7f29fa4971345b72"
+  "generated_at": "2026-02-27T12:49:37.977839+00:00",
+  "pipeline_hash": "sha256:94ffa461f978c5eb616be7b6f51bfbead2d33a3f1169ce47e44c9cdbc415d1e2"
 }

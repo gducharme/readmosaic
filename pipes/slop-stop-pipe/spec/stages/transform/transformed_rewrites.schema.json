@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "seedpipe://spec/stages/transform/transformed_rewrites.schema.json",
+  "title": "SlopStopTransformedRewrite",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "item_id",
+      "paragraph_id",
+      "status",
+      "reasons",
+      "instruction",
+      "original_text",
+      "suggested_text"
+    ],
+    "properties": {
+      "item_id": {
+        "type": "string",
+        "pattern": "^p-[0-9]{4,}$"
+      },
+      "paragraph_id": {
+        "type": "string",
+        "pattern": "^p-[0-9]{4,}$"
+      },
+      "status": {
+        "type": "string",
+        "enum": ["transformed"]
+      },
+      "reasons": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "instruction": {
+        "type": "string",
+        "minLength": 1
+      },
+      "original_text": {
+        "type": "string"
+      },
+      "suggested_text": {
+        "type": "string"
+      }
+    }
+  }
+}
