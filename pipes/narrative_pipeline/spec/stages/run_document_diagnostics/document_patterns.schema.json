@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DocumentPatterns",
+  "type": "object",
+  "required": ["summary", "top_bigrams", "top_trigrams", "highlights"],
+  "properties": {
+    "summary": { "type": "object" },
+    "top_bigrams": { "type": "array", "items": { "type": "object" } },
+    "top_trigrams": { "type": "array", "items": { "type": "object" } },
+    "highlights": { "type": "array", "items": { "type": "object" } }
+  },
+  "additionalProperties": true
+}

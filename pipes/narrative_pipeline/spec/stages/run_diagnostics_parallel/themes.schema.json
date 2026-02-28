@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Themes",
+  "type": "object",
+  "required": ["summary", "themes", "highlights"],
+  "properties": {
+    "summary": { "type": "object" },
+    "themes": { "type": "array", "items": { "type": "object" } },
+    "highlights": { "type": "array", "items": { "type": "object" } }
+  },
+  "additionalProperties": true
+}

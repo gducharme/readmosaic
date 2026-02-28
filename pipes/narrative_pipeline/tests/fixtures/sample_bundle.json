@@ -1,0 +1,15 @@
+{
+  "contract_version": "narrative_diagnostics.v1",
+  "run": {
+    "run_id": "fixture-run",
+    "created_at": "2026-02-28T00:00:00+00:00"
+  },
+  "metrics": {
+    "entropy": {
+      "summary": {
+        "document_entropy": 3.42
+      }
+    }
+  },
+  "highlights": []
+}

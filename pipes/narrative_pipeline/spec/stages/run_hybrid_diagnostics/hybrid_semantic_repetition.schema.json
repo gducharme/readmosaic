@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "HybridSemanticRepetition",
+  "type": "object",
+  "required": ["summary", "top_repeats", "highlights"],
+  "properties": {
+    "summary": { "type": "object" },
+    "top_repeats": { "type": "array", "items": { "type": "object" } },
+    "highlights": { "type": "array", "items": { "type": "object" } }
+  },
+  "additionalProperties": true
+}

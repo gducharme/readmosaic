@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NarrativeDiagnosticsDelta",
+  "type": "object",
+  "required": ["contract_version", "comparison", "metric_deltas"],
+  "properties": {
+    "contract_version": { "type": "string", "minLength": 1 },
+    "comparison": {
+      "type": "object",
+      "required": ["current_run_id", "compared_at", "baseline_bundle_provided"],
+      "properties": {
+        "baseline_run_id": { "type": ["string", "null"] },
+        "current_run_id": { "type": "string", "minLength": 1 },
+        "compared_at": { "type": "string", "minLength": 1 },
+        "baseline_bundle_provided": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    },
+    "metric_deltas": { "type": "array", "items": { "type": "object" } },
+    "new_highlights": { "type": "array", "items": { "type": "string" } },
+    "resolved_highlights": { "type": "array", "items": { "type": "string" } }
+  },
+  "additionalProperties": true
+}
