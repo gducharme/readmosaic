@@ -56,7 +56,23 @@ if docker image inspect \"$IMAGE_NAME\" >/dev/null 2>&1; then
   docker image rm \"$IMAGE_NAME\" >/dev/null 2>&1 || true
 fi
 
+SIGNUP_FILE=\"$REMOTE_DIR/web/data/more_email_signups.csv\"
+SIGNUP_BAK=\"$REMOTE_DIR/.more_email_signups.csv.bak\"
+if [ -f \"$SIGNUP_FILE\" ]; then
+  cp -p \"$SIGNUP_FILE\" \"$SIGNUP_BAK\"
+  echo \"[deploy] backed up more_email_signups.csv\"
+else
+  echo \"[deploy] no signup CSV to back up\"
+fi
+
 unzip -oq \"$ARCHIVE_NAME\"
+
+mkdir -p \"$REMOTE_DIR/web/data\"
+if [ -f \"$SIGNUP_BAK\" ]; then
+  mv -f \"$SIGNUP_BAK\" \"$SIGNUP_FILE\"
+  echo \"[deploy] restored more_email_signups.csv\"
+fi
+
 cd web
 docker compose up --build
 '"
