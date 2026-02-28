@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ParagraphSurprisal",
+  "type": "object",
+  "required": ["summary", "top_paragraphs", "highlights"],
+  "properties": {
+    "summary": { "type": "object" },
+    "top_paragraphs": { "type": "array", "items": { "type": "object" } },
+    "highlights": { "type": "array", "items": { "type": "object" } }
+  },
+  "additionalProperties": true
+}

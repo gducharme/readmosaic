@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NarrativeTrendSummary",
+  "type": "object",
+  "required": ["contract_version", "generated_at", "runs"],
+  "properties": {
+    "contract_version": { "type": "string", "minLength": 1 },
+    "generated_at": { "type": "string", "minLength": 1 },
+    "runs": { "type": "array", "items": { "type": "object" } },
+    "latest_delta_metric_count": { "type": "integer", "minimum": 0 }
+  },
+  "additionalProperties": true
+}

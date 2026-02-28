@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ParagraphEntropy",
+  "type": "object",
+  "required": ["summary", "paragraphs", "highlights"],
+  "properties": {
+    "summary": { "type": "object" },
+    "paragraphs": { "type": "array", "items": { "type": "object" } },
+    "highlights": { "type": "array", "items": { "type": "object" } }
+  },
+  "additionalProperties": true
+}

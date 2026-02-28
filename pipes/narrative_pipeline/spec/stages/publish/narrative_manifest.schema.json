@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NarrativeManifest",
+  "type": "object",
+  "required": ["manifest_version", "pipeline_id", "run_id", "created_at", "artifacts"],
+  "properties": {
+    "manifest_version": { "type": "string", "minLength": 1 },
+    "pipeline_id": { "type": "string", "minLength": 1 },
+    "run_id": { "type": "string", "minLength": 1 },
+    "created_at": { "type": "string", "minLength": 1 },
+    "artifacts": { "type": "object" },
+    "bundle_contract_version": { "type": ["string", "null"] },
+    "delta_contract_version": { "type": ["string", "null"] },
+    "trend_contract_version": { "type": ["string", "null"] },
+    "highlights_count": { "type": "integer", "minimum": 0 },
+    "metric_delta_count": { "type": "integer", "minimum": 0 },
+    "trend_run_count": { "type": "integer", "minimum": 0 }
+  },
+  "additionalProperties": true
+}

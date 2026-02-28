@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Burstiness",
+  "type": "object",
+  "required": ["summary", "bursts", "highlights"],
+  "properties": {
+    "summary": { "type": "object" },
+    "bursts": { "type": "array", "items": { "type": "object" } },
+    "highlights": { "type": "array", "items": { "type": "object" } }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "NarrativeDiagnosticsBundle",
+  "type": "object",
+  "required": ["contract_version", "run", "metrics", "highlights"],
+  "properties": {
+    "contract_version": { "type": "string", "minLength": 1 },
+    "run": {
+      "type": "object",
+      "required": ["run_id", "created_at"],
+      "properties": {
+        "run_id": { "type": "string", "minLength": 1 },
+        "created_at": { "type": "string", "minLength": 1 },
+        "input": { "type": "object" },
+        "tool_versions": { "type": "object" }
+      },
+      "additionalProperties": true
+    },
+    "metrics": { "type": "object" },
+    "highlights": { "type": "array", "items": { "type": "object" } },
+    "anchors": { "type": "object" },
+    "artifacts": { "type": "object" }
+  },
+  "additionalProperties": true
+}

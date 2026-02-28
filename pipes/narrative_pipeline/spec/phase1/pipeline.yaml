@@ -1,0 +1,170 @@
+pipeline_id: narrative-diagnostics-pipeline
+item_unit: paragraph
+determinism_policy: strict
+
+stages:
+  - id: preprocessing
+    mode: whole_run
+    inputs: []
+    outputs:
+      - family: preprocessed_raw
+        pattern: preprocessed/manuscript_raw.json
+        schema: manuscript_text.schema.json
+      - family: preprocessed_normalized
+        pattern: preprocessed/manuscript_normalized.json
+        schema: manuscript_text.schema.json
+      - family: manuscript_tokens
+        pattern: preprocessed/manuscript_tokens.json
+        schema: manuscript_tokens.schema.json
+      - family: paragraph_index
+        pattern: preprocessed/paragraph_index.json
+        schema: paragraph_index.schema.json
+      - family: paragraphs
+        pattern: preprocessed/paragraphs.jsonl
+        schema: paragraph_row.schema.json
+
+  - id: run_document_diagnostics
+    mode: whole_run
+    inputs:
+      - family: preprocessed_raw
+        pattern: preprocessed/manuscript_raw.json
+        schema: manuscript_text.schema.json
+      - family: preprocessed_normalized
+        pattern: preprocessed/manuscript_normalized.json
+        schema: manuscript_text.schema.json
+      - family: manuscript_tokens
+        pattern: preprocessed/manuscript_tokens.json
+        schema: manuscript_tokens.schema.json
+    outputs:
+      - family: document_themes
+        pattern: diagnostics/document_themes.json
+        schema: document_themes.schema.json
+      - family: document_patterns
+        pattern: diagnostics/document_patterns.json
+        schema: document_patterns.schema.json
+      - family: document_entropy
+        pattern: diagnostics/document_entropy.json
+        schema: document_entropy.schema.json
+
+  - id: run_paragraph_diagnostics
+    mode: whole_run
+    inputs:
+      - family: preprocessed_normalized
+        pattern: preprocessed/manuscript_normalized.json
+        schema: manuscript_text.schema.json
+      - family: manuscript_tokens
+        pattern: preprocessed/manuscript_tokens.json
+        schema: manuscript_tokens.schema.json
+      - family: paragraph_index
+        pattern: preprocessed/paragraph_index.json
+        schema: paragraph_index.schema.json
+    outputs:
+      - family: paragraph_signal_density
+        pattern: diagnostics/paragraph_signal_density.json
+        schema: paragraph_signal_density.schema.json
+      - family: paragraph_surprisal
+        pattern: diagnostics/paragraph_surprisal.json
+        schema: paragraph_surprisal.schema.json
+      - family: paragraph_entropy
+        pattern: diagnostics/paragraph_entropy.json
+        schema: paragraph_entropy.schema.json
+
+  - id: run_hybrid_diagnostics
+    mode: whole_run
+    inputs:
+      - family: preprocessed_normalized
+        pattern: preprocessed/manuscript_normalized.json
+        schema: manuscript_text.schema.json
+      - family: manuscript_tokens
+        pattern: preprocessed/manuscript_tokens.json
+        schema: manuscript_tokens.schema.json
+      - family: paragraph_index
+        pattern: preprocessed/paragraph_index.json
+        schema: paragraph_index.schema.json
+      - family: document_patterns
+        pattern: diagnostics/document_patterns.json
+        schema: document_patterns.schema.json
+    outputs:
+      - family: hybrid_semantic_repetition
+        pattern: diagnostics/hybrid_semantic_repetition.json
+        schema: hybrid_semantic_repetition.schema.json
+      - family: hybrid_burstiness
+        pattern: diagnostics/hybrid_burstiness.json
+        schema: hybrid_burstiness.schema.json
+
+  - id: merge_report
+    mode: whole_run
+    inputs:
+      - family: paragraph_index
+        pattern: preprocessed/paragraph_index.json
+        schema: paragraph_index.schema.json
+      - family: document_themes
+        pattern: diagnostics/document_themes.json
+        schema: document_themes.schema.json
+      - family: document_patterns
+        pattern: diagnostics/document_patterns.json
+        schema: document_patterns.schema.json
+      - family: document_entropy
+        pattern: diagnostics/document_entropy.json
+        schema: document_entropy.schema.json
+      - family: paragraph_signal_density
+        pattern: diagnostics/paragraph_signal_density.json
+        schema: paragraph_signal_density.schema.json
+      - family: paragraph_surprisal
+        pattern: diagnostics/paragraph_surprisal.json
+        schema: paragraph_surprisal.schema.json
+      - family: paragraph_entropy
+        pattern: diagnostics/paragraph_entropy.json
+        schema: paragraph_entropy.schema.json
+      - family: hybrid_semantic_repetition
+        pattern: diagnostics/hybrid_semantic_repetition.json
+        schema: hybrid_semantic_repetition.schema.json
+      - family: hybrid_burstiness
+        pattern: diagnostics/hybrid_burstiness.json
+        schema: hybrid_burstiness.schema.json
+    outputs:
+      - family: diagnostics_bundle
+        pattern: diagnostics/diagnostics_bundle.json
+        schema: diagnostics_bundle.schema.json
+
+  - id: baseline_compare
+    mode: whole_run
+    inputs:
+      - family: diagnostics_bundle
+        pattern: diagnostics/diagnostics_bundle.json
+        schema: diagnostics_bundle.schema.json
+    outputs:
+      - family: diagnostics_delta
+        pattern: diagnostics/diagnostics_delta.json
+        schema: diagnostics_delta.schema.json
+
+  - id: trend_outputs
+    mode: whole_run
+    inputs:
+      - family: diagnostics_bundle
+        pattern: diagnostics/diagnostics_bundle.json
+        schema: diagnostics_bundle.schema.json
+      - family: diagnostics_delta
+        pattern: diagnostics/diagnostics_delta.json
+        schema: diagnostics_delta.schema.json
+    outputs:
+      - family: trend_summary
+        pattern: trends/trend_summary.json
+        schema: trend_summary.schema.json
+
+  - id: publish
+    mode: whole_run
+    inputs:
+      - family: diagnostics_bundle
+        pattern: diagnostics/diagnostics_bundle.json
+        schema: diagnostics_bundle.schema.json
+      - family: diagnostics_delta
+        pattern: diagnostics/diagnostics_delta.json
+        schema: diagnostics_delta.schema.json
+      - family: trend_summary
+        pattern: trends/trend_summary.json
+        schema: trend_summary.schema.json
+    outputs:
+      - family: manifest
+        pattern: narrative_manifest.json
+        schema: narrative_manifest.schema.json
