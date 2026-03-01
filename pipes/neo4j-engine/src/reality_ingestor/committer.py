@@ -3,7 +3,10 @@ from __future__ import annotations
 from datetime import datetime
 import uuid
 
-from neo4j import Neo4jError
+try:
+    from neo4j import Neo4jError  # type: ignore[attr-defined]
+except Exception:  # pragma: no cover - fallback when neo4j driver is unavailable
+    Neo4jError = Exception
 
 from .cypher_library import (
     Q_CLOSE_OPEN_STATE_FOR_ATTRIBUTE,
@@ -18,6 +21,7 @@ from .cypher_library import (
     Q_UPSERT_INTERACTS_WITH,
     Q_UPSERT_STATE,
     Q_SET_ENTITY_SUBLABEL,
+    Q_PROMOTE_ENTITY_NAME,
 )
 from .errors import GraphCommitError
 from .models import CommitReport, ParsedChapter
@@ -34,6 +38,7 @@ class Committer:
             "created_events": 0,
             "created_states": 0,
             "created_relationships": 0,
+            "promoted_entity_names": 0,
             "duration_ms": 0,
         }
         start = datetime.utcnow()
@@ -46,6 +51,7 @@ class Committer:
                     self._write_transaction,
                     parsed,
                     payload,
+                    plan,
                     entity_map,
                     metrics,
                 )
@@ -55,7 +61,29 @@ class Committer:
         metrics["duration_ms"] = (datetime.utcnow() - start).total_seconds() * 1000
         return CommitReport(run_id=self.config.run_id, status="success", metrics=metrics)
 
-    def _write_transaction(self, tx, parsed, payload, entity_map, metrics):
+    def _write_transaction(self, tx, parsed, payload, plan, entity_map, metrics):
+        # Apply name promotions before regular upserts so this run keeps the better canonical name.
+        for warning in getattr(plan, "warnings", []):
+            if not isinstance(warning, dict) or warning.get("type") != "name_promotion":
+                continue
+            candidate_uuid = warning.get("candidate_uuid")
+            old_name = warning.get("old_name")
+            new_name = warning.get("new_name")
+            if not isinstance(candidate_uuid, str) or not candidate_uuid.strip():
+                continue
+            if not isinstance(new_name, str) or not new_name.strip():
+                continue
+            old_name_value = old_name if isinstance(old_name, str) else ""
+            aliases = [old_name_value] if old_name_value else []
+            tx.run(
+                Q_PROMOTE_ENTITY_NAME,
+                uuid=candidate_uuid,
+                old_name=old_name_value,
+                new_name=new_name.strip(),
+                aliases_text=", ".join(aliases),
+            )
+            metrics["promoted_entity_names"] += 1
+
         records = payload.get("entities", [])
         for chunk in parsed.chunks:
             tx.run(

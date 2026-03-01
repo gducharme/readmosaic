@@ -163,3 +163,15 @@ MERGE (a)-[r:INTERACTS_WITH {
 SET r.weight = $weight,
     r.updated_at = $updated_at
 """
+
+Q_PROMOTE_ENTITY_NAME = """
+MATCH (e:Entity {uuid: $uuid})
+SET e.name = $new_name,
+    e.aliases = CASE
+      WHEN $old_name IS NULL OR trim($old_name) = '' THEN coalesce(e.aliases, [])
+      WHEN $old_name IN coalesce(e.aliases, []) THEN coalesce(e.aliases, [])
+      ELSE coalesce(e.aliases, []) + $old_name
+    END,
+    e.aliases_text = $aliases_text
+RETURN e.uuid AS uuid
+"""

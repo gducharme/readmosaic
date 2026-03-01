@@ -3,7 +3,10 @@ from __future__ import annotations
 from dataclasses import asdict
 from datetime import datetime
 
-from neo4j import Neo4jError
+try:
+    from neo4j import Neo4jError  # type: ignore[attr-defined]
+except Exception:  # pragma: no cover - fallback when neo4j driver is unavailable
+    Neo4jError = Exception
 
 from .cypher_library import (
     Q_FETCH_ENTITIES,

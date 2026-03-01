@@ -45,5 +45,6 @@
   - `review_diff` → `artifacts/diff_report.json` (Rich diff with colors; interactive prompt `[A/E/R]` unless `REALITY_DIFF_DECISION` forces a choice).
   - `commit_graph` → `artifacts/commit_report.json` (idempotent Cypher writes into Neo4j once the diff is accepted).
 - **Diff gate overrides.** Set `REALITY_DIFF_DECISION=accepted`/`edited`/`rejected` to bypass the prompt in automation. Defaults to `prompt` for manual confirmation.
+- **Local LLM profile.** Use `REALITY_ADAPTER=litellm`, `REALITY_MODEL=lfm2-24b-a2b`, `REALITY_LLM_BASE_URL=http://127.0.0.1:1234/v1`, and `REALITY_LLM_API_KEY=lm-studio`. The pipeline hard-fails if the configured non-stub adapter cannot initialize or call the model endpoint.
 - **Neo4j expectations.** Neo4j runs at `bolt://localhost:7687` using `neo4j/mosaic_founding`. APOC must be enabled (see docker-compose spec). The commit stage uses the parameterized queries defined in `docs/specs/neo4j engine/CYPHER_LIBRARY.md`.
 - **Artifacts.** Additional durable outputs live under `pipes/neo4j-engine/artifacts` (parsed text, raw LLM output, extracted payload). Keep these artifacts for auditing, especially the JSON diff report before committing.

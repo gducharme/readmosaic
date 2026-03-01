@@ -12,6 +12,7 @@
         "created_events": {"type": "integer"},
         "created_states": {"type": "integer"},
         "created_relationships": {"type": "integer"},
+        "promoted_entity_names": {"type": "integer"},
         "updated_states": {"type": "integer"},
         "duration_ms": {"type": "number"}
       }

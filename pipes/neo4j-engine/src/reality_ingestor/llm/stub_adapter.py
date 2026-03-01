@@ -18,18 +18,19 @@ class StubAdapter(LLMAdapter):
     ) -> dict[str, Any]:
         if not prompt:
             raise ValueError("StubAdapter requires prompt text")
+        ontology_has_entities = "contains 0 entities" not in prompt
         chunk = prompt.strip().split("\n\n")[0]
         primary_entity = {
             "temp_id": "ent_primary",
             "name": "Narrator",
             "type": "Character",
-            "is_new": True,
+            "is_new": not ontology_has_entities,
         }
         location_entity = {
             "temp_id": "ent_location",
             "name": "ChapterLocation",
             "type": "Location",
-            "is_new": True,
+            "is_new": not ontology_has_entities,
         }
         event = {
             "event_id": "evt_1",

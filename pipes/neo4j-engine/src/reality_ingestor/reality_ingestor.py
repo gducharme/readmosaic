@@ -5,12 +5,13 @@ from .committer import Committer
 from .diff_validator import DiffValidator
 from .extractor import Extractor
 from .llm.langchain_adapter import LangChainAdapter
-from .llm.litellm_adapter import LiteLLMAdapter
+from .llm.llm_adapter import LiteLLMAdapter
 from .llm.stub_adapter import StubAdapter
 from .markdown_parser import parse_markdown
 from .ontology_retriever import OntologyRetriever
 from .resolver import Resolver
 from .schemas import EXTRACTION_SCHEMA
+from .errors import ExtractionAdapterError
 
 
 class RealityIngestor:
@@ -46,15 +47,13 @@ class RealityIngestor:
 
     def _build_adapter(self):
         adapter_choice = self.config.adapter.lower()
-        adapter = StubAdapter()
+        if adapter_choice == "stub":
+            return StubAdapter()
         if adapter_choice == "litellm":
-            try:
-                return LiteLLMAdapter()
-            except RuntimeError:
-                return adapter
+            return LiteLLMAdapter(base_url=self.config.llm_base_url, api_key=self.config.llm_api_key)
         if adapter_choice == "langchain":
-            try:
-                return LangChainAdapter()
-            except RuntimeError:
-                return adapter
-        return adapter
+            return LangChainAdapter()
+        raise ExtractionAdapterError(
+            f"Unsupported REALITY_ADAPTER='{self.config.adapter}'. "
+            "Use one of: litellm, langchain, stub."
+        )

@@ -22,10 +22,24 @@ def _resolve_markdown_path() -> Path:
     return candidates[0]
 
 
-def run_whole(ctx) -> None:  # noqa: ARG001
+def _resolve_output_path(ctx) -> Path:
+    for attr in ("outputs", "output_artifacts", "stage_outputs", "artifacts"):
+        value = getattr(ctx, attr, None)
+        if not isinstance(value, list):
+            continue
+        for candidate in value:
+            if not isinstance(candidate, dict):
+                continue
+            concrete_path = candidate.get("path")
+            if isinstance(concrete_path, str) and concrete_path.strip():
+                return Path(concrete_path)
+    return Path("parsed_chapter.json")
+
+
+def run_whole(ctx) -> None:
     ingestor = RealityIngestor.from_env()
     markdown_path = _resolve_markdown_path()
     parsed = ingestor.parse_markdown(str(markdown_path))
-    output_path = Path("artifacts/parsed_chapter.json")
+    output_path = _resolve_output_path(ctx)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(parsed.to_dict(), indent=2), encoding="utf-8")

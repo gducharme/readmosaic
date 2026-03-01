@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 
@@ -9,14 +8,13 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from reality_ingestor.reality_ingestor import RealityIngestor
-from stages.helpers import hydrate_ontology, load_artifact
+from stages.helpers import hydrate_ontology, load_artifact, write_json_artifact
 
 
-def run_whole(ctx) -> None:  # noqa: ARG001
+def run_whole(ctx) -> None:
     ingestor = RealityIngestor.from_env()
-    extraction = load_artifact(Path("artifacts/extracted_graph_payload.json"))
-    ontology_payload = load_artifact(Path("artifacts/active_ontology.json"))
+    extraction = load_artifact(ctx, "extracted_graph_payload.json")
+    ontology_payload = load_artifact(ctx, "active_ontology.json")
     ontology = hydrate_ontology(ontology_payload)
     plan = ingestor.resolve_entities(extraction, ontology)
-    output_path = Path("artifacts/resolution_plan.json")
-    output_path.write_text(json.dumps(plan.to_dict(), indent=2), encoding="utf-8")
+    write_json_artifact(ctx, "resolution_plan.json", plan.to_dict())

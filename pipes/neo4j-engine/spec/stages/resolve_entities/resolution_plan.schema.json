@@ -43,7 +43,27 @@
     },
     "warnings": {
       "type": "array",
-      "items": {"type": "string"}
+      "items": {
+        "type": "object",
+        "required": ["type", "details"],
+        "properties": {
+          "type": {"type": "string"},
+          "temp_id": {"type": "string"},
+          "entity_name": {"type": "string"},
+          "candidate_uuid": {"type": ["string", "null"]},
+          "details": {"type": "string"}
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "properties": {
+        "exact_resolved": {"type": "integer"},
+        "auto_corrected_is_new": {"type": "integer"},
+        "fuzzy_conflicts": {"type": "integer"},
+        "created_new": {"type": "integer"},
+        "name_promotions": {"type": "integer"}
+      }
     }
   }
 }
