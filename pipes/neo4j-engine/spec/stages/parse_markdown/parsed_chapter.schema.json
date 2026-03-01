@@ -1,0 +1,25 @@
+{
+  "$id": "seedpipe://spec/stages/parse_markdown/parsed_chapter.schema.json",
+  "type": "object",
+  "required": ["chapter_id", "source_path", "full_text", "chunks"],
+  "properties": {
+    "chapter_id": {"type": "string"},
+    "chapter_hash": {"type": "string"},
+    "source_path": {"type": "string"},
+    "full_text": {"type": "string"},
+    "chunk_count": {"type": "integer"},
+    "chunks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["chunk_id", "text", "hash", "sequence_id"],
+        "properties": {
+          "chunk_id": {"type": "string"},
+          "text": {"type": "string"},
+          "hash": {"type": "string"},
+          "sequence_id": {"type": "integer"}
+        }
+      }
+    }
+  }
+}

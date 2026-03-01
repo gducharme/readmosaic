@@ -1,0 +1,61 @@
+pipeline_id: neo4j-reality-ingest
+item_unit: chapter
+determinism_policy: strict
+stages:
+  - id: parse_markdown
+    mode: whole_run
+    inputs: []
+    outputs:
+      - family: parsed
+        pattern: parsed_chapter.json
+        schema: parse_markdown/parsed_chapter.schema.json
+  - id: build_ontology
+    mode: whole_run
+    inputs:
+      - family: parsed
+        pattern: parsed_chapter.json
+        schema: parse_markdown/parsed_chapter.schema.json
+    outputs:
+      - family: ontology
+        pattern: active_ontology.json
+        schema: build_ontology/active_ontology.schema.json
+  - id: extract_graph
+    mode: whole_run
+    inputs:
+      - family: ontology
+        pattern: active_ontology.json
+        schema: build_ontology/active_ontology.schema.json
+    outputs:
+      - family: extraction
+        pattern: extracted_graph_payload.json
+        schema: extract_graph/extracted_graph_payload.schema.json
+  - id: resolve_entities
+    mode: whole_run
+    inputs:
+      - family: extraction
+        pattern: extracted_graph_payload.json
+        schema: extract_graph/extracted_graph_payload.schema.json
+    outputs:
+      - family: resolution
+        pattern: resolution_plan.json
+        schema: resolve_entities/resolution_plan.schema.json
+  - id: review_diff
+    mode: whole_run
+    inputs:
+      - family: resolution
+        pattern: resolution_plan.json
+        schema: resolve_entities/resolution_plan.schema.json
+    outputs:
+      - family: diff
+        pattern: diff_report.json
+        schema: review_diff/diff_report.schema.json
+  - id: commit_graph
+    mode: whole_run
+    inputs:
+      - family: diff
+        pattern: diff_report.json
+        schema: review_diff/diff_report.schema.json
+    outputs:
+      - family: commit
+        pattern: commit_report.json
+        schema: commit_graph/commit_report.schema.json

@@ -12,12 +12,13 @@ from ..lib.local_llm_client import (
 from ..lib.progress import ProgressBar
 
 
-SOURCE_PATTERN = "pass2_pre/{lang}/paragraphs.jsonl"
-TARGET_PATTERN = "qa_review/{lang}/paragraphs.jsonl"
+SOURCE_PATTERN = "grammar_review/{lang}/paragraphs.jsonl"
+TARGET_PATTERN = "typography_review/{lang}/paragraphs.jsonl"
 SOURCE_PARAGRAPHS_FALLBACK = Path("paragraphs.jsonl")
 DEFAULT_PROMPT_ROOTS = [Path("prompts/translate/review"), Path("prompt/translate/review")]
-DEFAULT_PROMPT_FILE = "qa_review.md"
-STAGE_CONFIG_PATH = Path(__file__).with_name("qa_review_config.json")
+DEFAULT_PROMPT_FILE = "typography_review.md"
+STAGE_CONFIG_PATH = Path(__file__).with_name("review_typography_config.json")
+REVIEW_OUTPUT_PATTERN = "review/{lang}/typography/review.json"
 RUBRIC_KEYS = [
     "intent_and_contract",
     "voice_and_style",
@@ -77,7 +78,7 @@ def _resolve_input_artifact_paths(ctx, language: str) -> tuple[Path, Path]:
                 continue
 
         path_obj = Path(concrete_path)
-        if "pass2_pre/" in normalized:
+        if "grammar_review/" in normalized:
             translated_path = path_obj
             continue
         if normalized.endswith("paragraphs.jsonl") and source_path is None:
@@ -129,19 +130,19 @@ def _stage_config(ctx) -> dict[str, object]:
     if isinstance(run_config, dict):
         rc = run_config.get("rc")
         if isinstance(rc, dict):
-            direct = rc.get("qa_review")
+            direct = rc.get("review_typography")
             if isinstance(direct, dict):
                 config.update(direct)
             nested = rc.get("stages")
             if isinstance(nested, dict):
-                stage_cfg = nested.get("qa_review")
+                stage_cfg = nested.get("review_typography")
                 if isinstance(stage_cfg, dict):
                     config.update(stage_cfg)
     return config
 
 
 def _candidate_prompt_paths(prompt_root: Path) -> list[Path]:
-    return [prompt_root / DEFAULT_PROMPT_FILE, prompt_root / "QA review markdown.md"]
+    return [prompt_root / DEFAULT_PROMPT_FILE, prompt_root / "Typography review markdown.md"]
 
 
 def _resolve_prompt_path(configured_path: str | None) -> Path:
@@ -161,12 +162,12 @@ def _resolve_prompt_path(configured_path: str | None) -> Path:
                     return candidate
 
     checked = ", ".join(str(root) for root in DEFAULT_PROMPT_ROOTS)
-    raise FileNotFoundError(f"qa_review prompt not found. Checked roots: {checked}")
+    raise FileNotFoundError(f"review_typography prompt not found. Checked roots: {checked}")
 
 
 def _load_rows(path: Path, *, label: str) -> list[dict[str, Any]]:
     if not path.exists():
-        raise FileNotFoundError(f"qa_review {label} input artifact missing: {path}")
+        raise FileNotFoundError(f"review_typography {label} input artifact missing: {path}")
 
     rows: list[dict[str, Any]] = []
     for raw in path.read_text(encoding="utf-8").splitlines():
@@ -229,11 +230,11 @@ def _extract_json_object(raw: str) -> dict[str, Any]:
     start = text.find("{")
     end = text.rfind("}")
     if start < 0 or end <= start:
-        raise ValueError("qa_review model response did not include a JSON object.")
+        raise ValueError("review_typography model response did not include a JSON object.")
 
     parsed = json.loads(text[start : end + 1])
     if not isinstance(parsed, dict):
-        raise TypeError("qa_review model response JSON must be an object.")
+        raise TypeError("review_typography model response JSON must be an object.")
     return parsed
 
 
@@ -256,9 +257,9 @@ def _fallback_review(paragraph_id: str, translated_text: str, error: str) -> dic
         "scores": scores,
         "total_score": 0,
         "decision": "major_rewrite",
-        "issues": [f"qa_review_error: {error}"],
+        "issues": [f"typography_review_error: {error}"],
         "revised_translation": translated_text,
-        "rationale": "Model review failed; keeping pass2 translation unchanged.",
+        "rationale": "Typography review failed; keeping the latest translation unchanged.",
     }
 
 
@@ -276,8 +277,10 @@ def _review_paragraph(
     translated_text: str,
 ) -> dict[str, Any]:
     user_prompt = (
-        "Evaluate this single paragraph translation and return exactly one JSON object.\n"
-        "Do not return markdown fences.\n\n"
+        "Review this single paragraph translation for grammar, syntax, spelling, punctuation, and usage "
+        "precision while preserving tone and the key meaning. Return exactly one JSON object matching the "
+        "shape below. Always provide a full 'revised_translation' paragraph, even when approved. "
+        "Do not wrap the response in markdown fences.\n\n"
         f"paragraph_id: {paragraph_id}\n"
         f"target_language: {language}\n\n"
         "SOURCE_PARAGRAPH:\n"
@@ -322,7 +325,7 @@ def _review_paragraph(
             parsed = _extract_json_object(response)
             raw_scores = parsed.get("scores")
             if not isinstance(raw_scores, dict):
-                raise ValueError("qa_review response missing 'scores' object.")
+                raise ValueError("review_typography response missing 'scores' object.")
             scores = _normalize_scores(raw_scores)
             total_score = sum(scores.values())
 
@@ -364,17 +367,77 @@ def _review_paragraph(
     return _fallback_review(paragraph_id, translated_text, last_error)
 
 
+def _load_review_rows(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return []
+    if isinstance(parsed, dict):
+        rows = parsed.get("paragraph_reviews")
+        if isinstance(rows, list):
+            return [row for row in rows if isinstance(row, dict)]
+        return []
+    if isinstance(parsed, list):
+        return [row for row in parsed if isinstance(row, dict)]
+    return []
+
+
+def _write_review_rows(path: Path, rows: list[dict[str, Any]], *, language: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "target_language": language,
+        "paragraph_reviews": rows,
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _normalize_issue_list(issues: Any) -> list[str]:
+    normalized: list[str] = []
+    if isinstance(issues, list):
+        for issue in issues:
+            if isinstance(issue, str) and issue.strip():
+                normalized.append(issue.strip())
+    return normalized
+
+
+def _issues_contain_error(issues: Any) -> bool:
+    if isinstance(issues, list):
+        return any(isinstance(issue, str) and issue.startswith("typography_review_error:") for issue in issues)
+    return False
+
+
+def _build_review_summary(
+    paragraph_id: str,
+    review: dict[str, Any],
+    *,
+    revised_translation: str,
+    selected_translation: str,
+) -> dict[str, Any]:
+    return {
+        "paragraph_id": paragraph_id,
+        "decision": review.get("decision"),
+        "issues": _normalize_issue_list(review.get("issues")),
+        "total_score": review.get("total_score"),
+        "revised_translation": revised_translation,
+        "selected_translation": selected_translation,
+        "rationale": review.get("rationale"),
+    }
+
+
+
 def run_whole(ctx) -> None:
     cfg = _stage_config(ctx)
 
     language_binding = _binding_value(ctx, "lang") or _binding_value(ctx, "language")
     language = _normalize_language(language_binding or "")
     if not language:
-        raise ValueError("qa_review is missing required language binding ('lang').")
+        raise ValueError("review_typography is missing required language binding ('lang').")
 
     model = str(cfg.get("model", "")).strip()
     if not model:
-        raise ValueError("qa_review config is missing required 'model'.")
+        raise ValueError("review_typography config is missing required 'model'.")
 
     prompt_path = _resolve_prompt_path(cfg.get("prompt_path") and str(cfg.get("prompt_path")))
     system_prompt = prompt_path.read_text(encoding="utf-8")
@@ -388,7 +451,8 @@ def run_whole(ctx) -> None:
     source_path, translated_path = _resolve_input_artifact_paths(ctx, language)
     source_rows = _load_rows(source_path, label="source")
     translated_rows = _load_rows(translated_path, label="translated")
-    output_path = _resolve_output_artifact_path(ctx, language)
+    output_path = Path(TARGET_PATTERN.format(lang=language))
+    review_path = Path(REVIEW_OUTPUT_PATTERN.format(lang=language))
 
     source_by_id: dict[str, dict[str, Any]] = {}
     for idx, source_row in enumerate(source_rows, start=1):
@@ -427,73 +491,75 @@ def run_whole(ctx) -> None:
         out_row["paragraph_id"] = paragraph_id
         out_row["item_id"] = str(translated_row.get("item_id") or paragraph_id)
         out_row["source_text"] = source_text
-        out_row["pass2_translation"] = translated_text
-        out_row["qa_revised_translation"] = revised_translation
-        out_row["qa_final_translation"] = final_translation
+        out_row["pass2_translation"] = translated_row.get("pass2_translation", translated_text)
+        out_row["qa_revised_translation"] = translated_row.get("qa_revised_translation")
+        out_row["qa_final_translation"] = translated_row.get("qa_final_translation", translated_text)
+        out_row["typography_revised_translation"] = revised_translation
+        out_row["typography_final_translation"] = final_translation
         out_row["text"] = final_translation
         out_row["translation"] = final_translation
         out_row["language"] = language
-        out_row["qa_decision"] = review.get("decision")
-        out_row["qa_total_score"] = review.get("total_score")
-        out_row["qa_prompt"] = str(prompt_path)
-        return idx, out_row, review
+        out_row["typography_decision"] = decision
+        out_row["typography_total_score"] = review.get("total_score")
+        out_row["typography_prompt"] = str(prompt_path)
+        return idx, out_row, _build_review_summary(
+            paragraph_id,
+            review,
+            revised_translation=revised_translation,
+            selected_translation=final_translation,
+        )
 
     ordered_rows = list(enumerate(translated_rows, start=1))
     progress = ProgressBar(
         len(ordered_rows),
-        label=f"qa_review:{language}",
+        label=f"review_typography:{language}",
         color=True,
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    scores_path = output_path.with_name("scores.jsonl")
+
     existing_output_rows = _load_jsonl_prefix(output_path)
-    existing_score_rows = _load_jsonl_prefix(scores_path)
-    resumable_count = min(len(existing_output_rows), len(existing_score_rows), len(ordered_rows))
+    existing_review_rows = _load_review_rows(review_path)
+    resumable_count = min(len(existing_output_rows), len(existing_review_rows), len(ordered_rows))
     resume_from = 0
     for idx in range(resumable_count):
         expected_id = _row_id(translated_rows[idx], idx + 1)
         output_id = _row_id(existing_output_rows[idx], idx + 1)
-        score_id = _row_id(existing_score_rows[idx], idx + 1)
-        if expected_id != output_id or expected_id != score_id:
+        review_id = str(existing_review_rows[idx].get("paragraph_id") or "")
+        if expected_id != output_id or expected_id != review_id:
             break
         resume_from += 1
 
     if resume_from != len(existing_output_rows):
         _write_jsonl(output_path, existing_output_rows[:resume_from])
         existing_output_rows = existing_output_rows[:resume_from]
-    if resume_from != len(existing_score_rows):
-        _write_jsonl(scores_path, existing_score_rows[:resume_from])
-        existing_score_rows = existing_score_rows[:resume_from]
+    if resume_from != len(existing_review_rows):
+        existing_review_rows = existing_review_rows[:resume_from]
 
-    failed_count = 0
-    for review in existing_score_rows[:resume_from]:
-        issues = review.get("issues")
-        if isinstance(issues, list) and any(
-            isinstance(issue, str) and issue.startswith("qa_review_error:") for issue in issues
-        ):
-            failed_count += 1
+    review_rows = list(existing_review_rows)
+    failed_count = sum(
+        1
+        for review in existing_review_rows[:resume_from]
+        if _issues_contain_error(review.get("issues"))
+    )
 
     progress.print(resume_from, failed=failed_count)
     if resume_from >= len(ordered_rows):
+        _write_review_rows(review_path, review_rows, language=language)
         progress.done(len(ordered_rows), failed=failed_count)
         return
 
     rows_to_process = ordered_rows[resume_from:]
-    with output_path.open("a" if resume_from else "w", encoding="utf-8") as output_file, scores_path.open("a" if resume_from else "w", encoding="utf-8") as scores_file:
+    with output_path.open("a" if resume_from else "w", encoding="utf-8") as output_file:
         if concurrency == 1:
             completed = resume_from
             for entry in rows_to_process:
-                _, out_row, review = process_row(entry)
+                _, out_row, summary = process_row(entry)
                 output_file.write(json.dumps(out_row, ensure_ascii=False) + "\n")
-                scores_file.write(json.dumps(review, ensure_ascii=False) + "\n")
                 output_file.flush()
-                scores_file.flush()
-                completed += 1
-                issues = review.get("issues")
-                if isinstance(issues, list) and any(
-                    isinstance(issue, str) and issue.startswith("qa_review_error:") for issue in issues
-                ):
+                review_rows.append(summary)
+                if _issues_contain_error(summary.get("issues")):
                     failed_count += 1
+                completed += 1
                 progress.print(completed, failed=failed_count)
         else:
             with ThreadPoolExecutor(max_workers=concurrency) as pool:
@@ -503,23 +569,19 @@ def run_whole(ctx) -> None:
                 completed = resume_from
                 for future in as_completed(future_to_idx):
                     idx = future_to_idx[future]
-                    _, out_row, review = future.result()
-                    buffered[idx] = (out_row, review)
+                    _, out_row, summary = future.result()
+                    buffered[idx] = (out_row, summary)
                     while next_idx in buffered:
-                        ordered_out_row, ordered_review = buffered.pop(next_idx)
+                        ordered_out_row, ordered_summary = buffered.pop(next_idx)
                         output_file.write(json.dumps(ordered_out_row, ensure_ascii=False) + "\n")
-                        scores_file.write(json.dumps(ordered_review, ensure_ascii=False) + "\n")
                         output_file.flush()
-                        scores_file.flush()
-                        completed += 1
-                        ordered_issues = ordered_review.get("issues")
-                        if isinstance(ordered_issues, list) and any(
-                            isinstance(issue, str) and issue.startswith("qa_review_error:")
-                            for issue in ordered_issues
-                        ):
+                        review_rows.append(ordered_summary)
+                        if _issues_contain_error(ordered_summary.get("issues")):
                             failed_count += 1
+                        completed += 1
                         progress.print(completed, failed=failed_count)
                         next_idx += 1
+    _write_review_rows(review_path, review_rows, language=language)
     progress.done(len(ordered_rows), failed=failed_count)
 
 

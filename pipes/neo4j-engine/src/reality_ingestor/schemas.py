@@ -1,0 +1,87 @@
+from __future__ import annotations
+
+import json
+
+EXTRACTION_SCHEMA_JSON = """
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "entities": {
+      "type": "array",
+      "description": "All actors, locations, or concepts present or referenced.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "temp_id": {"type": "string"},
+          "name": {"type": "string"},
+          "type": {"type": "string", "enum": ["Character", "Location", "Faction", "Concept"]},
+          "is_new": {"type": "boolean", "description": "True if not found in Active_Ontology"}
+        },
+        "required": ["temp_id", "name", "type", "is_new"]
+      }
+    },
+    "events": {
+      "type": "array",
+      "description": "Sequential distinct actions or realizations occurring in the text.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "event_id": {"type": "string"},
+          "description": {"type": "string"},
+          "location_temp_id": {"type": "string"},
+          "participants": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "entity_temp_id": {"type": "string"},
+                "role": {"type": "string", "description": "e.g., Initiator, Target, Observer"}
+              },
+              "required": ["entity_temp_id", "role"]
+            }
+          }
+        },
+        "required": ["event_id", "description", "location_temp_id", "participants"]
+      }
+    },
+    "state_changes": {
+      "type": "array",
+      "description": "Any change in an entity's physical, emotional, or epistemic status.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "entity_temp_id": {"type": "string"},
+          "attribute": {"type": "string", "description": "e.g., Epistemic_Knowledge, Physical_Health, Loyalty"},
+          "new_value": {"type": "string"},
+          "triggered_by_event_id": {"type": "string"}
+        },
+        "required": ["entity_temp_id", "attribute", "new_value", "triggered_by_event_id"]
+      }
+    },
+    "relationships": {
+      "type": "array",
+      "description": "Underlying dynamic shifts between entities.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "source_temp_id": {"type": "string"},
+          "target_temp_id": {"type": "string"},
+          "nature": {"type": "string", "description": "High-level categorization, e.g., Dominance_Asserted, Alliance_Formed"},
+          "weight": {"type": "number", "minimum": -1.0, "maximum": 1.0}
+        },
+        "required": ["source_temp_id", "target_temp_id", "nature", "weight"]
+      }
+    }
+  },
+  "required": ["entities", "events", "state_changes", "relationships"]
+}
+"""
+
+EXTRACTION_SCHEMA = json.loads(EXTRACTION_SCHEMA_JSON)

@@ -1,0 +1,46 @@
+{
+  "$id": "seedpipe://spec/stages/review_diff/diff_report.schema.json",
+  "type": "object",
+  "required": ["run_id", "green", "yellow", "red", "decision"],
+  "properties": {
+    "run_id": {"type": "string"},
+    "green": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "summary": {"type": "string"},
+          "details": {"type": "string"}
+        }
+      }
+    },
+    "yellow": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "summary": {"type": "string"},
+          "details": {"type": "string"}
+        }
+      }
+    },
+    "red": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "summary": {"type": "string"},
+          "details": {"type": "string"}
+        }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": {"type": "string", "enum": ["accepted", "edited", "rejected"]},
+        "note": {"type": ["string", "null"]}
+      }
+    }
+  }
+}
