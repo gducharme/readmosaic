@@ -39,7 +39,12 @@
       "required": ["status"],
       "properties": {
         "status": {"type": "string", "enum": ["accepted", "edited", "rejected"]},
-        "note": {"type": ["string", "null"]}
+        "note": {"type": ["string", "null"]},
+        "edit_target": {"type": "string"},
+        "validation_errors": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
       }
     }
   }

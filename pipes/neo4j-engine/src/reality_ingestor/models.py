@@ -93,7 +93,8 @@ class ResolutionPlan:
     resolved_entities: List[Dict[str, Any]]
     new_entities: List[Dict[str, Any]]
     conflicts: List[Dict[str, Any]]
-    warnings: List[str]
+    warnings: List[Dict[str, Any]]
+    metrics: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -102,16 +103,25 @@ class ResolutionPlan:
             "new_entities": self.new_entities,
             "conflicts": self.conflicts,
             "warnings": self.warnings,
+            "metrics": self.metrics,
         }
 
     @classmethod
     def from_dict(cls, payload: Dict[str, Any]) -> "ResolutionPlan":
+        raw_warnings = payload.get("warnings", [])
+        warnings: List[Dict[str, Any]] = []
+        for warning in raw_warnings:
+            if isinstance(warning, dict):
+                warnings.append(warning)
+            elif isinstance(warning, str):
+                warnings.append({"type": "legacy_warning", "details": warning})
         return cls(
             run_id=payload.get("run_id", ""),
             resolved_entities=payload.get("resolved_entities", []),
             new_entities=payload.get("new_entities", []),
             conflicts=payload.get("conflicts", []),
-            warnings=payload.get("warnings", []),
+            warnings=warnings,
+            metrics=payload.get("metrics", {}),
         )
 
 

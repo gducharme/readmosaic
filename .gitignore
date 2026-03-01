@@ -51,3 +51,6 @@ scripts/.script_menu_cache.json
 
 pipes/*/generated/**
 pipes/*/artifacts/**
+
+# Local Neo4j runtime data (database files, tx logs, auth)
+neo4j/data/

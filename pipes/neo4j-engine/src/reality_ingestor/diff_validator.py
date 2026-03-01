@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -26,6 +28,15 @@ class DiffValidator:
         for rel in extracted.get("relationships", []):
             green.append({"summary": "Relationship", "details": rel.get("nature", "")})
 
+        for warning in plan.warnings[:5]:
+            if isinstance(warning, dict):
+                yellow.append(
+                    {
+                        "summary": warning.get("type", "Warning"),
+                        "details": warning.get("details", ""),
+                    }
+                )
+
         if plan.conflicts:
             red.append(
                 {"summary": "Conflicts", "details": plan.conflicts[0].get("reason", "")}
@@ -48,12 +59,22 @@ class DiffValidator:
         self.console.print(table)
         decision_mode = self.config.diff_decision.lower()
         if decision_mode == "prompt":
+            if not sys.stdin.isatty():
+                return {"status": "accepted", "note": "Auto-accepted: non-interactive run."}
             self.console.print(Panel("[A]ccept   [E]dit JSON   [R]eject", title="Decision"))
-            choice = self.console.input("Choose action [A/E/R]: ").strip().lower()
+            try:
+                choice = self.console.input("Choose action [A/E/R]: ").strip().lower()
+            except EOFError:
+                return {"status": "accepted", "note": "Auto-accepted: no stdin available."}
         else:
             choice = decision_mode[0]
         if choice == "r":
             return {"status": "rejected", "note": "User rejected commit."}
         if choice == "e":
-            return {"status": "edited", "note": "User will edit payload before retry."}
+            return {
+                "status": "edited",
+                "note": "User will edit payload before commit.",
+                "edit_target": "extracted_graph_payload.json",
+                "validation_errors": [],
+            }
         return {"status": "accepted", "note": None}

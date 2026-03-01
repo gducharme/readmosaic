@@ -61,7 +61,7 @@ reality_ingestor/
   llm/
     __init__.py
     base.py
-    litellm_adapter.py
+    llm_adapter.py
     langchain_adapter.py
   reality_ingestor.py
 scripts/

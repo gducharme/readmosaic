@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .base import LLMAdapter
+from ..errors import ExtractionAdapterError
 
 try:
     from langchain.llms import OpenAI
@@ -22,6 +23,9 @@ class LangChainAdapter(LLMAdapter):
         **kwargs: Any,
     ) -> str:
         if OpenAI is None:
-            raise RuntimeError("langchain is not installed in this environment")
-        client = OpenAI(model_name=model, temperature=temperature, request_timeout=timeout_s)
-        return client(prompt)
+            raise ExtractionAdapterError("langchain is not installed in this environment")
+        try:
+            client = OpenAI(model_name=model, temperature=temperature, request_timeout=timeout_s)
+            return client(prompt)
+        except Exception as exc:  # pragma: no cover - runtime dependent
+            raise ExtractionAdapterError("LangChain adapter request failed") from exc

@@ -20,6 +20,14 @@ This folder defines the production implementation spec for a generic Markdown-to
 - Neo4j auth from `docker-compose.yaml`: `neo4j/mosaic_founding`
 - APOC plugin: enabled
 
+## Local LLM Profile (LM Studio)
+- `REALITY_ADAPTER=litellm`
+- `REALITY_MODEL=lfm2-24b-a2b`
+- `REALITY_LLM_BASE_URL=http://127.0.0.1:1234/v1`
+- `REALITY_LLM_API_KEY=lm-studio`
+
+`stub` adapter is test-only and must be set explicitly.
+
 ## Suggested Implementation Order
 1. Create package skeleton and config (`reality_ingestor/*`).
 2. Add constraints/index bootstrap and retrieval queries.
