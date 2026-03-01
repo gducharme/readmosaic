@@ -1,0 +1,71 @@
+{
+  "$id": "seedpipe://spec/stages/build_ontology/active_ontology.schema.json",
+  "type": "object",
+  "required": ["run_id", "entities", "states", "relationships", "retrieval", "event_types"],
+  "properties": {
+    "run_id": {"type": "string"},
+    "timestamp": {"type": "string"},
+    "entities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["uuid", "name", "type"],
+        "properties": {
+          "uuid": {"type": "string"},
+          "name": {"type": "string"},
+          "type": {"type": "string"},
+          "aliases": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
+          "baseline_state": {"type": ["string", "null"]}
+        }
+      }
+    },
+    "states": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["entity_uuid", "attribute", "value"],
+        "properties": {
+          "entity_uuid": {"type": "string"},
+          "attribute": {"type": "string"},
+          "value": {"type": "string"},
+          "valid_from_event": {"type": "string"},
+          "valid_until_event": {"type": ["string", "null"]}
+        }
+      }
+    },
+    "relationships": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["source_uuid", "target_uuid", "nature"],
+        "properties": {
+          "source_uuid": {"type": "string"},
+          "target_uuid": {"type": "string"},
+          "nature": {"type": "string"},
+          "weight": {"type": ["number", "null"]}
+        }
+      }
+    },
+    "retrieval": {
+      "type": "object",
+      "properties": {
+        "bm25_hits": {"type": "integer"},
+        "vector_hits": {"type": "integer"},
+        "state_snapshots": {"type": "integer"}
+      }
+    },
+    "event_types": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "type": {"type": "string"},
+          "count": {"type": "integer"}
+        }
+      }
+    }
+  }
+}

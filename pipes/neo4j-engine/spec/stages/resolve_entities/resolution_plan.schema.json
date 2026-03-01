@@ -1,0 +1,49 @@
+{
+  "$id": "seedpipe://spec/stages/resolve_entities/resolution_plan.schema.json",
+  "type": "object",
+  "required": ["run_id", "resolved_entities", "new_entities", "conflicts", "warnings"],
+  "properties": {
+    "run_id": {"type": "string"},
+    "resolved_entities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["temp_id", "uuid", "match_source"],
+        "properties": {
+          "temp_id": {"type": "string"},
+          "uuid": {"type": "string"},
+          "match_source": {"type": "string"}
+        }
+      }
+    },
+    "new_entities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["temp_id", "uuid", "name", "type"],
+        "properties": {
+          "temp_id": {"type": "string"},
+          "uuid": {"type": "string"},
+          "name": {"type": "string"},
+          "type": {"type": "string"}
+        }
+      }
+    },
+    "conflicts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["temp_id", "reason"],
+        "properties": {
+          "temp_id": {"type": "string"},
+          "reason": {"type": "string"},
+          "candidate_uuid": {"type": ["string", "null"]}
+        }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {"type": "string"}
+    }
+  }
+}

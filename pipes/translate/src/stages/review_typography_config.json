@@ -1,10 +1,9 @@
 {
   "model": "lfm2-24b-a2b",
-  "prompt_root": null,
+  "prompt_path": "prompts/translate/review/typography_review.md",
   "base_url": "http://localhost:1234/v1/chat/completions",
   "timeout": 180,
   "retry": 1,
-  "max_length_ratio": 3.0,
-  "temperature": 0.2,
+  "temperature": 0.1,
   "concurrency": 4
 }

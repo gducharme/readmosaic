@@ -1,0 +1,9 @@
+{
+  "model": "lfm2-24b-a2b",
+  "base_url": "http://localhost:1234/v1/chat/completions",
+  "timeout": 240,
+  "retry": 1,
+  "temperature": 0.1,
+  "concurrency": 2,
+  "critics_dir": "prompts/critics"
+}

@@ -1,5 +1,5 @@
 {
-  "model": "qwen/qwen3-coder-next",
+  "model": "lfm2-24b-a2",
   "prompt_path": "prompts/translate/review/qa_review.md",
   "base_url": "http://localhost:1234/v1/chat/completions",
   "timeout": 180,

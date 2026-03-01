@@ -5,28 +5,7 @@ determinism_policy: strict
 params:
   targets:
     languages:
-      - Arabic
-      - Bengali
-      - Deutch
-      - English
       - French
-      - Gujarati
-      - Hindi
-      - Italian
-      - Japanese
-      - Korean
-      - Mandarin_Chinese
-      - Marathi
-      - Norwegian
-      - Persian
-      - Portuguese
-      - Russian
-      - Spanish
-      - Tamil
-      - Telugu
-      - Turkish
-      - Vietnamese
-      - Western_Punjabi
 
 stages:
   - id: source_ingest
@@ -85,7 +64,7 @@ stages:
         pattern: qa_review/{lang}/paragraphs.jsonl
         schema: paragraphs.schema.json
 
-  - id: candidate_assembly
+  - id: review_grammar
     foreach: params.targets.languages
     key: lang
     mode: whole_run
@@ -94,40 +73,45 @@ stages:
         pattern: qa_review/{lang}/paragraphs.jsonl
         schema: paragraphs.schema.json
     outputs:
+      - family: grammar_reviewed_translations
+        pattern: grammar_review/{lang}/paragraphs.jsonl
+        schema: paragraphs.schema.json
+      - family: grammar_reviews
+        pattern: review/grammar/review.json
+        schema: review.schema.json
+
+  - id: review_typography
+    foreach: params.targets.languages
+    key: lang
+    mode: whole_run
+    inputs:
+      - family: grammar_reviewed_translations
+        pattern: grammar_review/{lang}/paragraphs.jsonl
+        schema: paragraphs.schema.json
+    outputs:
+      - family: typography_reviewed_translations
+        pattern: typography_review/{lang}/paragraphs.jsonl
+        schema: paragraphs.schema.json
+      - family: typography_reviews
+        pattern: review/{lang}/typography/review.json
+        schema: review.schema.json
+
+  - id: candidate_assembly
+    foreach: params.targets.languages
+    key: lang
+    mode: whole_run
+    inputs:
+      - family: typography_reviewed_translations
+        pattern: typography_review/{lang}/paragraphs.jsonl
+        schema: paragraphs.schema.json
+    outputs:
       - family: candidate_manuscripts
         pattern: final/{lang}/candidate.md
       - family: candidate_paragraph_maps
         pattern: final/{lang}/candidate_map.jsonl
         schema: candidate_map.schema.json
 
-  - id: review_grammar
-    placeholder: true
-    mode: whole_run
-    inputs:
-      - family: pass2_translations
-        pattern: pass2_pre/paragraphs.jsonl
-        schema: paragraphs.schema.json
-    outputs:
-      - family: grammar_reviews
-        pattern: review/grammar/review.json
-        schema: review.schema.json
-
-  - id: review_typography
-    placeholder: true
-    foreach: params.targets.languages
-    key: lang
-    mode: whole_run
-    inputs:
-      - family: candidate_manuscripts
-        pattern: final/{lang}/candidate.md
-        schema: candidate.schema.json
-    outputs:
-      - family: typography_reviews
-        pattern: review/{lang}/typography/review.json
-        schema: review.schema.json
-
   - id: review_critics
-    placeholder: true
     foreach: params.targets.languages
     key: lang
     mode: whole_run
@@ -141,7 +125,6 @@ stages:
         schema: review.schema.json
 
   - id: map_review_to_paragraphs
-    placeholder: true
     foreach: params.targets.languages
     key: lang
     mode: whole_run

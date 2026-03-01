@@ -1,0 +1,21 @@
+{
+  "$id": "seedpipe://spec/stages/commit_graph/commit_report.schema.json",
+  "type": "object",
+  "required": ["run_id", "status", "metrics"],
+  "properties": {
+    "run_id": {"type": "string"},
+    "status": {"type": "string", "enum": ["success", "skipped", "failed"]},
+    "metrics": {
+      "type": "object",
+      "properties": {
+        "created_entities": {"type": "integer"},
+        "created_events": {"type": "integer"},
+        "created_states": {"type": "integer"},
+        "created_relationships": {"type": "integer"},
+        "updated_states": {"type": "integer"},
+        "duration_ms": {"type": "number"}
+      }
+    },
+    "notes": {"type": ["string", "null"]}
+  }
+}
